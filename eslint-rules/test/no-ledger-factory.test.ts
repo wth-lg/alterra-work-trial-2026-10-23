@@ -22,6 +22,7 @@ describe('no-ledger-factory', () => {
     "import * as L from '../packages/core/ledger.ts'; export const c = L.createLedger;",
     "import * as L from '../packages/core/ledger.ts'; export const { admitStore } = L;",
     "export const m = await import('../packages/core/ledger.ts');",
+    "export const m = await import(`../packages/core/ledger.ts`);",
   ])('flags %s in cli/', async (code) => {
     expect(await ruleIds(code, 'cli/planted.ts')).toContain(RULE);
   });
@@ -34,10 +35,34 @@ describe('no-ledger-factory', () => {
     'allows %s',
     async (path) => {
       const depth = path.split('/').length - 1;
-      const code = `import { admitStore, createLedger } from '${'../'.repeat(depth)}packages/core/ledger.ts'; export { admitStore, createLedger };`;
+      const code = `import { admitStore, createLedger } from '${'../'.repeat(depth)}packages/core/ledger.ts'; export const use = [admitStore, createLedger];`;
       expect(await ruleIds(code, path)).not.toContain(RULE);
     },
   );
+
+  // The allowance is for test files, not for any file under a test/ directory.
+  it.each(['cli/test/helper.ts', 'packages/core/test/helpers.ts'])('flags %s', async (path) => {
+    const depth = path.split('/').length - 1;
+    expect(await ruleIds(`import { createLedger } from '${'../'.repeat(depth)}packages/core/ledger.ts'; export const c = [createLedger];`, path)).toContain(RULE);
+  });
+
+  // A re-export would launder the factory to files the rule forbids, so only ledger.ts exports it.
+  it.each(['cli/adapters/launder.ts', 'apps/web/src/adapters/launder.ts', 'packages/core/test/launder.test.ts'])('flags a re-export in %s', async (path) => {
+    const up = '../'.repeat(path.split('/').length - 1);
+    for (const code of [
+      `import { createLedger } from '${up}packages/core/ledger.ts'; export { createLedger };`,
+      `import { admitStore as a } from '${up}packages/core/ledger.ts'; export { a as admit };`,
+      `export { createLedger } from '${up}packages/core/ledger.ts';`,
+      `export * from '${up}packages/core/ledger.ts';`,
+      `import { createLedger } from '${up}packages/core/ledger.ts'; export default createLedger;`,
+    ]) {
+      expect(await ruleIds(code, path), code).toContain(RULE);
+    }
+  });
+
+  it.each(['cli/planted.mts', 'cli/planted.cts', 'cli/planted.cjs', 'cli/planted.tsx', 'cli/planted.js', 'cli/planted.mjs'])('applies to %s', async (path) => {
+    expect(await ruleIds("import { createLedger } from '../packages/core/ledger.ts'; export const c = [createLedger];", path)).toContain(RULE);
+  });
 
   it('allows the rest of ledger.ts anywhere', async () => {
     const code = "import { assertGrant, totals, type BatchGrant } from '../packages/core/ledger.ts'; export { assertGrant, totals }; export type G = BatchGrant;";

@@ -34,6 +34,21 @@ describe('no-forged-grant', () => {
     expect(await ruleIds(code, 'cli/planted.ts')).toContain(RULE);
   });
 
+  it.each([
+    'type G = BatchGrant;\nexport const g = {} as G;',
+    'export const g = {} as H;\ntype H = G;\ntype G = Readonly<BatchGrant>;',
+    'export type G = BatchGrant;\nexport const g: G = {} as never;',
+    "import type { ClientOptions } from '../packages/core/anthropic.ts';\nexport const g = {} as ClientOptions['grant'];",
+    "export const g = {} as Parameters<typeof f>[0]['grant'];\ndeclare function f(o: { grant: unknown }): void;",
+    "import type { BatchGrant as BG } from '../packages/core/ledger.ts';\nexport const g = {} as A;\ntype A = BG;",
+  ])('flags a cast through a type alias or an indexed access type: %s', async (code) => {
+    expect(await ruleIds(LEDGER + code, 'cli/planted.ts')).toContain(RULE);
+  });
+
+  it.each(['cli/planted.mts', 'cli/planted.cts', 'cli/planted.tsx'])('applies to %s', async (path) => {
+    expect(await ruleIds(LEDGER + 'export const g = {} as BatchGrant;', path)).toContain(RULE);
+  });
+
   it('allows ledger.ts and the one exempt test file', async () => {
     for (const path of ['packages/core/ledger.ts', 'packages/core/test/anthropic.test.ts']) {
       expect(await ruleIds(LEDGER + 'export const g = {} as BatchGrant;', path)).not.toContain(RULE);
