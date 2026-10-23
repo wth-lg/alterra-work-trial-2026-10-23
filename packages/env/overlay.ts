@@ -84,7 +84,16 @@ export function applyOverlays(base: readonly Resource[], setting: readonly Resou
     }
   }
 
-  const reader: WorldReader = new Store(start.values());
+  // Read-only by construction, not by type: an overlay gets these four functions over a store
+  // of frozen copies and never the Store itself, so no cast reaches put() and no overlay can
+  // change what the next one reads.
+  const snapshot = new Store(start.values());
+  const reader: WorldReader = Object.freeze({
+    get: snapshot.get.bind(snapshot),
+    search: snapshot.search.bind(snapshot),
+    resources: snapshot.resources.bind(snapshot),
+    size: snapshot.size,
+  });
   const world = new Map(start);
   const lint: LintSource[] = [{ source: 'world', spec: settingLint }];
   const seen = new Set<TaskId>();
