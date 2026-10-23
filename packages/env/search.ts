@@ -1,7 +1,8 @@
 // FHIR R4 search over one resource type, by linear scan (design section 2, "Store"). It
 // implements exactly the parameters the tools expose: patient, subject, code, category,
-// status, date with ge/le/gt/lt, _sort=date or -date, _count and _offset. Anything else is a
-// SearchError, never a silently ignored filter.
+// status, date (no prefix, eq, ge, le, gt, lt), _sort=date or -date, _count and _offset.
+// Anything else, including a resource type outside the design's 18, is a SearchError, never
+// a silently ignored filter.
 //
 // Matching follows @medplum/fhir-router MemoryRepository 5.2.7, which
 // packages/env/test/search-diff.test.ts checks query by query:
@@ -14,8 +15,10 @@
 //     day, '...T12:00:00Z' that whole second), and with query range [qlo, qhi]:
 //     ge: hi >= qlo, le: lo <= qhi, gt: hi > qhi, lt: lo < qlo.
 // Where Medplum departs from FHIR we follow FHIR: _sort orders by instant rather than by
-// the date string, a month ends on its last day rather than day 31, and token search does
-// not match display text. Resources without a date sort last on date and first on -date.
+// the date string, a month ends on its last day rather than day 31, token search does not
+// match display text, and eq (or no prefix) means the resource range lies within the query
+// range (qlo <= lo and hi <= qhi) rather than overlapping it. Resources without a date sort
+// last on both date and -date.
 import type { Resource } from '@medplum/fhirtypes';
 
 export class SearchError extends Error {
@@ -43,8 +46,12 @@ const patient = (path: string, patientOnly = true): ParamDef => ({ kind: 'refere
 const subject = (path: string): ParamDef => ({ kind: 'reference', paths: [path], patientOnly: false, bareId: false });
 
 // From the R4 SearchParameter expressions for the design's 18 resource types. Patient,
-// Practitioner and Organization have none of these parameters.
+// Practitioner and Organization have none of these parameters. Read it with Object.hasOwn:
+// a plain lookup would find 'constructor' on the prototype.
 const PARAMS: Readonly<Record<string, Readonly<Record<string, ParamDef>>>> = {
+  Patient: {},
+  Practitioner: {},
+  Organization: {},
   Group: { code: token('code') },
   Encounter: { date: date('period'), patient: patient('subject'), status: token('status'), subject: subject('subject') },
   EpisodeOfCare: { date: date('period'), patient: patient('patient', false), status: token('status') },
@@ -162,8 +169,18 @@ type Range = readonly [number, number];
 
 const DATE_RE = /^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-]\d{2}:\d{2})?)?)?)?$/;
 
+// Epoch milliseconds of a UTC calendar time. Unlike Date.UTC, years 0-99 stay those years
+// rather than becoming 1900-1999. Out-of-range fields carry over (month 13 is next January).
+function utc(year: number, month: number, day: number, hour: number, minute: number, second: number, ms: number): number {
+  const t = new Date(0);
+  t.setUTCFullYear(year, month - 1, day);
+  t.setUTCHours(hour, minute, second, ms);
+  return t.getTime();
+}
+
 // The range a FHIR date, dateTime or instant covers at its precision. Without an offset the
-// value is read as UTC, as Medplum reads it. Undefined if the string is not a date.
+// value is read as UTC, as Medplum reads it. Undefined if the string is not a date, including
+// an offset outside -14:00..+14:00.
 function dateRange(value: string): Range | undefined {
   const m = DATE_RE.exec(value);
   if (!m) return undefined;
@@ -175,17 +192,20 @@ function dateRange(value: string): Range | undefined {
   const hour = n(h, 0);
   const minute = n(mi, 0);
   const second = n(s, 0);
-  if (month < 1 || month > 12 || dayOfMonth < 1 || dayOfMonth > new Date(Date.UTC(year, month, 0)).getUTCDate()) return undefined;
+  if (month < 1 || month > 12 || dayOfMonth < 1 || dayOfMonth > new Date(utc(year, month + 1, 0, 0, 0, 0, 0)).getUTCDate()) return undefined;
   if (hour > 23 || minute > 59 || second > 59) return undefined;
   // Fractions past milliseconds are truncated, as a JS Date truncates them.
   const ms = frac === undefined ? 0 : Number(frac.slice(0, 3).padEnd(3, '0'));
   let offset = 0;
   if (tz && tz !== 'Z') {
     const sign = tz[0] === '-' ? -1 : 1;
-    offset = sign * (Number(tz.slice(1, 3)) * 60 + Number(tz.slice(4, 6))) * 60_000;
+    const minutes = Number(tz.slice(4, 6));
+    const total = Number(tz.slice(1, 3)) * 60 + minutes;
+    if (minutes > 59 || total > 14 * 60) return undefined;
+    offset = sign * total * 60_000;
   }
   const at = (yy: number, mm: number, dd: number, hh: number, mn: number, ss: number, mss: number) =>
-    Date.UTC(yy, mm - 1, dd, hh, mn, ss, mss) - offset;
+    utc(yy, mm, dd, hh, mn, ss, mss) - offset;
   const lo = at(year, month, dayOfMonth, hour, minute, second, ms);
   // The first instant after the range, one unit of the value's precision later.
   let next: number;
@@ -217,6 +237,7 @@ function rangesOf(values: unknown[]): Range[] {
 }
 
 const DATE_TESTS = {
+  eq: (r: Range, q: Range) => q[0] <= r[0] && r[1] <= q[1],
   ge: (r: Range, q: Range) => r[1] >= q[0],
   le: (r: Range, q: Range) => r[0] <= q[1],
   gt: (r: Range, q: Range) => r[1] > q[1],
@@ -224,12 +245,31 @@ const DATE_TESTS = {
 } as const;
 
 function dateMatcher(name: string, raw: string): (r: Range) => boolean {
-  const prefix = raw.slice(0, 2);
-  if (!Object.hasOwn(DATE_TESTS, prefix)) throw new SearchError(`${name}: '${raw}' needs a ge, le, gt or lt prefix`);
-  const q = dateRange(raw.slice(2));
-  if (!q) throw new SearchError(`${name}: '${raw.slice(2)}' is not a FHIR date`);
-  const test = DATE_TESTS[prefix as keyof typeof DATE_TESTS];
+  // A date starts with a digit, so two leading letters are a prefix. No prefix means eq.
+  const prefix = /^[a-z]{2}/.test(raw) ? raw.slice(0, 2) : '';
+  if (prefix && !Object.hasOwn(DATE_TESTS, prefix)) throw new SearchError(`${name}: prefix '${prefix}' is not supported (use eq, ge, le, gt or lt)`);
+  const q = dateRange(raw.slice(prefix.length));
+  if (!q) throw new SearchError(`${name}: '${raw.slice(prefix.length)}' is not a FHIR date`);
+  const test = DATE_TESTS[(prefix || 'eq') as keyof typeof DATE_TESTS];
   return (r) => test(r, q);
+}
+
+// Throws unless every value a date parameter reads from the resource is a FHIR date, so that
+// one bad stored value cannot make every date query and _sort on its type throw.
+export function checkDates(resource: Resource): void {
+  const params = Object.hasOwn(PARAMS, resource.resourceType) ? PARAMS[resource.resourceType]! : {};
+  for (const def of Object.values(params)) {
+    if (def.kind !== 'date') continue;
+    for (const path of def.paths) {
+      for (const v of valuesAt(resource as unknown as Json, path)) {
+        const parts = typeof v === 'string' ? [v] : v !== null && typeof v === 'object' ? [(v as { start?: unknown }).start, (v as { end?: unknown }).end] : [];
+        for (const part of parts) {
+          if (typeof part === 'string' && !dateRange(part))
+            throw new Error(`${resource.resourceType}/${resource.id}: ${path} '${part}' is not a FHIR date`);
+        }
+      }
+    }
+  }
 }
 
 // ---- references ----
@@ -288,7 +328,8 @@ function count(name: string, raws: readonly string[] | undefined): number | unde
 }
 
 export function search<T extends Resource>(resources: Iterable<Readonly<T>>, resourceType: string, query: SearchQuery): SearchResult<T> {
-  const params = PARAMS[resourceType] ?? {};
+  if (!Object.hasOwn(PARAMS, resourceType)) throw new SearchError(`${resourceType}: not a searchable resource type`);
+  const params = PARAMS[resourceType]!;
   const filters: Filter[] = [];
   let sort: { def: ParamDef; descending: boolean } | undefined;
   let offset: number | undefined;
@@ -316,11 +357,12 @@ export function search<T extends Resource>(resources: Iterable<Readonly<T>>, res
     const { def, descending } = sort;
     const keyed = matches.map((r) => ({ r, key: rangesOf(def.paths.flatMap((p) => valuesAt(r as Json, p)))[0] }));
     const sign = descending ? -1 : 1;
+    // Resources without a date go last whichever way the dated ones run.
     // Not a subtraction: open period bounds are infinite, and -Infinity - -Infinity is NaN.
     const cmp = (x: number, y: number) => (x < y ? -1 : x > y ? 1 : 0);
     // Array sort is stable, so ties keep insertion order in both directions.
     keyed.sort((a, b) => {
-      if (!a.key || !b.key) return a.key ? -sign : b.key ? sign : 0;
+      if (!a.key || !b.key) return a.key ? -1 : b.key ? 1 : 0;
       return sign * (cmp(a.key[0], b.key[0]) || cmp(a.key[1], b.key[1]));
     });
     matches = keyed.map((k) => k.r);

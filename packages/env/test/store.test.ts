@@ -3,7 +3,7 @@ import { gzipSync } from 'node:zlib';
 import type { Observation, Resource } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
 import { loadStore, parseNdjson, type FixtureSource } from '../fixture-source.ts';
-import { SearchError } from '../search.ts';
+import { search, SearchError } from '../search.ts';
 import { Store } from '../store.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -105,7 +105,9 @@ describe('search semantics outside the differential test', () => {
       obs('d'),
     ]);
     expect(ids(store, 'Observation', { _sort: 'date' })).toEqual(['c', 'b', 'a', 'd']);
-    expect(ids(store, 'Observation', { _sort: '-date' })).toEqual(['d', 'a', 'b', 'c']);
+    // A resource without a date goes last in both directions.
+    expect(ids(store, 'Observation', { _sort: '-date' })).toEqual(['a', 'b', 'c', 'd']);
+    expect(ids(store, 'Observation', { _sort: '-date', _count: '1' })).toEqual(['a']);
   });
 
   it('a month value ends on the last day of that month', () => {
@@ -127,6 +129,55 @@ describe('search semantics outside the differential test', () => {
     expect(ids(store, 'Encounter', { date: ['ge2026-01-02', 'le2026-01-02'] })).toEqual(['shut']);
   });
 
+  it('a period end covers the whole of its last unit', () => {
+    // end 2026-10-23 runs to 23:59:59.999Z, so the encounter is still on at 18:00Z.
+    const store = new Store([
+      { resourceType: 'Encounter', id: 'day', status: 'finished', class: { code: 'AMB' }, period: { start: '2026-10-22T08:00:00Z', end: '2026-10-23' } },
+      { resourceType: 'Encounter', id: 'min', status: 'finished', class: { code: 'AMB' }, period: { start: '2026-10-22T08:00:00Z', end: '2026-10-23T18:00' } },
+    ]);
+    expect(ids(store, 'Encounter', { date: 'ge2026-10-23T18:00:00Z' })).toEqual(['day', 'min']);
+    expect(ids(store, 'Encounter', { date: 'gt2026-10-23T18:00:00Z' })).toEqual(['day', 'min']);
+    expect(ids(store, 'Encounter', { date: 'gt2026-10-23T18:01:00Z' })).toEqual(['day']);
+    expect(ids(store, 'Encounter', { date: 'ge2026-10-24' })).toEqual([]);
+  });
+
+  it('eq and a bare date match a resource whose range lies within the query range', () => {
+    const enc = (id: string, start: string, end?: string): Resource =>
+      ({ resourceType: 'Encounter', id, status: 'finished', class: { code: 'AMB' }, period: end ? { start, end } : { start } }) as Resource;
+    const store = new Store([
+      obs('day', { effectiveDateTime: '2026-10-23' }),
+      obs('sec', { effectiveDateTime: '2026-10-23T12:00:00Z' }),
+      obs('local', { effectiveDateTime: '2026-10-23T22:00:00-04:00' }), // 2026-10-24T02:00Z
+      obs('month', { effectiveDateTime: '2026-10' }),
+      obs('next', { effectiveDateTime: '2026-10-24' }),
+      obs('none'),
+      enc('inside', '2026-10-23T09:00:00Z', '2026-10-23T10:00:00Z'),
+      enc('across', '2026-10-22T20:00:00Z', '2026-10-23T02:00:00Z'),
+      enc('open', '2026-10-23T09:00:00Z'),
+    ]);
+    for (const q of ['2026-10-23', 'eq2026-10-23']) {
+      expect(ids(store, 'Observation', { date: q }), q).toEqual(['day', 'sec']);
+      // An encounter that only overlaps the day, or never ends, is not within it.
+      expect(ids(store, 'Encounter', { date: q }), q).toEqual(['inside']);
+    }
+    // A coarser resource is not within a finer query.
+    expect(ids(store, 'Observation', { date: '2026-10-23T12:00:00Z' })).toEqual(['sec']);
+    expect(ids(store, 'Observation', { date: '2026-10' })).toEqual(['day', 'sec', 'local', 'month', 'next']);
+    expect(ids(store, 'Observation', { date: '2026' })).toEqual(['day', 'sec', 'local', 'month', 'next']);
+    expect(ids(store, 'Observation', { date: '2026-10-24' })).toEqual(['local', 'next']);
+    expect(ids(store, 'Observation', { date: '2026-10-23,2026-10-24' })).toEqual(['day', 'sec', 'local', 'next']);
+    expect(ids(store, 'Observation', { date: ['eq2026-10', 'ge2026-10-24'] })).toEqual(['local', 'month', 'next']);
+  });
+
+  it('reads years 0000-0099 as those years', () => {
+    const store = new Store([obs('y50', { effectiveDateTime: '0050-06-01' }), obs('y0', { effectiveDateTime: '0000-02-29' })]);
+    expect(ids(store, 'Observation', { date: 'ge1950-01-01' })).toEqual([]);
+    expect(ids(store, 'Observation', { date: 'lt1000-01-01' })).toEqual(['y50', 'y0']);
+    expect(ids(store, 'Observation', { date: '0050' })).toEqual(['y50']);
+    expect(ids(store, 'Observation', { date: 'lt0050-06-01' })).toEqual(['y0']);
+    expect(ids(store, 'Observation', { _sort: 'date' })).toEqual(['y0', 'y50']);
+  });
+
   it('applies _offset before _count and reports the total before paging', () => {
     const store = new Store(['a', 'b', 'c', 'd', 'e'].map((id) => obs(id)));
     const page = store.search('Observation', { _offset: '1', _count: '2' });
@@ -140,8 +191,10 @@ describe('search semantics outside the differential test', () => {
     const bad: Array<[string, Record<string, string>]> = [
       ['Observation', { 'code:not': '2160-0' }],
       ['Observation', { 'value-quantity': '5' }],
-      ['Observation', { date: '2026-10-01' }],
+      ['Observation', { date: 'ne2026-10-01' }],
       ['Observation', { date: 'sa2026-10-01' }],
+      ['Observation', { date: 'ge2026-10-01T12:00:00+05:99' }],
+      ['Observation', { date: 'ge0100-02-29' }],
       ['Observation', { date: 'ge2026-13-01' }],
       ['Observation', { date: 'genot-a-date' }],
       ['Observation', { _sort: 'code' }],
@@ -151,8 +204,18 @@ describe('search semantics outside the differential test', () => {
       ['Observation', { status: '' }],
       ['Patient', { date: 'ge2026-01-01' }],
       ['Patient', { _sort: 'date' }],
+      ['Patient', { toString: 'x' }],
+      ['Basic', {}],
+      ['constructor', { name: 'x' }],
+      ['__proto__', {}],
+      ['hasOwnProperty', {}],
     ];
-    for (const [type, query] of bad) expect(() => store.search(type, query), JSON.stringify(query)).toThrow(SearchError);
+    for (const [type, query] of bad) {
+      expect(() => store.search(type, query), `${type} ${JSON.stringify(query)}`).toThrow(SearchError);
+      expect(() => search([], type, query), `${type} ${JSON.stringify(query)}`).toThrow(SearchError);
+    }
+    // A known type with none of these parameters still pages.
+    expect(new Store([{ resourceType: 'Patient', id: 'p' }]).search('Patient', { _count: '1' }).total).toBe(1);
     expect(() => store.search('Observation', { _count: ['1', '2'] })).toThrow(/_count/);
   });
 
