@@ -19,8 +19,8 @@
     "ci:guard": "node scripts/ci-guard.ts",
     "fixtures:build": "echo 'fixtures:build is not built yet (P5)' >&2 && exit 1",
     "fixtures:verify": "echo 'fixtures:verify is not built yet (P5)' >&2 && exit 1",
-    "live:cors": "echo 'live:cors is not built yet (P3)' >&2 && exit 1",
-    "live:smoke": "echo 'live:smoke is not built yet (P8)' >&2 && exit 1",
+    "fixtures:lint": "echo 'fixtures:lint is not built yet (P4)' >&2 && exit 1",
+    "live:node": "echo 'live:node is not built yet (P2)' >&2 && exit 1",
     "docs:check": "echo 'docs:check is not built yet (writeup PR)' >&2 && exit 1"
   },
   "devDependencies": {
