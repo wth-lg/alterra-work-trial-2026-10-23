@@ -7,8 +7,8 @@
 
 import { dirname, relative, resolve, sep } from 'node:path';
 
-// Every file ESLint parses as code: .ts, .tsx, .mts, .cts, .js, .mjs and .cjs.
-export const files = ['**/*.{ts,tsx,mts,cts,js,mjs,cjs}'];
+// Every file ESLint parses as code: .ts, .tsx, .mts, .cts, .js, .jsx, .mjs and .cjs.
+export const files = ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'];
 
 const LEDGER = 'packages/core/ledger';
 const FACTORY = new Set(['admitStore', 'createLedger']);

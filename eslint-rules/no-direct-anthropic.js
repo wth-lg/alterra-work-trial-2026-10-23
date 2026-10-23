@@ -3,12 +3,14 @@
 // header or body builder, so code elsewhere that wants to reach the API has to name the host
 // itself, and anywhere else a string naming the API host (so any fetch to it) is an error,
 // whether written as one literal, a template or a concatenation of literals. The CSP metas in
-// apps/web/*.html list the host too; ESLint does not lint .html.
+// apps/web/*.html list the host too; ESLint does not lint .html. A host built at
+// runtime is past what a static rule can see; the egress guard (packages/core/egress.ts)
+// refuses it where it resolves.
 
 import { relative, sep } from 'node:path';
 
-// Every file ESLint parses as code: .ts, .tsx, .mts, .cts, .js, .mjs and .cjs.
-export const files = ['**/*.{ts,tsx,mts,cts,js,mjs,cjs}'];
+// Every file ESLint parses as code: .ts, .tsx, .mts, .cts, .js, .jsx, .mjs and .cjs.
+export const files = ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'];
 
 // Built, not written, so this file holds no literal the rule would flag.
 const HOST = ['api', 'anthropic', 'com'].join('.');
@@ -38,7 +40,8 @@ export default {
     },
   },
   create(context) {
-    if (posix(relative(context.cwd, context.physicalFilename)) === CLIENT) return {};
+    const file = posix(relative(context.cwd, context.physicalFilename));
+    if (file === CLIENT) return {};
     const checkText = (node, text) => {
       if (text === undefined || !text.toLowerCase().includes(HOST)) return;
       context.report({ node, messageId: 'host', data: { text: text.length > 60 ? `${text.slice(0, 57)}...` : text } });

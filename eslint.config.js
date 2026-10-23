@@ -27,9 +27,15 @@ export default tseslint.config(
       '**/dist/**',
       '**/test-results/**',
       '**/playwright-report/**',
-      'eslint-rules/fixtures/**',
     ],
   },
+  // Inline config cannot turn a rule off, so no-direct-anthropic, no-forged-grant and
+  // no-ledger-factory hold in every file they cover. The two Node-only env tests below predate
+  // this and keep their reasoned isomorphic-imports disables; nothing else may disable a rule.
+  { linterOptions: { noInlineConfig: true } },
+  { files: ['packages/env/test/hash.test.ts', 'packages/env/test/store.test.ts'], linterOptions: { noInlineConfig: false } },
+  // .jsx is code the bundler ships, so it is linted like the rest.
+  { files: ['**/*.jsx'], languageOptions: { parserOptions: { ecmaFeatures: { jsx: true } } } },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

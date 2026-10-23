@@ -64,4 +64,25 @@ describe('no-direct-anthropic', () => {
     const code = "import { MessagesClient, MODEL } from '../packages/core/anthropic.ts'; export { MessagesClient, MODEL };";
     expect(await ruleIds(code, 'cli/a.ts')).not.toContain(RULE);
   });
+
+  // P2 second fix round (pr-review-P2-7 defect 1, plants j to m; verifier-phase-P2-7 issue 1):
+  // each test below fails at 6e517a9.
+  it.each([
+    ['a next-line disable', `// eslint-disable-next-line ${RULE}\nexport const r = fetch('https://${HOST}/v1/messages');`],
+    ['a same-line disable', `export const r = fetch('https://${HOST}/v1/messages'); // eslint-disable-line ${RULE}`],
+    ['a file-wide disable', `/* eslint-disable */\nexport const r = fetch('https://${HOST}/v1/messages');`],
+    ['an inline rule config', `/* eslint ${RULE}: "off" */\nexport const r = fetch('https://${HOST}/v1/messages');`],
+  ])('ignores %s: inline config cannot turn the P2 rules off', async (_name, code) => {
+    expect(await ruleIds(code, 'cli/planted.ts')).toContain(RULE);
+    expect(await ruleIds(code, 'eslint-rules/fixtures/planted.ts')).toContain(RULE);
+  });
+
+  it.each(['apps/web/src/planted.jsx', 'cli/planted.jsx'])('lints %s', async (path) => {
+    expect(await ruleIds(`export const r = () => fetch('https://${HOST}/v1/messages');\nexport const C = () => <p>x</p>;`, path)).toContain(RULE);
+  });
+
+  it('lints eslint-rules/fixtures, so a sender there cannot be re-exported into cli/ unlinted', async () => {
+    expect(await ruleIds(`export const go = () => fetch('https://${HOST}/v1/messages');`, 'eslint-rules/fixtures/zz-sender.ts')).toContain(RULE);
+  });
+
 });

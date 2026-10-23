@@ -8,8 +8,8 @@
 
 import { relative, sep } from 'node:path';
 
-// Every file ESLint parses as code: .ts, .tsx, .mts, .cts, .js, .mjs and .cjs.
-export const files = ['**/*.{ts,tsx,mts,cts,js,mjs,cjs}'];
+// Every file ESLint parses as code: .ts, .tsx, .mts, .cts, .js, .jsx, .mjs and .cjs.
+export const files = ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'];
 
 const EXEMPT = new Set(['packages/core/ledger.ts', 'packages/core/test/anthropic.test.ts']);
 const ASSERTIONS = new Set(['TSAsExpression', 'TSTypeAssertion']);

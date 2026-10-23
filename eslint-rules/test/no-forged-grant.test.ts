@@ -66,4 +66,12 @@ describe('no-forged-grant', () => {
   ])('allows %s', async (code) => {
     expect(await ruleIds(LEDGER + code, 'cli/a.ts')).not.toContain(RULE);
   });
+
+  // P2 second fix round: inline config cannot turn the rule off (fails at 6e517a9).
+  it.each([`// eslint-disable-next-line ${RULE}\nexport const g = {} as BatchGrant;`, '/* eslint-disable */\nexport const g = {} as BatchGrant;'])(
+    'ignores a disable directive: %s',
+    async (code) => {
+      expect(await ruleIds(LEDGER + code, 'cli/planted.ts')).toContain(RULE);
+    },
+  );
 });
