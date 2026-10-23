@@ -30,6 +30,9 @@ const QUERIES = 400;
 // Extra ge queries on exact range bounds, so a broken ge comparison fails many queries
 // rather than a handful (each planted ge mutation must fail at least MUTATION_MARGIN).
 const GE_QUERIES = 100;
+// patient= queries naming the Group that some resources have as subject: empty unless the
+// patient-only filter is broken.
+const GROUP_QUERIES = 20;
 
 type Query = Array<[string, string]>;
 type Json = Record<string, unknown>;
@@ -195,6 +198,16 @@ function makeQueries(world: Resource[]): Query[] {
     if (r.chance(0.5)) q.push(['patient', value.patient!(anchor, SUPPORTED[type]!.patient!)!]);
     queries.push(q);
   }
+
+  const groupSubjects = [...byType.values()].flat().filter((x) => SUPPORTED[x.resourceType]!.patient?.some((p) => at(x, `${p}.reference`).some((ref) => String(ref).startsWith('Group/'))));
+  for (let i = 0; i < GROUP_QUERIES; i++) {
+    const anchor = r.pick(groupSubjects) as unknown as Json;
+    const type = anchor.resourceType as string;
+    const group = SUPPORTED[type]!.patient!.flatMap((p) => at(anchor, `${p}.reference`)).map(String).find((x) => x.startsWith('Group/'))!;
+    const q: Query = [['_type', type], ['patient', r.chance(0.5) ? group : group.slice(group.indexOf('/') + 1)]];
+    if (r.chance(0.5)) q.push(['status', anchor.status as string]);
+    queries.push(q);
+  }
   return queries;
 }
 
@@ -216,7 +229,7 @@ describe('search matches Medplum MemoryRepository 5.2.7', () => {
     });
   });
 
-  it(`returns identical id lists on ${QUERIES + GE_QUERIES} generated queries`, async () => {
+  it(`returns identical id lists on ${QUERIES + GE_QUERIES + GROUP_QUERIES} generated queries`, async () => {
     const mismatches: string[] = [];
     let nonEmpty = 0;
     const perParam = Object.fromEntries([...PARAMS, ...PREFIXES, ...EQ_FORMS, 'patient=Group'].map((k) => [k, 0])) as Record<string, number>;
