@@ -3,8 +3,9 @@
 //   own-run  CHARTR_CANONICAL_LEDGER is set. The path comes only from it, and the file must
 //            already exist (`pnpm cli spend --init` creates it once). Opening refuses, before
 //            any call can be made, when the value is empty or not absolute, the file is
-//            missing or not a file, or SPEND_LEDGER names another file. Only a grant minted
-//            over the canonical file passes assertGrant.
+//            missing or not a file, or SPEND_LEDGER names another file. Once an open in this
+//            process resolves own-run mode, only a grant minted over that file passes
+//            assertGrant.
 //   default  SPEND_LEDGER, else ~/.chartr/spend.jsonl, created on first live open.
 // A ledger is known by its real path, so a symlink or a relative name reaches the same file
 // and the same lock. The caps are the same in both modes; packages/core/ledger.ts enforces them.
@@ -17,7 +18,7 @@ import { homedir, hostname } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { TrialObservation, Usage } from '../../packages/core/cost.ts';
 import {
-  assertGrant, createLedger, parseRow, restrictGrants,
+  admitStore, assertGrant, createLedger, parseRow, restrictGrants,
   type BatchGrant, type Ledger, type LedgerRow, type LedgerStore, type ReserveRequest, type Reservation,
 } from '../../packages/core/ledger.ts';
 
@@ -63,12 +64,34 @@ export function resolveLedgerPath(env: Env = process.env, opts: { requireFile?: 
   return { mode: 'default', path, problems: [] };
 }
 
-// Own-run mode for this process: once CHARTR_CANONICAL_LEDGER is set (even to ''), only a
-// grant minted over a store openNodeLedger opened on that exact file passes assertGrant, so
-// a ledger on SPEND_LEDGER, another opts.env or an in-memory store cannot meter live calls.
-const canonicalStores = new WeakSet<LedgerStore>();
-const CANONICAL_PATH = process.env.CHARTR_CANONICAL_LEDGER;
-if (CANONICAL_PATH !== undefined) restrictGrants((store) => canonicalStores.has(store));
+// This process's canonical ledger, set by the first open that sees a marker, in opts.env or
+// in process.env. From then on only stores opened on that real path mint grants that pass.
+let canonical: { path: string; stores: WeakSet<LedgerStore> } | undefined;
+
+// Binds this process to the canonical ledger an open with `env` sees, if any, and records
+// `store` as canonical when it is. A marker in process.env binds the process even when
+// opts.env names another ledger. Throws, binding nothing, when two canonical paths meet.
+function bindOwnRun(env: Env, mode: LedgerMode, store: FileLedgerStore): void {
+  const paths = new Set<string>();
+  if (mode === 'own-run') paths.add(store.path);
+  if (env !== process.env && process.env.CHARTR_CANONICAL_LEDGER !== undefined) {
+    const own = resolveLedgerPath(process.env);
+    if (own.problems.length > 0) throw new Error(`own-run spend ledger refused: ${own.problems.join('; ')}`);
+    paths.add(realLedgerPath(own.path));
+  }
+  if (canonical !== undefined) paths.add(canonical.path);
+  if (paths.size > 1) {
+    throw new Error(`own-run spend ledger refused: one process meters through one CHARTR_CANONICAL_LEDGER, got ${[...paths].join(' and ')}`);
+  }
+  const [path] = paths;
+  if (path === undefined) return;
+  if (canonical === undefined) {
+    const c = { path, stores: new WeakSet<LedgerStore>() };
+    restrictGrants((s) => c.stores.has(s));
+    canonical = c;
+  }
+  if (mode === 'own-run') canonical.stores.add(store);
+}
 
 interface ParsedLedger {
   rows: LedgerRow[];
@@ -243,17 +266,20 @@ export class FileLedgerStore implements LedgerStore {
 }
 
 // Opens the ledger for this process. A live open in default mode also creates the ledger
-// file on first use. Throws, with no row written, on an own-run setup problem.
+// file on first use. Throws, with no row written, on an own-run setup problem, and binds
+// this process to its canonical ledger when the open sees a marker.
 export function openNodeLedger(opts: { transport: 'live' | 'offline'; env?: Env; runId?: string | null }): {
   ledger: Ledger;
   store: FileLedgerStore;
   mode: LedgerMode;
   path: string;
 } {
-  const { mode, path, problems } = resolveLedgerPath(opts.env ?? process.env);
+  const env = opts.env ?? process.env;
+  const { mode, path, problems } = resolveLedgerPath(env);
   if (problems.length > 0) throw new Error(`own-run spend ledger refused: ${problems.join('; ')}`);
   const store = new FileLedgerStore(path, { createDir: mode === 'default' });
-  if (mode === 'own-run' && path === CANONICAL_PATH) canonicalStores.add(store);
+  bindOwnRun(env, mode, store);
+  admitStore(store);
   if (mode === 'default' && opts.transport === 'live' && !existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true });
     closeSync(openSync(path, 'a'));

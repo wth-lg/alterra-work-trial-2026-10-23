@@ -255,12 +255,22 @@ export interface Ledger {
 }
 
 // Only batchStart puts an object in `grants`, so membership is the capability: a Messages
-// client constructor calls assertGrant, and no copy or forgery passes it. Each grant is
-// bound to the ledger and store that minted it, and restrictGrants policies (the Node
-// adapter adds one in own-run mode) decide which stores may mint grants at all.
+// client constructor calls assertClientGrant, and no copy or forgery passes it. Each grant is
+// bound to the ledger and store that minted it. A grant passes only when an environment
+// adapter admitted its store (the Node adapter admits each store openNodeLedger opens), so a
+// ledger built over an ad-hoc store meters nothing, and restrictGrants policies (the Node
+// adapter adds one when an open resolves own-run mode) narrow which admitted stores pass.
+// Every check runs each time a grant is used, so an admission or policy added later applies
+// to grants minted before it.
 const grants = new WeakMap<object, { ledger: Ledger; store: LedgerStore }>();
 const closedGrants = new WeakSet<object>();
+const admittedStores = new WeakSet<LedgerStore>();
 const grantPolicies: Array<(store: LedgerStore) => boolean> = [];
+
+// Called by the adapter that opened `store`, which owns the env that chose it.
+export function admitStore(store: LedgerStore): void {
+  admittedStores.add(store);
+}
 
 // Adds a policy every grant's store must pass. Policies can only be added, so a later call
 // narrows what passes and never widens it.
@@ -268,16 +278,25 @@ export function restrictGrants(policy: (store: LedgerStore) => boolean): void {
   grantPolicies.push(policy);
 }
 
-// Throws unless g is a live grant from batchStart whose store passes every policy, and,
-// when `ledger` is given, one that this ledger minted.
+// Throws unless g is a live grant from batchStart over an admitted store that passes every
+// policy, and, when `ledger` is given, one that this ledger minted.
 export function assertGrant(g: unknown, ledger?: Ledger): asserts g is BatchGrant {
   const owner = typeof g === 'object' && g !== null ? grants.get(g) : undefined;
   if (owner === undefined) {
     throw new TypeError('not a batch grant: a Messages client needs the grant that batchStart(projection) returns');
   }
   if (ledger !== undefined && owner.ledger !== ledger) throw new TypeError('batch grant from another ledger');
+  if (!admittedStores.has(owner.store)) throw new TypeError('batch grant from a ledger no adapter opened');
   if (!grantPolicies.every((p) => p(owner.store))) throw new TypeError('batch grant from a ledger other than the canonical one');
   if (closedGrants.has(g as object)) throw new TypeError(`batch grant ${(g as BatchGrant).batch_id} is closed`);
+}
+
+// The Messages client contract: the client constructor calls this with the grant it was given
+// and the ledger it meters through, and builds nothing when it throws. The grant's reserve
+// runs assertGrant again before every call, so a client that skips this still sends nothing
+// on a grant that fails it.
+export function assertClientGrant(g: unknown, ledger: Ledger): asserts g is BatchGrant {
+  assertGrant(g, ledger);
 }
 
 export function createLedger(deps: LedgerDeps): Ledger {

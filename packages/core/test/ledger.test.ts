@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  admitStore,
   assertGrant,
   createLedger,
   parseRow,
@@ -13,7 +14,8 @@ import {
 import { INPUT_OVERHEAD_TOKENS, usageCostUsd, worstCaseUsd, type Usage } from '../cost.ts';
 
 // An in-memory LedgerStore: a promise chain stands in for the file lock, and a throwing
-// transaction appends nothing, as in the Node adapter.
+// transaction appends nothing, as in the Node adapter. ledgerOn admits it, as an adapter
+// admits the stores it opens.
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
   private chain: Promise<unknown> = Promise.resolve();
@@ -34,6 +36,7 @@ class MemoryStore implements LedgerStore {
 // `alive` lists the pids that count as running on test-host; every other pid is dead.
 function ledgerOn(store: MemoryStore, pid = 1, alive: readonly number[] = [pid]): Ledger {
   let n = 0;
+  admitStore(store);
   return createLedger({
     store,
     clock: { now: () => '2026-10-23T00:00:00.000Z' },

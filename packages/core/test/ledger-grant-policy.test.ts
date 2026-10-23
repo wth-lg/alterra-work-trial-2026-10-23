@@ -1,7 +1,7 @@
 // restrictGrants changes module state for good, so it gets its own test file (vitest runs
 // each file in its own module graph).
 import { describe, expect, it } from 'vitest';
-import { assertGrant, createLedger, restrictGrants, type LedgerRow, type LedgerStore } from '../ledger.ts';
+import { admitStore, assertGrant, createLedger, restrictGrants, type LedgerRow, type LedgerStore } from '../ledger.ts';
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
@@ -15,8 +15,7 @@ class MemoryStore implements LedgerStore {
   }
 }
 
-const ledgerOn = (store: LedgerStore) =>
-  createLedger({ store, clock: { now: () => 't' }, newId: () => crypto.randomUUID(), source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
+const ledgerOn = (store: LedgerStore) => (admitStore(store), createLedger({ store, clock: { now: () => 't' }, newId: () => crypto.randomUUID(), source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true }));
 
 describe('restrictGrants', () => {
   it('once a policy names the canonical store, a grant minted over any other store fails assertGrant and cannot reserve', async () => {

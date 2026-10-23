@@ -49,6 +49,138 @@ function seed(path: string, rows: LedgerRow[]): void {
   writeFileSync(path, rows.map((r) => JSON.stringify(r) + '\n').join(''));
 }
 
+// Child-side helpers: `check(g)` reports whether a grant passes assertGrant, and `memLedger()`
+// builds a ledger over an in-memory store, admitted the way an adapter admits its own.
+const HELPERS = `
+const check = (g, ledger) => { try { ledger === undefined ? C.assertGrant(g) : C.assertClientGrant(g, ledger); return 'passes'; } catch { return 'throws'; } };
+const memLedger = () => {
+  const rows = [];
+  const store = { transact: async (fn) => { const r = fn(rows); rows.push(...r.append); return r.result; }, read: async () => rows };
+  C.admitStore?.(store);
+  return C.createLedger({ store, clock: { now: () => 't' }, newId: () => crypto.randomUUID(), source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
+};
+const out = {};
+`;
+
+describe('grant binding is decided by each open, from the env that opened it', () => {
+  it('an own-run open through opts.env leaves only canonical grants passing, whichever ledger minted the others and when', async () => {
+    const root = tempDir('bind-optsenv');
+    const canon = join(root, 'canon', 'spend.jsonl');
+    seed(canon, [settleRow(449, 'seed')]);
+    const shadow = join(root, 'shadow', 'spend.jsonl');
+    const home = join(root, 'home');
+    const r = await child(`
+const L = await import(${ADAPTER});
+${HELPERS}
+const shadowEnv = { HOME: ${JSON.stringify(home)}, SPEND_LEDGER: ${JSON.stringify(shadow)} };
+const shadowLedger = L.openNodeLedger({ transport: 'live', env: shadowEnv }).ledger;
+const before = await shadowLedger.batchStart(1);
+out.defaultBeforeOwnRun = check(before);
+const { ledger } = L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, CHARTR_CANONICAL_LEDGER: ${JSON.stringify(canon)} } });
+try { await ledger.batchStart(10); out.canonicalAt449 = 'granted'; } catch (e) { out.canonicalAt449 = e.name; }
+const g = await ledger.batchStart(0.5);
+out.canonical = check(g);
+out.canonicalClient = check(g, ledger);
+out.canonicalClientOtherLedger = check(g, shadowLedger);
+out.defaultMintedBefore = check(before);
+out.defaultMintedAfter = check(await L.openNodeLedger({ transport: 'live', env: shadowEnv }).ledger.batchStart(1));
+const mem = memLedger();
+const mg = await mem.batchStart(1);
+out.memory = check(mg);
+out.memoryClient = check(mg, mem);
+try { await L.reserveSpend(before, { bodyBytes: 1, maxTokens: 1 }); out.reserveSpend = 'reserved'; } catch { out.reserveSpend = 'refused'; }
+let sends = 0;
+try { await before.metered({ bodyBytes: 1, maxTokens: 1 }, async () => { sends++; return { usage: null }; }); } catch {}
+out.sends = sends;
+console.log(JSON.stringify(out));
+`, envFor(home), root);
+    expect(r.err).toBe('');
+    expect(JSON.parse(r.out)).toEqual({
+      defaultBeforeOwnRun: 'passes',
+      canonicalAt449: 'SpendRefused',
+      canonical: 'passes',
+      canonicalClient: 'passes',
+      canonicalClientOtherLedger: 'throws',
+      defaultMintedBefore: 'throws',
+      defaultMintedAfter: 'throws',
+      memory: 'throws',
+      memoryClient: 'throws',
+      reserveSpend: 'refused',
+      sends: 0,
+    });
+    expect(readRows(shadow).filter((x) => x.kind === 'reserve')).toEqual([]);
+  });
+
+  it('a marker set in process.env after the adapter loaded binds the next open', async () => {
+    const root = tempDir('bind-late');
+    const canon = join(root, 'canon', 'spend.jsonl');
+    seed(canon, [settleRow(449, 'seed')]);
+    const shadow = join(root, 'shadow', 'spend.jsonl');
+    const home = join(root, 'home');
+    const r = await child(`
+const L = await import(${ADAPTER});
+${HELPERS}
+const mem = memLedger();
+const early = await mem.batchStart(1);
+process.env.CHARTR_CANONICAL_LEDGER = ${JSON.stringify(canon)};
+const { ledger, mode } = L.openNodeLedger({ transport: 'live' });
+out.mode = mode;
+try { await ledger.batchStart(10); out.canonicalAt449 = 'granted'; } catch (e) { out.canonicalAt449 = e.name; }
+out.memoryMintedBefore = check(early);
+out.memoryMintedAfter = check(await mem.batchStart(1));
+out.otherPath = check(await L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, SPEND_LEDGER: ${JSON.stringify(shadow)} } }).ledger.batchStart(1));
+try { await L.reserveSpend(early, { bodyBytes: 1, maxTokens: 1 }); out.reserveSpend = 'reserved'; } catch { out.reserveSpend = 'refused'; }
+console.log(JSON.stringify(out));
+`, envFor(home), root);
+    expect(r.err).toBe('');
+    expect(JSON.parse(r.out)).toEqual({
+      mode: 'own-run', canonicalAt449: 'SpendRefused', memoryMintedBefore: 'throws', memoryMintedAfter: 'throws', otherPath: 'throws', reserveSpend: 'refused',
+    });
+  });
+
+  it('with the marker in process.env, an open through opts.env without it, or naming a second canonical file, mints no passing grant', async () => {
+    const root = tempDir('bind-procenv');
+    const canon = join(root, 'canon', 'spend.jsonl');
+    seed(canon, []);
+    const other = join(root, 'other', 'spend.jsonl');
+    seed(other, []);
+    const shadow = join(root, 'shadow', 'spend.jsonl');
+    const home = join(root, 'home');
+    const r = await child(`
+const L = await import(${ADAPTER});
+${HELPERS}
+out.defaultViaOptsEnv = check(await L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, SPEND_LEDGER: ${JSON.stringify(shadow)} } }).ledger.batchStart(1));
+try { L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, CHARTR_CANONICAL_LEDGER: ${JSON.stringify(other)} } }); out.secondCanonical = 'opened'; } catch (e) { out.secondCanonical = /CHARTR_CANONICAL_LEDGER|canonical/.test(e.message) ? 'refused' : e.message; }
+out.canonical = check(await L.openNodeLedger({ transport: 'live' }).ledger.batchStart(1));
+console.log(JSON.stringify(out));
+`, envFor(home, { CHARTR_CANONICAL_LEDGER: canon }), root);
+    expect(r.err).toBe('');
+    expect(JSON.parse(r.out)).toEqual({ defaultViaOptsEnv: 'throws', secondCanonical: 'refused', canonical: 'passes' });
+    expect(readRows(other)).toEqual([]);
+  });
+
+  it('with the marker set and the adapter never imported, a grant over an ad-hoc store cannot meter a call', async () => {
+    const root = tempDir('bind-noimport');
+    const canon = join(root, 'canon', 'spend.jsonl');
+    seed(canon, [settleRow(499.99, 'seed')]);
+    const r = await child(`
+const rows = [];
+const store = { transact: async (fn) => { const r = fn(rows); rows.push(...r.append); return r.result; }, read: async () => rows };
+const ledger = C.createLedger({ store, clock: { now: () => 't' }, newId: () => crypto.randomUUID(), source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
+const grant = await ledger.batchStart(100);
+const out = {};
+try { C.assertClientGrant(grant, ledger); out.client = 'built'; } catch (e) { out.client = /grant/.test(e.message) ? 'refused' : e.message; }
+let sends = 0;
+try { await grant.metered({ bodyBytes: 10, maxTokens: 10 }, async () => { sends++; return { usage: { input_tokens: 10, output_tokens: 1 } }; }); out.metered = 'sent'; } catch (e) { out.metered = /grant/.test(e.message) ? 'refused' : e.message; }
+out.sends = sends;
+out.reserveRows = rows.filter((x) => x.kind === 'reserve').length;
+console.log(JSON.stringify(out));
+`, envFor(join(root, 'home'), { CHARTR_CANONICAL_LEDGER: canon }), root);
+    expect(r.err).toBe('');
+    expect(JSON.parse(r.out)).toEqual({ client: 'refused', metered: 'refused', sends: 0, reserveRows: 0 });
+  });
+});
+
 describe('ledger identity is the real path', () => {
   it('a symlink to the ledger file takes the same lock as the real path', async () => {
     const root = tempDir('real-lock');

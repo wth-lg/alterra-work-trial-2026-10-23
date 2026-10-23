@@ -333,7 +333,9 @@ const other = L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringif
 const g = await other.batchStart(1);
 check('SPEND_LEDGER', g);
 const rows = [];
-const mem = C.createLedger({ store: { transact: async (fn) => { const r = fn(rows); rows.push(...r.append); return r.result; }, read: async () => rows },
+const memStore = { transact: async (fn) => { const r = fn(rows); rows.push(...r.append); return r.result; }, read: async () => rows };
+C.admitStore(memStore);
+const mem = C.createLedger({ store: memStore,
   clock: { now: () => 't' }, newId: () => 'm1', source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
 check('memory', await mem.batchStart(1));
 try { await L.reserveSpend(g, { bodyBytes: 1, maxTokens: 1 }); out.push('reserveSpend passed'); } catch { out.push('reserveSpend refused'); }
