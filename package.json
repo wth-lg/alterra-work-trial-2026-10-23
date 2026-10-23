@@ -10,7 +10,7 @@
     "prepare": "git config core.hooksPath scripts/hooks",
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
-    "lint": "eslint .",
+    "lint": "eslint -c eslint.config.js .",
     "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
     "test": "vitest run",
     "cli": "node cli/index.ts",
