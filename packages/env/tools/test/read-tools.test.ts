@@ -1,5 +1,5 @@
 /* eslint-disable local/isomorphic-imports -- Node-only test: it reads the committed world
-   with node:fs. */
+   with node:fs and prints its paging counts to process.stdout. */
 // Contract tests for the read tools (design section 3): strict schemas, error codes, stable
 // order, the 8k-token page cap with next_offset, and exposure tags that match the payload.
 import { readFileSync } from 'node:fs';
@@ -211,7 +211,7 @@ describe('fhir_search', () => {
       offset = page.next_offset as number | undefined;
       pages++;
     }
-    console.log(`fhir_search Observation patient=pt-0001: total ${expected.length}, ${pages} pages, ${truncated} cut by the 8k cap`);
+    process.stdout.write(`fhir_search Observation patient=pt-0001: total ${expected.length}, ${pages} pages, ${truncated} cut by the 8k cap\n`);
     expect(truncated).toBeGreaterThan(0);
     expect(got).toEqual(expected);
   });

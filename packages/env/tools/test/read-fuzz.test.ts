@@ -1,5 +1,5 @@
 /* eslint-disable local/isomorphic-imports -- Node-only test: it reads the committed world
-   with node:fs. */
+   with node:fs and prints its counters to process.stdout. */
 // Property fuzz over the read tools (plan phase P5): mostly schema-valid calls built from ids,
 // codes, names and words that exist in the committed world, plus mutated calls. A read must
 // never throw (INTERNAL), never change the state hash, and every success must carry exposure
@@ -292,15 +292,19 @@ async function fuzz(tools: readonly Tool<ReadContext>[], perTool: number, seed: 
 
 const PER_TOOL = 1150;
 
+// Straight to stdout: vitest's default reporter hides console output from passing tests, and
+// the gate command reads these counters.
+const print = (line: string) => process.stdout.write(`${line}\n`);
+
 describe('read tool fuzz', () => {
   it(`${PER_TOOL * READ_TOOLS.length} calls: no INTERNAL, no hash change, exposure matches every payload`, async () => {
     const stats = await fuzz(READ_TOOLS, PER_TOOL, 20261023);
     const pct = ((100 * stats.schemaValid) / stats.calls).toFixed(1);
-    console.log(`fuzz: calls=${stats.calls} schema_valid=${stats.schemaValid} (${pct}%) INTERNAL=${stats.internal} hash_changes=${stats.hashChanges} defects=${stats.defects.length}`);
+    print(`fuzz: calls=${stats.calls} schema_valid=${stats.schemaValid} (${pct}%) INTERNAL=${stats.internal} hash_changes=${stats.hashChanges} defects=${stats.defects.length}`);
     for (const [name, s] of Object.entries(stats.perTool)) {
-      console.log(`  ${name.padEnd(15)} calls=${s.calls} valid=${s.valid} ok=${s.ok} exposed_ids_checked=${s.exposed} referenced_ids_checked=${s.referenced} errors=${JSON.stringify(s.errors)}`);
+      print(`  ${name.padEnd(15)} calls=${s.calls} valid=${s.valid} ok=${s.ok} exposed_ids_checked=${s.exposed} referenced_ids_checked=${s.referenced} errors=${JSON.stringify(s.errors)}`);
     }
-    for (const line of [...stats.firstInternal, ...stats.defects]) console.log(`  ! ${line}`);
+    for (const line of [...stats.firstInternal, ...stats.defects]) print(`  ! ${line}`);
     expect(stats.calls).toBeGreaterThanOrEqual(10_000);
     expect(stats.schemaValid / stats.calls).toBeGreaterThanOrEqual(0.5);
     for (const s of Object.values(stats.perTool)) expect(s.valid).toBeGreaterThanOrEqual(500);
@@ -322,7 +326,7 @@ describe('read tool fuzz', () => {
           },
     );
     const stats = await fuzz(broken, 60, 7);
-    console.log(`planted throw in fhir_read: INTERNAL=${stats.internal}`);
+    print(`planted throw in fhir_read: INTERNAL=${stats.internal}`);
     expect(stats.internal).toBeGreaterThanOrEqual(1);
   });
 
