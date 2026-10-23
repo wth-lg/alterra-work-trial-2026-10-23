@@ -5,19 +5,24 @@
 //   pnpm keyscan --range A..B [paths...] the commits in A..B (a bare revision means all its history)
 //
 // A hit is an sk-ant-shaped string or, when ANTHROPIC_API_KEY is set, its exact value.
-// Every file is scanned byte for byte, binary or not. A symlink in a build directory that
+// Every file is scanned byte for byte, binary or not; a .gz file is also scanned decompressed
+// (labelled file.gz(gunzip):line), and a base64 "data" field, the way FHIR attachments carry a
+// note, is also scanned decoded (labelled file:line(base64)). A symlink in a build directory that
 // resolves outside it is a finding too: the Pages upload dereferences symlinks.
 // Exit codes: 0 clean, 1 hit, 2 usage or git error.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 const KEY_SHAPE = /sk-ant-[A-Za-z0-9_-]{20,}/;
 // Build and test output that .gitignore hides from `git ls-files` but that can still ship or be uploaded.
 const BUILD_DIRS = ['apps/web/dist', 'apps/web/test-results', 'apps/web/playwright-report'];
 const SKIP_DIRS = new Set(['node_modules', '.git']);
 const MIN_ENV_KEY_LENGTH = 8;
+// A JSON "data" string of base64, e.g. Attachment.data in an NDJSON resource.
+const BASE64_DATA = /"data"\s*:\s*"([A-Za-z0-9+/]+={0,2})"/g;
 
 function fail(message: string): never {
   process.stderr.write(`keyscan: ${message}\n`);
@@ -73,6 +78,9 @@ function walk(dir: string, out: string[]): void {
 function scanText(text: string, label: string, matches: (line: string) => boolean, hits: string[]): void {
   text.split('\n').forEach((line, i) => {
     if (matches(line)) hits.push(`${label}:${i + 1}`);
+    for (const m of line.matchAll(BASE64_DATA)) {
+      if (matches(Buffer.from(m[1]!, 'base64').toString('latin1'))) hits.push(`${label}:${i + 1}(base64)`);
+    }
   });
 }
 
@@ -89,7 +97,18 @@ function scanFile(root: string, path: string, label: string, matches: (line: str
     return;
   }
   if (!stat?.isFile()) return;
-  scanText(readFileSync(path).toString('latin1'), label, matches, hits);
+  const bytes = readFileSync(path);
+  scanText(bytes.toString('latin1'), label, matches, hits);
+  if (path.endsWith('.gz')) {
+    let text: string;
+    try {
+      text = gunzipSync(bytes).toString('latin1');
+    } catch {
+      hits.push(`${label}: .gz file that does not decompress, so its content cannot be scanned`);
+      return;
+    }
+    scanText(text, `${label}(gunzip)`, matches, hits);
+  }
 }
 
 function resolvesInside(link: string, dir: string): boolean {
