@@ -1,0 +1,92 @@
+{
+  "now": "2026-10-23T08:00:00-04:00",
+  "world": {
+    "file": "fixtures/world.ndjson.gz",
+    "state_hash": "0b1b61ad3cc66e5b09d91d029e5abe53fe5818b3b42304e8a51f3eb7681c5053",
+    "ndjson_sha256": "82764cdd0064807254dfa62026dc76da5ace87dbdaea96d5d2cb68dc0da9caa1",
+    "resources": 7490,
+    "by_type": {
+      "AllergyIntolerance": 40,
+      "Condition": 979,
+      "DiagnosticReport": 506,
+      "DocumentReference": 358,
+      "Encounter": 358,
+      "Group": 3,
+      "MedicationRequest": 388,
+      "Observation": 3457,
+      "Organization": 2,
+      "Patient": 60,
+      "Practitioner": 3,
+      "Procedure": 1336
+    }
+  },
+  "base": {
+    "file": "fixtures/synthea/base.ndjson.gz",
+    "synthea": "v4.0.0",
+    "jar_sha256": "ed43c20ad40ba5c3bc724503a5af032715fe3c491620b766148e7c2361e6ecc1",
+    "args": [
+      "-s",
+      "20261023",
+      "-cs",
+      "7",
+      "-r",
+      "20261023",
+      "-e",
+      "20261024",
+      "-p",
+      "60",
+      "--generate.append_numbers_to_person_names=false",
+      "-Duser.timezone=America/New_York",
+      "-Duser.language=en",
+      "-Duser.country=US",
+      "-Dfile.encoding=UTF-8"
+    ],
+    "ndjson_sha256": "14d03c86d4b2e155e1efd30600b56ecce15a407c5b6fdd777472bfb68f7a8765",
+    "resources": 7482,
+    "patients": 60,
+    "by_type": {
+      "AllergyIntolerance": 40,
+      "Condition": 979,
+      "DiagnosticReport": 506,
+      "DocumentReference": 358,
+      "Encounter": 358,
+      "MedicationRequest": 388,
+      "Observation": 3457,
+      "Patient": 60,
+      "Procedure": 1336
+    }
+  },
+  "overlays": [],
+  "inputs": {
+    "fixtures/synthea/generate.sh": "9c20f04e81cd71443b418aaa2c2782b47d3f20fffccdce06959da03b40c33fed",
+    "packages/env/clock.ts": "ed40c54a55e7dfeb896563636eca1dfd670174f66294b815245e6c621c5452d3",
+    "packages/env/overlay.ts": "79ddb1445970e7a1a567e2db0cf778e2b9bfa8ede2ae016e39a04ad0cd18454f",
+    "packages/env/world.ts": "cc7dd7c88d47251d63bc5290d7b2faa76ac0f0305aa5f1d94d01384570e8b678",
+    "scripts/fixtures-synthea.ts": "44162b65dc576e507b526132164eda54cb14000936331d48b575f46d9c49d752"
+  },
+  "definitions": {
+    "file": "fixtures/definitions-pruned.json",
+    "from": "@medplum/definitions 5.2.7",
+    "sha256": "8576ea1ae12139b1ad6e4a37ec5331980ddb6df73610af5b99a1c6e620aaccc8",
+    "types": [
+      "AllergyIntolerance",
+      "Appointment",
+      "Communication",
+      "Condition",
+      "DiagnosticReport",
+      "DocumentReference",
+      "Encounter",
+      "EpisodeOfCare",
+      "Group",
+      "MedicationRequest",
+      "Observation",
+      "Organization",
+      "Patient",
+      "Practitioner",
+      "Procedure",
+      "Provenance",
+      "ServiceRequest",
+      "Task"
+    ]
+  }
+}
