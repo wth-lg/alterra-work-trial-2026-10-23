@@ -4,7 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import { fakeKey, tempDir, write } from '../../../scripts/test/helpers.ts';
 import { main as liveNode, projection as liveNodeProjection } from '../../../scripts/live-node.ts';
-import { ApiError, MESSAGES_URL, MessagesClient, type MessageParam } from '../anthropic.ts';
+import * as anthropic from '../anthropic.ts';
+import { ApiError, MessagesClient, type MessageParam } from '../anthropic.ts';
 import { admitStore, createLedger, SpendRefused, type BatchGrant, type Ledger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 
 class MemoryStore implements LedgerStore {
@@ -88,12 +89,15 @@ const partial = (how: 'eof' | 'error' | 'overloaded'): Step => () => {
 const PARAMS = { max_tokens: 1024, output_config: { effort: 'low' } };
 const user = (): MessageParam[] => [{ role: 'user', content: 'hello' }];
 
-async function client(steps: Step[], opts: { setupLedger?: ReturnType<typeof setup>; projection?: number } = {}) {
+async function client(steps: Step[], opts: { setupLedger?: ReturnType<typeof setup>; projection?: number; fetch?: typeof fetch; maxAttempts?: number } = {}) {
   const s = opts.setupLedger ?? setup();
   const grant = await s.ledger.batchStart(opts.projection ?? 1);
   const m = mockFetch(steps);
   const sleeps: number[] = [];
-  const c = new MessagesClient({ grant, ledger: s.ledger, apiKey: fakeKey(), fetch: m.fetch, sleep: async (ms) => void sleeps.push(ms) });
+  const c = new MessagesClient({
+    grant, ledger: s.ledger, apiKey: fakeKey(), fetch: opts.fetch ?? m.fetch, sleep: async (ms) => void sleeps.push(ms),
+    ...(opts.maxAttempts ? { maxAttempts: opts.maxAttempts } : {}),
+  });
   return { ...s, ...m, grant, c, sleeps };
 }
 
@@ -186,7 +190,7 @@ describe('request rules', () => {
     const t = await client([ok()]);
     await t.c.send(user(), { ...PARAMS, cache_control: { type: 'ephemeral' }, tool_choice: { type: 'auto' } });
     const [call] = t.calls;
-    expect(call?.url).toBe(MESSAGES_URL);
+    expect(new URL(call?.url ?? '').pathname).toBe('/v1/messages');
     expect(call?.init.headers).toMatchObject({ 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true' });
     const sent = JSON.parse(call?.init.body as string) as Record<string, unknown>;
     expect(sent).toMatchObject({ model: 'claude-opus-5-5', stream: true });
@@ -309,5 +313,168 @@ describe('pnpm live:node refuses before any call', () => {
     expect(code).toBe(0);
     expect(out.join('\n')).toContain(`LIVE_PROJECTION_USD=${liveNodeProjection().toFixed(6)}`);
     expect(m.calls).toHaveLength(0);
+  });
+});
+
+// P2 fix round (findings p2-findings-1): each test below failed at 63259f5.
+describe('MessagesClient is the only way to send', () => {
+  it('exports only the metered client, its error and pure helpers', () => {
+    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'reserveRequest']);
+  });
+
+  it('no exported function sends without a grant', async () => {
+    const m = mockFetch([ok(), ok(), ok(), ok()]);
+    const real = globalThis.fetch;
+    globalThis.fetch = m.fetch;
+    try {
+      const { ledger } = setup();
+      const shapes = [[user(), PARAMS], [{ apiKey: fakeKey(), history: user(), params: PARAMS, fetch: m.fetch }], [fakeKey(), JSON.stringify({})]];
+      for (const [name, value] of Object.entries(anthropic)) {
+        if (typeof value !== 'function') continue;
+        for (const args of shapes) {
+          try {
+            if (name === 'MessagesClient') new MessagesClient({ grant: {} as BatchGrant, ledger, apiKey: fakeKey(), fetch: m.fetch });
+            else await (value as (...a: unknown[]) => unknown)(...args);
+          } catch {
+            // a throw is fine; a fetch is not
+          }
+        }
+      }
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(m.calls).toHaveLength(0);
+  });
+});
+
+describe('request rules hold for the serialized body', () => {
+  it('a 1h cache ttl smuggled through toJSON makes 0 fetch calls', async () => {
+    const t = await client([ok()]);
+    const block = { type: 'text', text: 's', toJSON: () => ({ type: 'text', text: 's', cache_control: { type: 'ephemeral', ttl: '1h' } }) };
+    await expect(t.c.send(user(), { ...PARAMS, system: [block] })).rejects.toThrow(/ttl/);
+    expect(t.calls).toHaveLength(0);
+    expect(rows(t.store, 'reserve')).toHaveLength(0);
+  });
+});
+
+describe('max_tokens truncation', () => {
+  const truncated = (stop: string): Step => () =>
+    new Response(
+      body([
+        sse([
+          start(),
+          { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'calling' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tu_1', name: 'record_ping', input: {} } },
+          { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"value": 4' } },
+          { type: 'content_block_stop', index: 1 },
+          { type: 'message_delta', delta: { stop_reason: stop }, usage: { output_tokens: 1024 } },
+          { type: 'message_stop' },
+        ]),
+      ]),
+      { status: 200 },
+    );
+
+  it('a tool_use cut at max_tokens is a max_tokens stop with the complete blocks, settled at its usage', async () => {
+    const t = await client([truncated('max_tokens')]);
+    const r = await t.c.send(user(), PARAMS);
+    expect(r.message.stop_reason).toBe('max_tokens');
+    expect(r.message.content).toEqual([{ type: 'text', text: 'calling' }]);
+    expect(t.calls).toHaveLength(1);
+    expect(rows(t.store, 'settle')).toMatchObject([{ usage: { input_tokens: 100, output_tokens: 1024 }, cost_usd: (100 * 4 + 1024 * 20) / 1e6 }]);
+  });
+
+  it('invalid tool_use JSON under any other stop reason still throws', async () => {
+    const t = await client([truncated('tool_use')]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ errorType: 'invalid_tool_input', retryable: false });
+  });
+});
+
+describe('status and local failure handling', () => {
+  it.each([[408, 'timeout_error'], [409, 'conflict_error']])('%i is retried and does not close the batch', async (code, type) => {
+    const t = await client([status(code, type), ok('fine')]);
+    const r = await t.c.send(user(), PARAMS);
+    expect(r.attempts).toBe(2);
+    expect(rows(t.store, 'close')).toHaveLength(0);
+  });
+
+  it('a 401 is not retried and does not close the batch: only 400 stops it', async () => {
+    const t = await client([status(401, 'authentication_error'), ok()]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: 401, retryable: false, stopsBatch: false });
+    expect(t.calls).toHaveLength(1);
+    expect(rows(t.store, 'close')).toHaveLength(0);
+    expect(rows(t.store, 'settle').map((x) => x.cost_usd)).toEqual([0]);
+  });
+
+  it('a key that is not a valid header value throws in the constructor with 0 reserves and 0 fetch calls', async () => {
+    const { ledger, store } = setup();
+    const grant = await ledger.batchStart(1);
+    const m = mockFetch([ok()]);
+    const bad = `${fakeKey()}\nx`;
+    let err: unknown;
+    try {
+      new MessagesClient({ grant, ledger, apiKey: bad, fetch: m.fetch });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(TypeError);
+    expect(String((err as Error).message)).not.toContain(fakeKey());
+    expect(m.calls).toHaveLength(0);
+    expect(rows(store, 'reserve')).toHaveLength(0);
+  });
+
+  it('a malformed stream frame is not retried as a network error; it settles at the worst case', async () => {
+    const bad: Step = () => new Response(body([sse([start()]), 'event: content_block_start\ndata: {not json\n\n']), { status: 200 });
+    const t = await client([bad, ok()]);
+    const err = await t.c.send(user(), PARAMS).catch((e: unknown) => e);
+    expect(err).toMatchObject({ errorType: 'invalid_frame', retryable: false, stopsBatch: false });
+    expect((err as Error).message).not.toMatch(/network error/);
+    expect(t.calls).toHaveLength(1);
+    const [reserve] = rows(t.store, 'reserve');
+    expect(rows(t.store, 'settle')).toMatchObject([{ call_id: reserve?.call_id, cost_usd: reserve?.cost_usd, usage: null }]);
+  });
+});
+
+// The live browser spec sends through MessagesClient with the probe page as its transport, so
+// the browser call gets the client's metering and checks.
+describe('the probe page transport', () => {
+  const relay = async (reply: unknown) => {
+    const { relayFetch } = await import('../../../apps/web/src/probe/transport.ts');
+    const seen: { url?: string } = {};
+    const f = relayFetch(async (url) => {
+      seen.url = url;
+      return reply as never;
+    });
+    return { f, seen };
+  };
+
+  it('an HTTP error status from the browser settles at $0 and does not retry', async () => {
+    const { f } = await relay({ status: 401, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'no' } }) });
+    const t = await client([], { fetch: f, maxAttempts: 1 });
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: 401 });
+    expect(rows(t.store, 'settle').map((x) => x.cost_usd)).toEqual([0]);
+  });
+
+  it('a response from another model is rejected on the probe path', async () => {
+    const { f } = await relay({ status: 200, headers: {}, body: sse(textEvents('x', { model: 'claude-opus-5' })) });
+    const t = await client([], { fetch: f, maxAttempts: 1 });
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ errorType: 'model_mismatch' });
+  });
+
+  it('a browser TypeError reaches the caller once, settled at the worst case', async () => {
+    const { f } = await relay({ error: { name: 'TypeError', message: 'Failed to fetch' } });
+    const t = await client([], { fetch: f, maxAttempts: 1 });
+    await expect(t.c.send(user(), PARAMS)).rejects.toThrow(/Failed to fetch/);
+    const [reserve] = rows(t.store, 'reserve');
+    expect(rows(t.store, 'settle')).toMatchObject([{ cost_usd: reserve?.cost_usd, usage: null }]);
+  });
+
+  it('a 200 from the browser is parsed by the client', async () => {
+    const { f, seen } = await relay({ status: 200, headers: {}, body: sse(textEvents('hi')) });
+    const t = await client([], { fetch: f, maxAttempts: 1 });
+    const r = await t.c.send(user(), PARAMS);
+    expect(r.message.content).toEqual([{ type: 'text', text: 'hi' }]);
+    expect(new URL(seen.url ?? '').pathname).toBe('/v1/messages');
   });
 });

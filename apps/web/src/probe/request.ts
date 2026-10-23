@@ -1,7 +1,7 @@
-// The probe request: one tool, one instruction to call it. The browser probe page and
-// `pnpm live:node` send it byte for byte, so a CORS verdict can compare the same request from
-// both runtimes, and both reserve the same worst case.
-import { requestBody, type MessageParam, type MessageParams } from '../../../../packages/core/anthropic.ts';
+// The probe request: one tool, one instruction to call it. The browser spec and
+// `pnpm live:node` send it byte for byte through MessagesClient, so a CORS verdict can compare
+// the same request from both runtimes, and both reserve the same worst case.
+import { reserveRequest, type MessageParam, type MessageParams } from '../../../../packages/core/anthropic.ts';
 import { worstCaseUsd } from '../../../../packages/core/cost.ts';
 
 export const PROBE_TOOL = 'record_ping';
@@ -26,8 +26,7 @@ export const PROBE_PARAMS: MessageParams = {
 };
 
 export function probeReserveRequest(trial: string) {
-  const bodyBytes = new TextEncoder().encode(requestBody(probeHistory(), PROBE_PARAMS)).length;
-  return { bodyBytes, maxTokens: PROBE_PARAMS.max_tokens, trial };
+  return reserveRequest(probeHistory(), PROBE_PARAMS, trial);
 }
 
 // The worst case of one probe call, as the ledger reserves it.

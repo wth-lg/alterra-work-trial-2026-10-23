@@ -1,22 +1,24 @@
 // The one raw Messages client, for the browser and Node: fetch, SSE streaming, retries,
 // refusal and model checks. It is the only file that names the API host (lint:
-// no-direct-anthropic). A client is built only from a live BatchGrant (assertClientGrant), and
-// every attempt reserves its worst case under the ledger lock before fetch and settles after:
+// no-direct-anthropic), and MessagesClient is the only way to send: the URL, headers and body
+// builders stay private to this module. A client is built only from a live BatchGrant
+// (assertClientGrant), and every attempt reserves its worst case under the ledger lock before
+// fetch and settles after:
 //   HTTP error status        settled at $0: the API bills no error response
 //   complete stream          settled at its usage
-//   dropped or errored stream, network error after send
+//   dropped or errored stream, malformed frame, network error after send
 //                            settled at the worst case: usage is unknown, and the partial
 //                            answer is discarded, never appended to the conversation
-// Retried: 429, 5xx (529 included), an error event mid-stream, a dropped stream, a network
-// error; up to MAX_ATTEMPTS, waiting retry-after or an exponential backoff. A 400 or any
-// other 4xx closes the grant, which stops every client of the batch. Headers are never
-// logged, and the key is redacted from every log line and error message.
+// Retried: 408, 409, 429, 5xx (529 included), an error event mid-stream, a dropped stream, a
+// network error; up to maxAttempts, waiting retry-after or an exponential backoff. A 400
+// closes the grant, which stops every client of the batch; any other 4xx fails the call
+// only. Headers are never logged, and the key is redacted from every log line and error
+// message.
 import type { Usage } from './cost.ts';
-import { assertClientGrant, type BatchGrant, type Ledger } from './ledger.ts';
+import { assertClientGrant, type BatchGrant, type Ledger, type ReserveRequest } from './ledger.ts';
 import { redactText } from './redact.ts';
 
-export const API_ORIGIN = 'https://api.anthropic.com';
-export const MESSAGES_URL = `${API_ORIGIN}/v1/messages`;
+const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2026-10-21';
 export const MODEL = 'claude-opus-5-5';
 export const MAX_ATTEMPTS = 4;
@@ -83,9 +85,10 @@ export class ApiError extends Error {
   }
 }
 
-// Request rules, checked before any reserve or fetch. Sampling params, server fallbacks,
-// forced tool_choice and prefill are 400s on this model and API version or banned by the
-// plan; only 5-minute cache_control is allowed, since the cost model reserves for it.
+// Request rules, checked on the serialized body before any reserve or fetch, so a toJSON
+// cannot send what the input objects hide. Sampling params, server fallbacks, forced
+// tool_choice and prefill are 400s on this model and API version or banned by the plan; only
+// 5-minute cache_control is allowed, since the cost model reserves for it.
 const ALLOWED = new Set(['max_tokens', 'system', 'tools', 'tool_choice', 'cache_control', 'output_config', 'thinking', 'metadata', 'stop_sequences']);
 const BANNED: Record<string, string> = {
   temperature: 'temperature is a 400 on API version 2026-10-21',
@@ -109,24 +112,31 @@ function checkCacheTtl(v: unknown, path: string): void {
   }
 }
 
-export function checkRequest(history: readonly MessageParam[], params: MessageParams): void {
-  for (const k of Object.keys(params)) {
+// Returns max_tokens as the body sends it, which is what the reservation must cover.
+function checkRequest(params: MessageParams, body: string): number {
+  for (const k of ['model', 'messages', 'stream']) if (Object.hasOwn(params, k)) throw new TypeError(`request rejected: ${BANNED[k]}`);
+  const b = JSON.parse(body) as Record<string, unknown>;
+  for (const k of Object.keys(b)) {
+    if (k === 'model' || k === 'messages' || k === 'stream') continue;
     if (k in BANNED) throw new TypeError(`request rejected: ${BANNED[k]}`);
     if (!ALLOWED.has(k)) throw new TypeError(`request rejected: unknown parameter ${k}`);
   }
-  const choice = params.tool_choice?.type;
-  if (choice !== undefined && choice !== 'auto' && choice !== 'none') throw new TypeError(`request rejected: forced tool_choice ${choice} is a 400 on ${MODEL}`);
+  if (b.model !== MODEL || b.stream !== true) throw new TypeError(`request rejected: ${BANNED.model}, and it always streams`);
+  const choice = (b.tool_choice as { type?: unknown } | undefined)?.type;
+  if (choice !== undefined && choice !== 'auto' && choice !== 'none') throw new TypeError(`request rejected: forced tool_choice ${String(choice)} is a 400 on ${MODEL}`);
+  const history = Array.isArray(b.messages) ? (b.messages as Array<{ role?: unknown }>) : [];
   if (history.length === 0 || history[0]?.role !== 'user') throw new TypeError('request rejected: the conversation must start with a user turn');
   if (history.at(-1)?.role === 'assistant') throw new TypeError(`request rejected: a prefill (history ending in an assistant turn) is a 400 on ${MODEL}`);
-  checkCacheTtl(params, 'params');
-  checkCacheTtl(history, 'messages');
+  checkCacheTtl(b, 'request');
+  if (!Number.isSafeInteger(b.max_tokens) || (b.max_tokens as number) < 1) throw new TypeError('request rejected: max_tokens must be a positive integer');
+  return b.max_tokens as number;
 }
 
-export function requestBody(history: readonly MessageParam[], params: MessageParams): string {
+function requestBody(history: readonly MessageParam[], params: MessageParams): string {
   return JSON.stringify({ model: MODEL, ...params, messages: history, stream: true });
 }
 
-export function requestHeaders(apiKey: string): Record<string, string> {
+function requestHeaders(apiKey: string): Record<string, string> {
   return {
     'content-type': 'application/json',
     'x-api-key': apiKey,
@@ -135,7 +145,16 @@ export function requestHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-const retryableStatus = (s: number) => s === 429 || s >= 500;
+const reserveFor = (body: string, maxTokens: number, trial?: string): ReserveRequest =>
+  ({ bodyBytes: new TextEncoder().encode(body).length, maxTokens, ...(trial ? { trial } : {}) });
+
+// What the ledger reserves for one attempt of this request, for a projection; it sends nothing.
+export function reserveRequest(history: readonly MessageParam[], params: MessageParams, trial?: string): ReserveRequest {
+  const body = requestBody(history, params);
+  return reserveFor(body, checkRequest(params, body), trial);
+}
+
+const retryableStatus = (s: number) => s === 408 || s === 409 || s === 429 || s >= 500;
 const broken = (message: string, type: string | null = null, retryable = true) =>
   new ApiError(message, { status: 200, type, retryable, stopsBatch: false, partial: true });
 const retryableStreamError = (type: string | null) => type === 'overloaded_error' || type === 'api_error' || type === 'rate_limit_error';
@@ -153,18 +172,22 @@ async function errorStatus(res: Response): Promise<ApiError> {
   const retryable = retryableStatus(res.status);
   const after = Number(res.headers.get('retry-after') ?? NaN);
   return new ApiError(`HTTP ${res.status}${type ? ` ${type}` : ''}${detail ? `: ${detail}` : ''}`, {
-    status: res.status, type, retryable, stopsBatch: !retryable, retryAfter: Number.isFinite(after) && after >= 0 ? after : null,
+    status: res.status, type, retryable, stopsBatch: res.status === 400, retryAfter: Number.isFinite(after) && after >= 0 ? after : null,
   });
 }
 
-// Folds SSE events into the final message. Throws ApiError(partial) on an error event or a
-// stream that ends before message_stop.
+// Folds SSE events into the final message. Throws ApiError(partial) on an error event, a
+// malformed frame or a stream that ends before message_stop. A tool_use whose input JSON is
+// cut off is dropped from the content when the message stops at max_tokens, so the caller
+// gets a max_tokens stop and never a tool call with half its arguments; under any other stop
+// reason it is an error.
 async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
   const st: { message: Message | null } = { message: null };
   const json = new Map<number, string>();
+  const truncated = new Set<number>();
   const apply = (e: Record<string, unknown>): boolean => {
     switch (e.type) {
       case 'message_start':
@@ -191,7 +214,7 @@ async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
           try {
             block.input = raw === '' ? {} : JSON.parse(raw);
           } catch {
-            throw broken('tool_use input is not valid JSON', 'invalid_tool_input', false);
+            truncated.add(e.index as number);
           }
         }
         return false;
@@ -206,6 +229,10 @@ async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
         }
         return false;
       case 'message_stop':
+        if (truncated.size > 0 && st.message) {
+          if (st.message.stop_reason !== 'max_tokens') throw broken('tool_use input is not valid JSON', 'invalid_tool_input', false);
+          st.message.content = st.message.content.filter((_, i) => !truncated.has(i));
+        }
         return true;
       case 'error': {
         const err = e.error as { type?: string; message?: string } | undefined;
@@ -231,7 +258,13 @@ async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
       buf = buf.slice(cut).replace(/^\r?\n\r?\n/, '');
       const data = frame.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\n');
       if (data === '') continue;
-      if (apply(JSON.parse(data) as Record<string, unknown>)) {
+      let event: Record<string, unknown>;
+      try {
+        event = JSON.parse(data) as Record<string, unknown>;
+      } catch {
+        throw broken('stream frame is not valid JSON', 'invalid_frame', false);
+      }
+      if (apply(event)) {
         void reader.cancel().catch(() => {});
         if (st.message === null) throw broken('stream ended without message_start');
         return st.message;
@@ -242,39 +275,12 @@ async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
 }
 
 // One request, no ledger: an ApiError for an HTTP error or a broken stream, the fetch error
-// as thrown for a network failure. MessagesClient and probeOnce are its only callers.
+// as thrown for a network failure. MessagesClient.send is its only caller.
 async function sendOnce(f: typeof fetch, apiKey: string, body: string, signal?: AbortSignal): Promise<{ status: number; message: Message }> {
   const res = await f(MESSAGES_URL, { method: 'POST', headers: requestHeaders(apiKey), body, ...(signal ? { signal } : {}) });
   if (res.status !== 200) throw await errorStatus(res);
   if (!res.body) throw broken('HTTP 200 without a body');
   return { status: res.status, message: await readStream(res.body) };
-}
-
-export interface ProbeResult {
-  status: number | null;
-  model: string | null;
-  stop_reason: string | null;
-  tool_use: ContentBlock | null;
-  usage: Usage | null;
-  error: { name: string; message: string; type: string | null } | null;
-}
-
-// One unmetered attempt, for the real-browser probe page only (lint: no-direct-anthropic
-// allows its import in apps/web/src/probe/** and tests). Its caller's Node side reserves the
-// worst case before and settles after, so the probe never sends without a reservation.
-export async function probeOnce(opts: { apiKey: string; history: MessageParam[]; params: MessageParams; fetch?: typeof fetch }): Promise<ProbeResult> {
-  checkRequest(opts.history, opts.params);
-  const none = { status: null, model: null, stop_reason: null, tool_use: null, usage: null };
-  try {
-    const { status, message } = await sendOnce(opts.fetch ?? fetch, opts.apiKey, requestBody(opts.history, opts.params));
-    const tool_use = message.content.find((b) => b.type === 'tool_use') ?? null;
-    return { status, model: message.model, stop_reason: message.stop_reason, tool_use, usage: message.usage, error: null };
-  } catch (e) {
-    const err = e as Error;
-    const status = e instanceof ApiError ? e.status : null;
-    const type = e instanceof ApiError ? e.errorType : null;
-    return { ...none, status, error: { name: err.name, message: redactText(err.message, [opts.apiKey]), type } };
-  }
 }
 
 export interface ClientOptions {
@@ -286,6 +292,8 @@ export interface ClientOptions {
   // One line per attempt and outcome; never headers, never the key.
   log?: (line: string) => void;
   trial?: string;
+  // Attempts per send, retries included; default MAX_ATTEMPTS.
+  maxAttempts?: number;
 }
 
 export interface CallResult {
@@ -302,23 +310,30 @@ export class MessagesClient {
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #log: (line: string) => void;
   readonly #trial: string | undefined;
+  readonly #maxAttempts: number;
 
   constructor(opts: ClientOptions) {
     assertClientGrant(opts.grant, opts.ledger);
+    // fetch would throw this before sending, with the key in its message; throw it here instead.
+    try {
+      new Headers(requestHeaders(opts.apiKey));
+    } catch {
+      throw new TypeError('apiKey is not a valid header value');
+    }
     this.#grant = opts.grant;
     this.#apiKey = opts.apiKey;
     this.#fetch = opts.fetch ?? ((input, init) => fetch(input, init));
     this.#sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.#log = (line) => opts.log?.(redactText(line, [opts.apiKey]));
     this.#trial = opts.trial;
+    this.#maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
   }
 
   // Sends history + params and, on a complete answer that is not a refusal, appends it to
   // history. Anything else leaves history as it was.
   async send(history: MessageParam[], params: MessageParams): Promise<CallResult> {
-    checkRequest(history, params);
     const body = requestBody(history, params);
-    const req = { bodyBytes: new TextEncoder().encode(body).length, maxTokens: params.max_tokens, ...(this.#trial ? { trial: this.#trial } : {}) };
+    const req = reserveFor(body, checkRequest(params, body), this.#trial);
     for (let attempt = 1; ; attempt++) {
       const res = await this.#grant.reserve(req);
       let out: { status: number; message: Message };
@@ -336,7 +351,7 @@ export class MessagesClient {
           await this.#grant.close();
           throw err;
         }
-        if (!(err instanceof ApiError) || !err.retryable || attempt >= MAX_ATTEMPTS) throw err;
+        if (!(err instanceof ApiError) || !err.retryable || attempt >= this.#maxAttempts) throw err;
         await this.#sleep(err.retryAfter !== null ? Math.min(err.retryAfter * 1000, RETRY_AFTER_MAX_MS) : Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS));
         continue;
       }
