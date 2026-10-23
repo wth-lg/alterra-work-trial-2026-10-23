@@ -124,7 +124,9 @@ export async function go() {
 
 const RUNNER = `
 const sends = [];
-const record = (api, url, init) => sends.push({ api, host: new URL(String(url)).hostname, ...(init?.dispatcher !== undefined ? { dispatcher: true } : {}) });
+// A dispatcher other than the global one would pick the connection below the guard.
+const foreign = (init) => init?.dispatcher !== undefined && init.dispatcher !== globalThis[Symbol.for('undici.globalDispatcher.2')];
+const record = (api, url, init) => sends.push({ api, host: new URL(String(url)).hostname, ...(foreign(init) ? { dispatcher: true } : {}) });
 // What the platform would send: a Request's internal slots, never a property a plant shadowed.
 const nativeUrl = Object.getOwnPropertyDescriptor(Request.prototype, 'url').get;
 const sse = (events) => events.map((e) => 'event: ' + e.type + '\\ndata: ' + JSON.stringify(e) + '\\n\\n').join('');
@@ -260,36 +262,49 @@ describe('entry points install the guard before anything else runs', () => {
 });
 
 describe('Node fetch never sees a dispatcher the caller passed', () => {
-  // Real fetch against a local server: a dispatcher in init would route the request below the
-  // guard. Guard off is the control: the same call reaches the dispatcher.
+  // Real fetch against local servers. Each route hands fetch a dispatcher that reroutes the
+  // connection from the checked host to a second server, the stand-in for the API host. Guard off
+  // is the control: the same call reaches the second server.
   const CHILD = `
 import { createServer } from 'node:http';
-const hits = [];
-const srv = createServer((req, res) => { hits.push(req.url); res.end('ok'); });
-await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+const listen = async (hits) => { const srv = createServer((req, res) => { hits.push(req.url); res.end('ok'); }); await new Promise((r) => srv.listen(0, '127.0.0.1', r)); return srv; };
+const checkedHits = [], otherHits = [];
+const checked = await listen(checkedHits), other = await listen(otherHits);
+const otherOrigin = 'http://127.0.0.1:' + other.address().port;
+const agent = globalThis[Symbol.for('undici.globalDispatcher.2')];
 const used = [];
-const dispatcher = { dispatch: () => { used.push('dispatch'); throw new Error('dispatcher used'); } };
+const dispatcher = { dispatch: (opts, handler) => { used.push('dispatch'); return agent.dispatch({ ...opts, origin: otherOrigin }, handler); } };
 if (process.env.GUARD === '1') (await import(process.env.EGRESS_MODULE)).installEgressGuard(globalThis);
+const url = 'http://127.0.0.1:' + checked.address().port + '/x';
+const init = Object.assign(() => undefined, { dispatcher });
+const routes = {
+  init: () => fetch(url, { dispatcher }),
+  'request-ctor': () => fetch(new Request(url, { dispatcher })),
+  'request-copy': () => fetch(new Request(new Request(url, { dispatcher }))),
+  'request-ctor-init-undefined': () => fetch(new Request(url, { dispatcher }), { dispatcher: undefined }),
+  'init-function': () => fetch(url, init),
+};
 let error = null;
-try { await (await fetch('http://127.0.0.1:' + srv.address().port + '/x', { dispatcher })).text(); } catch (e) { error = e.message; }
-srv.close();
-process.stdout.write(JSON.stringify({ hits, used, error }));
+try { await (await routes[process.env.ROUTE]()).text(); } catch (e) { error = e.message; }
+checked.close(); other.close();
+process.stdout.write(JSON.stringify({ checked: checkedHits, other: otherHits, used, error }));
 `;
-  const runChild = (guard: boolean) => {
+  const runChild = (guard: boolean, route: string) => {
     const dir = tempDir('egress-dispatcher');
     write(dir, 'child.mjs', CHILD);
     const r = spawnSync(process.execPath, [join(dir, 'child.mjs')], {
-      encoding: 'utf8', env: { PATH: process.env.PATH ?? '', GUARD: guard ? '1' : '0', EGRESS_MODULE: repo('packages/core/egress.ts') },
+      encoding: 'utf8', env: { PATH: process.env.PATH ?? '', GUARD: guard ? '1' : '0', ROUTE: route, EGRESS_MODULE: repo('packages/core/egress.ts') },
     });
     if (r.status !== 0) throw new Error(`child exited ${r.status}: ${r.stderr}`);
-    return JSON.parse(r.stdout) as { hits: string[]; used: string[]; error: string | null };
+    return JSON.parse(r.stdout) as { checked: string[]; other: string[]; used: string[]; error: string | null };
   };
+  const ROUTES = ['init', 'request-ctor', 'request-copy', 'request-ctor-init-undefined', 'init-function'];
 
-  it('guard on: the request goes through the global dispatcher to the host fetch was given', () => {
-    expect(runChild(true)).toEqual({ hits: ['/x'], used: [], error: null });
+  it.each(ROUTES)('guard on, %s: the request goes through the global dispatcher to the host fetch was given', (route) => {
+    expect(runChild(true, route)).toEqual({ checked: ['/x'], other: [], used: [], error: null });
   });
 
-  it('control, guard off: the passed dispatcher is used', () => {
-    expect(runChild(false).used).toEqual(['dispatch']);
+  it.each(ROUTES)('control, guard off, %s: the passed dispatcher reroutes the request', (route) => {
+    expect(runChild(false, route)).toEqual({ checked: [], other: ['/x'], used: ['dispatch'], error: null });
   });
 });

@@ -3,8 +3,9 @@
 // request whose WHATWG-parsed host is an API host (isApiHost in anthropic.ts: %2E, IDNA dots,
 // case, templates and joins all resolve to it) unless it is the Request MessagesClient registered
 // for the call in flight, sent once, unchanged and with no init (claimOutbound). A Request's URL
-// and headers are read from its internal slots (requestUrl), and a dispatcher is dropped from
-// any init it forwards. A refusal is an EgressRefusal: nothing was sent. XMLHttpRequest,
+// and headers are read from its internal slots (requestUrl). Every forwarded call carries the
+// guard's own dispatcher (forwardInit), so one the caller supplied by any route, in fetch's init
+// or in a Request's, is never used. A refusal is an EgressRefusal: nothing was sent. XMLHttpRequest,
 // WebSocket, EventSource and navigator.sendBeacon, where present, are refused for those hosts
 // outright: the client never uses them. A URL is resolved once and the resolved string is what
 // gets sent, so an object whose toString answers differently the second time sends nothing new.
@@ -34,6 +35,9 @@ interface Scope {
 }
 
 let base: string | undefined;
+// Node's global undici dispatcher at install (undici 8, then the undici 6 symbol), or undefined
+// where fetch takes no dispatcher (browsers).
+let dispatcher: unknown;
 
 // The URL as the platform would resolve it against the page's base, or null when it does not parse.
 function resolveUrl(s: string): URL | null {
@@ -53,12 +57,19 @@ function checked(api: string, input: unknown): string {
   return url.href;
 }
 
-// The init to forward: a copy of its own properties without dispatcher, which in Node would pick
-// the connection below the guard. An inherited dispatcher is not copied either.
+// The init to forward: a copy of its own properties with the dispatcher captured at install. A
+// caller's dispatcher would pick the connection below the guard. Node's fetch uses
+// `init.dispatcher || request's dispatcher` (undici's Request constructor), so the captured one
+// also overrides a dispatcher set in `new Request(url, { dispatcher })` or inherited from the
+// Request it copied. An inherited init property is not copied. Without a captured dispatcher,
+// the copy has none.
 function forwardInit(init: RequestInit | undefined): RequestInit | undefined {
-  if (typeof init !== 'object' || init === null) return init;
-  const copy: Record<string, unknown> = { ...init };
+  const own = typeof init === 'object' || typeof init === 'function';
+  if (!own && init != null) return init; // the platform rejects it the same way
+  if (!own && dispatcher === undefined) return init;
+  const copy: Record<string, unknown> = own ? { ...init } : {};
   delete copy.dispatcher;
+  if (dispatcher !== undefined) copy.dispatcher = dispatcher;
   return copy;
 }
 
@@ -73,6 +84,10 @@ export function installEgressGuard(scope: object): void {
   installed = true;
   const g = scope as Scope;
   base = g.document?.baseURI ?? g.location?.href;
+  // Reading Request loads Node's undici, which sets the global dispatcher.
+  void (g as { Request?: unknown }).Request;
+  const slots = scope as Record<symbol, unknown>;
+  dispatcher = slots[Symbol.for('undici.globalDispatcher.2')] ?? slots[Symbol.for('undici.globalDispatcher.1')];
 
   const raw = g.fetch;
   if (typeof raw === 'function') {
