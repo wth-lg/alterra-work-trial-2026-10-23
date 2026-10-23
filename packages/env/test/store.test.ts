@@ -1,4 +1,3 @@
-/* eslint-disable local/isomorphic-imports -- Node-only test: node:zlib builds gzipped input. */
 import { gzipSync } from 'node:zlib';
 import type { Identifier, Observation, Resource } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
@@ -115,7 +114,6 @@ describe('Store', () => {
 
   it('put rejects values with no JSON form: sparse arrays and undefined elements', () => {
     const store = new Store([]);
-    // eslint-disable-next-line no-sparse-arrays
     const sparse = obs('s', { identifier: [{ value: '1' }, , { value: '3' }] as Identifier[] });
     expect(() => store.put(sparse)).toThrow(/sparse/);
     expect(() => store.put(obs('u', { identifier: [undefined] as unknown as Identifier[] }))).toThrow(/no JSON form/);

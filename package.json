@@ -10,7 +10,7 @@
     "prepare": "git config core.hooksPath scripts/hooks",
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
-    "lint": "eslint .",
+    "lint": "eslint -c eslint.config.js .",
     "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
     "test": "vitest run",
     "cli": "node cli/index.ts",
@@ -20,7 +20,7 @@
     "fixtures:build": "node scripts/fixtures-build.ts",
     "fixtures:verify": "node scripts/fixtures-verify.ts",
     "fixtures:lint": "node scripts/fixtures-lint.ts",
-    "live:node": "echo 'live:node is not built yet (P2)' >&2 && exit 1",
+    "live:node": "node scripts/live-node.ts",
     "docs:check": "echo 'docs:check is not built yet (writeup PR)' >&2 && exit 1"
   },
   "devDependencies": {

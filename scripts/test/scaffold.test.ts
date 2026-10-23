@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repoRoot } from './helpers.ts';
+import { fakeKey, repoRoot, tempDir, write } from './helpers.ts';
 
 function run(cmd: string, args: string[], env: Record<string, string | undefined> = {}) {
   const merged: Record<string, string | undefined> = { ...process.env, ...env };
@@ -13,14 +13,14 @@ function run(cmd: string, args: string[], env: Record<string, string | undefined
 describe('package.json scripts', () => {
   const scripts: Record<string, string> = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts;
 
-  // Script names later phases' gates run, declared now so only their bodies change later.
-  it.each([
-    ['live:node', 'P2'],
-  ])('declares %s as a placeholder that names %s and exits 1', (name, phase) => {
-    expect(Object.keys(scripts)).toContain(name);
-    const r = run('pnpm', ['-s', 'run', name]);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain(`not built yet (${phase})`);
+  it('runs live:node --dry-run: exit 0, prints the projection, no network call with a key set', () => {
+    // A preload replaces fetch, so any call is recorded on stderr instead of reaching the network.
+    const dir = tempDir('live-node-dry');
+    write(dir, 'no-fetch.mjs', "globalThis.fetch = () => { process.stderr.write('FETCH_CALLED\\n'); throw new Error('no network in a dry run'); };\n");
+    const r = run('pnpm', ['-s', 'live:node', '--dry-run'], { ANTHROPIC_API_KEY: fakeKey(), NODE_OPTIONS: `--import=${join(dir, 'no-fetch.mjs')}` });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/^LIVE_PROJECTION_USD=\d+\.\d{6}$/m);
+    expect(r.stderr).not.toContain('FETCH_CALLED');
   });
 
   it('declares no placeholder that the plan never uses', () => {

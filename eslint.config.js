@@ -27,9 +27,13 @@ export default tseslint.config(
       '**/dist/**',
       '**/test-results/**',
       '**/playwright-report/**',
-      'eslint-rules/fixtures/**',
     ],
   },
+  // Inline config cannot turn a rule off, so no-direct-anthropic, no-forged-grant and
+  // no-ledger-factory hold in every file they cover. Only this file may disable a rule.
+  { linterOptions: { noInlineConfig: true } },
+  // .jsx is code the bundler ships, so it is linted like the rest.
+  { files: ['**/*.jsx'], languageOptions: { parserOptions: { ecmaFeatures: { jsx: true } } } },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -42,6 +46,12 @@ export default tseslint.config(
   },
   { plugins: { local } },
   ...localRules.map((r) => ({ files: r.files, rules: { [`local/${r.name}`]: 'error' } })),
+  // Package tests run only under Node (vitest), so they may use Node builtins and the clock,
+  // and they build sparse arrays on purpose to check that holes are rejected.
+  {
+    files: ['packages/*/test/**'],
+    rules: { 'local/isomorphic-imports': 'off', 'local/determinism': 'off', 'no-sparse-arrays': 'off' },
+  },
   // eval and the Function constructor run code neither local rule can see, so shared code
   // may not evaluate strings at all. no-implied-eval checks setTimeout and setInterval only
   // when they are declared globals, and the TypeScript scope declares the ES lib alone.

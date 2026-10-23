@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import { repoRoot, runScript, tempDir, write } from './helpers.ts';
 
 const CLEAN = `name: ci
@@ -188,5 +191,35 @@ describe('ci-guard permissions after YAML resolution', () => {
     const r = guard(workflow);
     expect(r.stdout + r.stderr).toContain('ci-guard: ok');
     expect(r.status).toBe(0);
+  });
+});
+
+// verifier-phase-P2-9 defect 1: ESLint looks up a config from each file's directory, so a
+// nested eslint.config.js could turn the P2 rules off for its directory.
+describe('nested eslint configs', () => {
+  const HOST = ['api', 'anthropic', 'com'].join('.');
+  const plant = join('cli', `zz-nested-config-${process.pid}`);
+  afterAll(() => rmSync(join(repoRoot, plant), { recursive: true, force: true }));
+
+  it('pnpm lint uses the root config only: a nested config that turns every rule off does not hide a planted send', () => {
+    write(repoRoot, join(plant, 'eslint.config.js'), 'export default [{}];\n');
+    write(repoRoot, join(plant, 'send.ts'), `export const go = () => fetch('https://${HOST}/v1/messages');\n`);
+    const [bin, ...args] = (JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as { scripts: { lint: string } }).scripts.lint.split(' ');
+    expect(bin).toBe('eslint');
+    const r = spawnSync(join(repoRoot, 'node_modules/.bin/eslint'), [...args.filter((a) => a !== '.'), plant], { cwd: repoRoot, encoding: 'utf8' });
+    expect(r.stdout).toContain('local/no-direct-anthropic');
+    expect(r.status).toBe(1);
+  });
+
+  it('ci:guard fails on an eslint.config.* outside the repo root and names it', () => {
+    const dir = tempDir('ci-guard-eslint');
+    write(dir, '.github/workflows/ci.yml', CLEAN);
+    write(dir, 'eslint.config.js', 'export default [];\n');
+    write(dir, 'node_modules/pkg/eslint.config.js', 'export default [];\n');
+    expect(runScript('scripts/ci-guard.ts', [], { cwd: dir }).status).toBe(0);
+    write(dir, 'cli/x/eslint.config.mjs', 'export default [{}];\n');
+    const r = runScript('scripts/ci-guard.ts', [], { cwd: dir });
+    expect(r.stdout).toContain('cli/x/eslint.config.mjs');
+    expect(r.status).toBe(1);
   });
 });

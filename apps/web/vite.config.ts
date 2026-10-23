@@ -14,16 +14,19 @@ function stripCspInDev(): Plugin {
   };
 }
 
-export default defineConfig({
+// harness.html and probe.html are test pages: `pnpm build` builds them for the e2e runs, and
+// the Pages build (`--mode pages`, .github/workflows/pages.yml) leaves them out of the artifact.
+export default defineConfig(({ mode }) => ({
   base: '/alterra-work-trial-2026-10-23/',
   plugins: [react(), tailwindcss(), stripCspInDev(), copyDataPlugin()],
   build: {
     rollupOptions: {
       input: {
         main: resolve(import.meta.dirname, 'index.html'),
-        harness: resolve(import.meta.dirname, 'harness.html'),
-        probe: resolve(import.meta.dirname, 'probe.html'),
+        ...(mode === 'pages'
+          ? {}
+          : { harness: resolve(import.meta.dirname, 'harness.html'), probe: resolve(import.meta.dirname, 'probe.html') }),
       },
     },
   },
-});
+}));

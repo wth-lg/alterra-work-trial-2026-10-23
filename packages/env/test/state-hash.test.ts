@@ -1,5 +1,3 @@
-/* eslint-disable local/isomorphic-imports -- Node-only test: it reads the committed world
-   with node:fs. */
 // Every trial can start from the manifest hash (design section 2, "Reset and state hash"):
 // writes to one store never reach a store built later from the same world bytes.
 // apps/web/e2e/state-hash-worker.spec.ts runs the same check in a Chromium Worker.
