@@ -1,20 +1,25 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { installEgressGuard } from '../../../packages/core/egress.ts';
-import './index.css';
+import { dropRemembered, heldByRunner, restoreRemembered } from './keygate/key.ts';
+import { App } from './shell/App.tsx';
+import { detectSurface } from './surface/detect.ts';
+import './styles/app.css';
 
 installEgressGuard(globalThis);
 
-function App() {
-  return (
-    <main className="min-h-screen bg-stone-50 p-8 text-stone-900">
-      <h1 className="text-2xl font-semibold">Riverbend clinical agent environment</h1>
-    </main>
-  );
+// The surface is detected once, before the first render, so the gate never shows the wrong
+// key path. A runner that already holds a key skips the gate.
+const surface = await detectSurface();
+if (surface.kind === 'local-runner') {
+  dropRemembered();
+  if (surface.health.key_set) heldByRunner();
+} else {
+  restoreRemembered();
 }
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <App surface={surface} />
   </StrictMode>,
 );
