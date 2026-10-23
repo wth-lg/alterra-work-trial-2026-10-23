@@ -242,6 +242,23 @@ describe('fhir_search', () => {
   it('returns an empty page, not an error, for a patient with no matches', () => {
     expect(ok(call('fhir_search', { resource_type: 'Observation', patient: 'pt-9999' }))).toEqual({ total: 0, entries: [] });
   });
+  it('dates a report without an effective time by its issued time, as search_notes rows do', () => {
+    const report: DiagnosticReport = {
+      resourceType: 'DiagnosticReport',
+      id: 'dr-z-issued',
+      status: 'final',
+      code: { coding: [{ system: 'http://loinc.org', code: '18748-4', display: 'Diagnostic imaging study' }] },
+      subject: { reference: 'Patient/pt-0060' },
+      issued: '2019-03-04T10:00:00-05:00',
+      presentedForm: [{ contentType: 'text/plain; charset=utf-8', data: btoa('gadolinium given without reaction') }],
+    };
+    const c = context([report]);
+    const day = { date_ge: '2019-03-04', date_le: '2019-03-04' };
+    const found = ok(call('fhir_search', { resource_type: 'DiagnosticReport', patient: 'pt-0060', ...day }, c)).entries as Resource[];
+    expect(found.map((e) => e.id)).toEqual(['dr-z-issued']);
+    const rows = ok(call('search_notes', { query: 'gadolinium', patient: 'pt-0060', ...day }, c)).entries as Array<{ note: string; date: string }>;
+    expect(rows).toMatchObject([{ note: 'DiagnosticReport/dr-z-issued', date: '2019-03-04T10:00:00-05:00' }]);
+  });
 });
 
 // Design section 3: a note counts as exposed only when the tool returned its readable text,
