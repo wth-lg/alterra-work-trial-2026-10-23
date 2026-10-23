@@ -76,18 +76,57 @@ export async function go(apiKey) {
   await c.send([{ role: 'user', content: 'hi' }], { max_tokens: 1 });
   await grant.close();
 }`,
+  // pr-review-P2-9 defect 1: the guard must read a Request's url and headers from its internal
+  // slots, not from properties the caller can shadow.
+  'q-url-shadow': `export const go = () => { const r = new Request('https://${HOST}/v1/messages', ${POST}); Object.defineProperty(r, 'url', { value: 'https://example.test/' }); return fetch(r); };`,
+  'r-request-subclass': `class R extends Request { get url() { return 'https://example.test/'; } }
+export const go = () => fetch(new R('https://${HOST}/v1/messages', ${POST}));`,
+  's-prototype-url-patch': `export async function go() {
+  const d = Object.getOwnPropertyDescriptor(Request.prototype, 'url');
+  Object.defineProperty(Request.prototype, 'url', { configurable: true, get: () => 'https://example.test/' });
+  try { return await fetch(new Request('https://${HOST}/v1/messages', ${POST})); } finally { Object.defineProperty(Request.prototype, 'url', d); }
+}`,
+  't-transport-header-swap': `${client}
+export async function go(apiKey) {
+  const { ledger } = openNodeLedger({ transport: 'live' });
+  const grant = await ledger.batchStart(0.1);
+  const c = new MessagesClient({ grant, ledger, apiKey, maxAttempts: 1, fetch: async (req) => {
+    const shown = new Headers(req.headers);
+    req.headers.set('anthropic-beta', 'context-1m-2025-08-07');
+    Object.defineProperty(req, 'headers', { value: shown });
+    return fetch(req);
+  } });
+  try { await c.send([{ role: 'user', content: 'hi' }], { max_tokens: 1 }); } finally { await grant.close(); }
+}`,
+  'u-transport-copies': `${client}
+export async function go(apiKey) {
+  const { ledger } = openNodeLedger({ transport: 'live' });
+  const grant = await ledger.batchStart(0.1);
+  const errors = [];
+  const c = new MessagesClient({ grant, ledger, apiKey, maxAttempts: 1, fetch: async (req) => {
+    const copies = [1, 2, 3].map(() => { const r = new Request(req, { body: '{"max_tokens":64000}' }); Object.defineProperty(r, 'url', { value: 'https://example.test/' }); return r; });
+    const res = await fetch(req);
+    for (const r of copies) { try { await fetch(r); } catch (e) { errors.push(e.message); } }
+    return res;
+  } });
+  await c.send([{ role: 'user', content: 'hi' }], { max_tokens: 1 });
+  await grant.close();
+  throw new TypeError(errors.join(' | '));
+}`,
 };
 
 const RUNNER = `
 const sends = [];
-const record = (api, url) => sends.push({ api, host: new URL(String(url)).hostname });
+const record = (api, url, init) => sends.push({ api, host: new URL(String(url)).hostname, ...(init?.dispatcher !== undefined ? { dispatcher: true } : {}) });
+// What the platform would send: a Request's internal slots, never a property a plant shadowed.
+const nativeUrl = Object.getOwnPropertyDescriptor(Request.prototype, 'url').get;
 const sse = (events) => events.map((e) => 'event: ' + e.type + '\\ndata: ' + JSON.stringify(e) + '\\n\\n').join('');
 const OK = sse([
   { type: 'message_start', message: { id: 'm', model: 'claude-opus-5-5', role: 'assistant', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } },
   { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
   { type: 'message_stop' },
 ]);
-globalThis.fetch = async (input, init) => { const r = input instanceof Request ? input : new Request(input, init); record('fetch', r.url); return new Response(OK, { status: 200 }); };
+globalThis.fetch = async (input, init) => { const r = input instanceof Request ? input : new Request(input, init); record('fetch', nativeUrl.call(r), init); return new Response(OK, { status: 200 }); };
 globalThis.XMLHttpRequest = class { open(_m, u) { this.u = u; } send() { record('xhr', this.u); } };
 globalThis.WebSocket = class { constructor(u) { record('websocket', u); } };
 globalThis.EventSource = class { constructor(u) { record('eventsource', u); } };
@@ -151,7 +190,8 @@ describe('the egress guard refuses every send to the API host that MessagesClien
     expect(out.plants['l-to-string-swap']).toEqual({ sends: [{ api: 'fetch', host: 'example.org' }], error: null });
   });
 
-  it.each(names.filter((n) => n !== 'o-hook-multisend' && n !== 'l-to-string-swap'))('%s: refused, 0 sends', (name) => {
+  const MIXED = ['o-hook-multisend', 'l-to-string-swap', 'u-transport-copies'];
+  it.each(names.filter((n) => !MIXED.includes(n)))('%s: refused, 0 sends', (name) => {
     const p = out.plants[name];
     expect(p?.sends).toEqual([]);
     expect(p?.error).toMatch(/egress guard/);
@@ -163,6 +203,14 @@ describe('the egress guard refuses every send to the API host that MessagesClien
     expect(p?.error?.split(' | ')).toHaveLength(4);
     for (const e of p?.error?.split(' | ') ?? []) expect(e).toMatch(/egress guard/);
   });
+
+  it('u-transport-copies: the registered Request goes out once; 3 copies with a shadowed url are refused', () => {
+    const p = out.plants['u-transport-copies'];
+    expect(p?.sends).toEqual([{ api: 'fetch', host: HOST }]);
+    expect(p?.error?.split(' | ')).toHaveLength(3);
+    for (const e of p?.error?.split(' | ') ?? []) expect(e).toMatch(/egress guard/);
+  });
+
 
   it('a MessagesClient call through the guarded global fetch still passes, once', () => {
     expect(out.client).toEqual({ status: 200, sends: [{ api: 'fetch', host: HOST }] });

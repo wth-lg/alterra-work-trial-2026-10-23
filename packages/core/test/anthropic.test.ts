@@ -322,7 +322,7 @@ describe('pnpm live:node refuses before any call', () => {
 // P2 fix round (findings p2-findings-1): each test below failed at 63259f5.
 describe('MessagesClient is the only way to send', () => {
   it('exports only the metered client, its error and pure helpers', () => {
-    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'isApiHost', 'reserveRequest']);
+    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'isApiHost', 'requestUrl', 'reserveRequest']);
   });
 
   it('no exported function sends without a grant', async () => {
@@ -566,3 +566,21 @@ describe('server tools and server-billed features are rejected before reserve or
     expect(s2).not.toHaveProperty('reason');
   });
 });
+
+// P2 final fix round (pr-review-P2-9 defect 1): each test below fails at 9b3d4b9.
+describe('the claim and the guard read a Request from its internal slots', () => {
+  it('claimOutbound refuses a client Request whose headers were edited behind an own headers property', async () => {
+    const claims: boolean[] = [];
+    const t = await client([], { fetch: (async (req: Request) => {
+      const shown = new Headers(req.headers);
+      req.headers.set('anthropic-beta', 'context-1m-2025-08-07');
+      Object.defineProperty(req, 'headers', { value: shown });
+      claims.push(anthropic.claimOutbound(req));
+      return ok()();
+    }) as Transport });
+    await t.c.send(user(), PARAMS);
+    expect(claims).toEqual([false]);
+  });
+
+});
+

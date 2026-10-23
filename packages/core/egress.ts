@@ -2,7 +2,8 @@
 // sees where it resolves. installEgressGuard(globalThis) wraps the scope's fetch and refuses any
 // request whose WHATWG-parsed host is an API host (isApiHost in anthropic.ts: %2E, IDNA dots,
 // case, templates and joins all resolve to it) unless it is the Request MessagesClient registered
-// for the call in flight, sent once, unchanged and with no init (claimOutbound). XMLHttpRequest,
+// for the call in flight, sent once, unchanged and with no init (claimOutbound). A Request's URL
+// and headers are read from its internal slots (requestUrl). XMLHttpRequest,
 // WebSocket, EventSource and navigator.sendBeacon, where present, are refused for those hosts
 // outright: the client never uses them. A URL is resolved once and the resolved string is what
 // gets sent, so an object whose toString answers differently the second time sends nothing new.
@@ -13,7 +14,7 @@
 // Every entry point that can make live calls installs it as its first statement: the cli/index.ts
 // dispatcher, scripts/live-node.ts, the web app and the probe page (later: the local runner, and
 // the Worker that hosts the browser client). See anthropic.ts for the threat model.
-import { claimOutbound, isApiHost } from './anthropic.ts';
+import { claimOutbound, isApiHost, requestUrl } from './anthropic.ts';
 
 let installed = false;
 
@@ -67,8 +68,10 @@ export function installEgressGuard(scope: object): void {
   if (typeof raw === 'function') {
     const guarded = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       try {
-        if (input instanceof Request) {
-          const url = resolveUrl(input.url);
+        // A real Request is checked by the URL in its slot, which is what fetch sends.
+        const href = requestUrl(input);
+        if (href !== null) {
+          const url = resolveUrl(href);
           if (url !== null && isApiHost(url.hostname) && !claimOutbound(input, init)) throw refused('fetch', url);
           return raw.call(scope, input, init);
         }

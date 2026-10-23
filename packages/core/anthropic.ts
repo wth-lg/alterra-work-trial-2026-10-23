@@ -23,7 +23,9 @@
 // point installed it), a transport that resends or edits the client's Request (refused), a
 // request the cost model cannot bound (rejected before reserve). Out of scope, as a documented
 // residual: a transport written to fabricate a response (say, a 200 with zero usage) after its
-// one real send; the client settles what the response reports. Also out of scope: Node's
+// one real send; the client settles what the response reports. The guard and the claim read a
+// Request from its internal slots (requestUrl, headerSig), never from properties a caller can
+// shadow. Also out of scope: Node's
 // http, https, http2, net and tls modules, which the guard does not wrap (lint still flags a
 // literal API host passed to them), and a request that reaches the API under another name (an
 // IP address, a DNS alias, a proxy or a redirect), since the guard matches the URL's host.
@@ -50,21 +52,46 @@ export function isApiHost(hostname: string): boolean {
   return h === API_DOMAIN || h.endsWith(`.${API_DOMAIN}`);
 }
 
+// A Request read the way fetch reads it, from its internal slots: the platform getters and the
+// Headers iterator, captured when this module loads (egress.ts imports it, so before the guard
+// is installed). An own property, a subclass getter or a later patch of Request.prototype or
+// Headers.prototype changes what JavaScript sees, not what these return or what fetch sends.
+const slot = (k: 'url' | 'method' | 'headers' | 'bodyUsed') => Object.getOwnPropertyDescriptor(Request.prototype, k)!.get!;
+const native = { url: slot('url'), method: slot('method'), headers: slot('headers'), bodyUsed: slot('bodyUsed') };
+const headerEntries = Headers.prototype.entries;
+const headerNext = Object.getPrototypeOf(headerEntries.call(new Headers())).next as (this: unknown) => IteratorResult<[string, string]>;
+
+// The URL of a real Request, or null for any other object (the getter's brand check throws).
+export function requestUrl(input: unknown): string | null {
+  try {
+    return native.url.call(input) as string;
+  } catch {
+    return null;
+  }
+}
+
+function headerSig(request: Request): string {
+  const it = headerEntries.call(native.headers.call(request) as Headers);
+  let sig = '';
+  for (let e = headerNext.call(it); !e.done; e = headerNext.call(it)) sig += `${e.value[0]}:${e.value[1]}\n`;
+  return sig;
+}
+
 // Requests the client has handed to its transport and not yet seen return, each with the
 // header set it was built with. Only sendOnce adds to it.
 const outbound = new WeakMap<Request, string>();
-const headerSig = (h: Headers) => JSON.stringify([...h]);
 
 // For the egress guard and the probe relay: true once for a Request the client registered, if
-// it comes with no init (which could swap its body or headers), its headers are the ones it was
-// built with and its body is unread. Any claim ends the registration, so a second fetch of the
-// same Request, a copy or a clone is refused.
+// it comes with no init (which could swap its body or headers), its method and headers are the
+// ones it was built with and its body is unread. Any claim ends the registration, so a second
+// fetch of the same Request, a copy or a clone is refused.
 export function claimOutbound(request: unknown, init?: unknown): boolean {
-  if (!(request instanceof Request)) return false;
-  const sig = outbound.get(request);
+  if (requestUrl(request) === null) return false;
+  const r = request as Request;
+  const sig = outbound.get(r);
   if (sig === undefined) return false;
-  outbound.delete(request);
-  return init === undefined && !request.bodyUsed && headerSig(request.headers) === sig;
+  outbound.delete(r);
+  return init === undefined && native.method.call(r) === 'POST' && !native.bodyUsed.call(r) && headerSig(r) === sig;
 }
 
 export interface ContentBlock {
@@ -337,7 +364,7 @@ async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
 // the registered Request and nothing else, and the registration ends when it returns.
 async function sendOnce(f: Transport, apiKey: string, body: string, signal?: AbortSignal): Promise<{ status: number; message: Message }> {
   const request = new Request(MESSAGES_URL, { method: 'POST', headers: requestHeaders(apiKey), body, ...(signal ? { signal } : {}) });
-  outbound.set(request, headerSig(request.headers));
+  outbound.set(request, headerSig(request));
   let res: Response;
   try {
     res = await f(request);
