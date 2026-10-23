@@ -5,80 +5,109 @@
 // counts INTERNAL would never see it.
 //
 // A catch clause in tools/ must bind the error, and every way out of it must be `throw <e>`,
-// except inside `if (<e> instanceof ToolError)`, where anything goes, and inside
-// `if (<e> instanceof SearchError)`, which must throw a new ToolError (the search module's
-// typed input error, converted for the model). Promise .catch() and two-argument .then() are
+// except inside `if (<e> instanceof ToolError)` and after `if (!(<e> instanceof ToolError))
+// throw <e>;`, where anything goes, and inside `if (<e> instanceof SearchError)`, which must
+// throw a new ToolError (the search module's typed input error, converted for the model).
+// ToolError and SearchError count only as the classes imported from their modules, so a local
+// alias does not narrow. Promise .catch(), two-argument .then() and Promise.allSettled() are
 // banned outright. Tests under a test/ directory are exempt.
+import { dirname, relative, resolve, sep } from 'node:path';
+import { propertyName } from './lib/globals.js';
 
 export const files = ['packages/env/tools/**'];
 
 const FUNCTIONS = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
-const LOOPS = new Set(['ForStatement', 'ForInStatement', 'ForOfStatement', 'WhileStatement', 'DoWhileStatement', 'SwitchStatement']);
+// An unlabeled continue targets the nearest loop; an unlabeled break, the nearest loop or switch.
+const LOOPS = new Set(['ForStatement', 'ForInStatement', 'ForOfStatement', 'WhileStatement', 'DoWhileStatement']);
 
-// The class an `if` test narrows the caught error to, or undefined.
-function narrowsTo(test, name) {
-  return test.type === 'BinaryExpression' &&
-    test.operator === 'instanceof' &&
-    test.left.type === 'Identifier' &&
-    test.left.name === name &&
-    test.right.type === 'Identifier'
-    ? test.right.name
-    : undefined;
-}
+// The module each error class must be imported from, relative to the repo root, without extension.
+const ERROR_MODULES = { ToolError: 'packages/env/tools/errors', SearchError: 'packages/env/search' };
 
-const isRethrow = (node, name) => node.type === 'ThrowStatement' && node.argument.type === 'Identifier' && node.argument.name === name;
-const isNewToolError = (node) =>
-  node.type === 'ThrowStatement' && node.argument.type === 'NewExpression' && node.argument.callee.type === 'Identifier' && node.argument.callee.name === 'ToolError';
+// The rule's analysis of one file: `classOf` names the error class an identifier binds to.
+function analysis(classOf) {
+  // The class an `if` test narrows the caught error to, or undefined.
+  const narrowsTo = (test, name) =>
+    test.type === 'BinaryExpression' && test.operator === 'instanceof' && test.left.type === 'Identifier' && test.left.name === name
+      ? classOf(test.right)
+      : undefined;
 
-// Whether a statement, run last in the catch, always leaves it by rethrowing.
-function endsInRethrow(node, name) {
-  if (!node) return false;
-  if (node.type === 'BlockStatement') return endsInRethrow(node.body.at(-1), name);
-  if (node.type === 'IfStatement') {
-    const cls = narrowsTo(node.test, name);
-    if (cls === 'ToolError') return endsInRethrow(node.alternate, name);
-    if (cls === 'SearchError') return endsInToolError(node.consequent) && endsInRethrow(node.alternate, name);
-    return endsInRethrow(node.consequent, name) && endsInRethrow(node.alternate, name);
-  }
-  return isRethrow(node, name);
-}
-const endsInToolError = (node) => (node.type === 'BlockStatement' ? node.body.length > 0 && endsInToolError(node.body.at(-1)) : isNewToolError(node));
+  const isRethrow = (node, name) => node.type === 'ThrowStatement' && node.argument.type === 'Identifier' && node.argument.name === name;
+  const isNewToolError = (node) => node.type === 'ThrowStatement' && node.argument.type === 'NewExpression' && classOf(node.argument.callee) === 'ToolError';
 
-// The first statement that leaves the catch some other way than rethrowing: a return, a
-// break or continue out of it, or a throw of something else.
-function firstEscape(node, name, inLoop = false) {
-  if (!node || typeof node.type !== 'string' || FUNCTIONS.has(node.type)) return undefined;
-  switch (node.type) {
-    case 'ReturnStatement':
-      return node;
-    case 'BreakStatement':
-    case 'ContinueStatement':
-      return inLoop && !node.label ? undefined : node;
-    case 'ThrowStatement':
-      return isRethrow(node, name) ? undefined : node;
-    case 'IfStatement': {
+  // `if (!(<e> instanceof ToolError)) throw <e>;`: past it, the error is a ToolError.
+  const isGuard = (node, name) =>
+    node.type === 'IfStatement' &&
+    !node.alternate &&
+    node.test.type === 'UnaryExpression' &&
+    node.test.operator === '!' &&
+    narrowsTo(node.test.argument, name) === 'ToolError' &&
+    !firstEscape(node.consequent, name) &&
+    endsInRethrow(node.consequent, name);
+
+  // Whether a statement, run last in the catch, always leaves it by rethrowing.
+  function endsInRethrow(node, name) {
+    if (!node) return false;
+    if (node.type === 'BlockStatement') return node.body.some((s) => isGuard(s, name)) || endsInRethrow(node.body.at(-1), name);
+    if (node.type === 'IfStatement') {
       const cls = narrowsTo(node.test, name);
-      if (cls === 'ToolError') return firstEscape(node.alternate, name, inLoop);
-      if (cls === 'SearchError') {
-        // The branch must end in `throw new ToolError(...)` with no other way out before it.
-        const inner = node.consequent.type === 'BlockStatement' ? node.consequent.body : [node.consequent];
-        if (!endsInToolError(node.consequent) || inner.slice(0, -1).some((s) => firstEscape(s, name, inLoop))) return node;
-        return firstEscape(node.alternate, name, inLoop);
-      }
-      break;
+      if (cls === 'ToolError') return endsInRethrow(node.alternate, name);
+      if (cls === 'SearchError') return endsInToolError(node.consequent) && endsInRethrow(node.alternate, name);
+      return endsInRethrow(node.consequent, name) && endsInRethrow(node.alternate, name);
     }
+    return isRethrow(node, name);
   }
-  const loop = inLoop || LOOPS.has(node.type);
-  for (const [key, value] of Object.entries(node)) {
-    if (key === 'parent') continue;
-    for (const child of Array.isArray(value) ? value : [value]) {
-      if (child && typeof child.type === 'string') {
-        const hit = firstEscape(child, name, loop);
-        if (hit) return hit;
+  const endsInToolError = (node) => (node.type === 'BlockStatement' ? node.body.length > 0 && endsInToolError(node.body.at(-1)) : isNewToolError(node));
+
+  // The first statement that leaves the catch some other way than rethrowing: a return, a
+  // break or continue out of it, or a throw of something else. inLoop: an unlabeled continue
+  // stays inside the catch; inBreakable: an unlabeled break does.
+  function firstEscape(node, name, inLoop = false, inBreakable = false) {
+    if (!node || typeof node.type !== 'string' || FUNCTIONS.has(node.type)) return undefined;
+    switch (node.type) {
+      case 'ReturnStatement':
+        return node;
+      case 'BreakStatement':
+        return inBreakable && !node.label ? undefined : node;
+      case 'ContinueStatement':
+        return inLoop && !node.label ? undefined : node;
+      case 'ThrowStatement':
+        return isRethrow(node, name) ? undefined : node;
+      case 'BlockStatement': {
+        // Statements after a guard handle a ToolError only.
+        for (const s of node.body) {
+          if (isGuard(s, name)) return undefined;
+          const hit = firstEscape(s, name, inLoop, inBreakable);
+          if (hit) return hit;
+        }
+        return undefined;
+      }
+      case 'IfStatement': {
+        const cls = narrowsTo(node.test, name);
+        if (cls === 'ToolError') return firstEscape(node.alternate, name, inLoop, inBreakable);
+        if (cls === 'SearchError') {
+          // The branch must end in `throw new ToolError(...)` with no other way out before it.
+          const inner = node.consequent.type === 'BlockStatement' ? node.consequent.body : [node.consequent];
+          if (!endsInToolError(node.consequent) || inner.slice(0, -1).some((s) => firstEscape(s, name, inLoop, inBreakable))) return node;
+          return firstEscape(node.alternate, name, inLoop, inBreakable);
+        }
+        break;
       }
     }
+    const loop = inLoop || LOOPS.has(node.type);
+    const breakable = inBreakable || loop || node.type === 'SwitchStatement';
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'parent') continue;
+      for (const child of Array.isArray(value) ? value : [value]) {
+        if (child && typeof child.type === 'string') {
+          const hit = firstEscape(child, name, loop, breakable);
+          if (hit) return hit;
+        }
+      }
+    }
+    return undefined;
   }
-  return undefined;
+
+  return { firstEscape, endsInRethrow };
 }
 
 export default {
@@ -93,10 +122,33 @@ export default {
         "This catch can finish without rethrowing '{{name}}'. End it with `throw {{name}};` and handle only the `if ({{name}} instanceof ToolError)` case, so environment bugs surface as INTERNAL.",
       searchError: "Inside `if ({{name}} instanceof SearchError)`, end with `throw new ToolError(...)`: the model's fault becomes a typed error, never a quiet result.",
       promise: 'A promise rejection handler catches every error. In tools/, use try/catch that rethrows unless the error is a ToolError.',
+      allSettled: 'Promise.allSettled turns every rejection into a value. In tools/, use Promise.all, so an error that is not a ToolError surfaces as INTERNAL.',
     },
   },
   create(context) {
-    if (/[\\/]tools[\\/](?:.*[\\/])?test[\\/]/.test(context.filename)) return {};
+    const filename = context.physicalFilename;
+    // Repo-relative, so directories above the checkout cannot match the test exemption.
+    const inRepo = (file) => relative(context.cwd, file).split(sep).join('/');
+    if (/^packages\/env\/tools\/(?:.+\/)?test\//.test(inRepo(filename))) return {};
+
+    // The error class an identifier binds to: an import of ToolError or SearchError from its
+    // own module, or undefined.
+    const classOf = (node) => {
+      if (node.type !== 'Identifier') return undefined;
+      for (let scope = context.sourceCode.getScope(node); scope; scope = scope.upper) {
+        const variable = scope.set.get(node.name);
+        if (!variable) continue;
+        const [def] = variable.defs;
+        if (variable.defs.length !== 1 || def.type !== 'ImportBinding' || def.node.type !== 'ImportSpecifier') return undefined;
+        const imported = def.node.imported.type === 'Identifier' ? def.node.imported.name : def.node.imported.value;
+        if (!Object.hasOwn(ERROR_MODULES, imported)) return undefined;
+        const from = inRepo(resolve(dirname(filename), def.parent.source.value)).replace(/\.(?:ts|js)$/, '');
+        return from === ERROR_MODULES[imported] ? imported : undefined;
+      }
+      return undefined;
+    };
+    const { firstEscape, endsInRethrow } = analysis(classOf);
+
     return {
       CatchClause(node) {
         if (!node.param || node.param.type !== 'Identifier') {
@@ -114,9 +166,10 @@ export default {
       },
       CallExpression(node) {
         const callee = node.callee;
-        if (callee.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier') return;
-        const method = callee.property.name;
+        if (callee.type !== 'MemberExpression') return;
+        const method = propertyName(callee);
         if (method === 'catch' || (method === 'then' && node.arguments.length >= 2)) context.report({ node, messageId: 'promise' });
+        else if (method === 'allSettled') context.report({ node, messageId: 'allSettled' });
       },
     };
   },
