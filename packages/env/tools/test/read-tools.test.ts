@@ -1,5 +1,3 @@
-/* eslint-disable local/isomorphic-imports -- Node-only test: it reads the committed world
-   with node:fs and prints its paging counts to process.stdout. */
 // Contract tests for the read tools (design section 3): strict schemas, error codes, stable
 // order, the 8k-token page cap with next_offset, and exposure tags that match the payload.
 import { readFileSync } from 'node:fs';

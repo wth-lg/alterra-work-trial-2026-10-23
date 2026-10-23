@@ -1,5 +1,3 @@
-/* eslint-disable local/isomorphic-imports -- Node-only test: it reads the committed world
-   with node:fs and prints its counters to process.stdout. */
 // Property fuzz over the read tools (plan phase P5): mostly schema-valid calls built from ids,
 // codes, names and words that exist in the committed world, plus mutated calls. A read must
 // never throw (INTERNAL), never change the state hash, and every success must carry exposure
