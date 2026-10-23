@@ -97,3 +97,96 @@ jobs:
     expect(r.stdout).toMatch(/ci\.yml:\d+:/);
   });
 });
+
+describe('ci-guard reads workflows as YAML and run values as shell words', () => {
+  const STEPS = `name: ci
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+`;
+
+  it.each([
+    // Playwright declares --project <project-name...> as variadic.
+    ['a variadic live project', '      - run: pnpm exec playwright test --project mocked live\n'],
+    ['a third variadic project', '      - run: pnpm exec playwright test --project mocked xbrowser LIVE\n'],
+    ['a variadic project after an = form', '      - run: pnpm exec playwright test --project=mocked --project xbrowser live\n'],
+    ['a folded run with a wildcard on the next line', '      - run: >\n          npx playwright test --project=mocked\n          --project=*ive\n'],
+    ['a plain multi-line run with a wildcard', '      - run: npx playwright test --project=mocked\n          --project=*\n'],
+    ['a literal run with a continued live project', '      - run: |\n          npx playwright test --project mocked \\\n            live\n'],
+    ['a double-quoted run with an escaped wildcard', '      - run: "npx playwright test --project=\\x2a"\n'],
+    ['a single-quoted run with a live project', "      - run: 'npx playwright test --project ''live'''\n"],
+    ['a --project with no value', '      - run: npx playwright test --project\n'],
+    ['a playwright argument read from a variable', '      - run: npx playwright test --project=mocked $EXTRA\n'],
+    ['a --project outside a playwright line', '      - run: pnpm e2e --project live\n'],
+    ['an escaped secrets reference', '      - run: "echo ${{ \\x73ecrets.X }}"\n'],
+    ['a run value that is not valid shell', '      - run: npx playwright test --project="mocked\n'],
+  ])('fails on %s', (_name, step) => {
+    const r = guard(STEPS + step);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/ci\.yml:\d+:/);
+  });
+
+  it.each([
+    ['variadic allowed projects', '      - run: npx playwright test --project mocked xbrowser\n'],
+    ['a test filter after an = form', '      - run: npx playwright test --project=mocked tests/a.spec.ts\n'],
+    ['a redirected run', '      - run: npx playwright test --project=mocked > out.txt 2>&1\n'],
+    ['a folded allowed run', '      - run: >\n          npx playwright test\n          --project=mocked --project=xbrowser\n'],
+  ])('passes %s', (_name, step) => {
+    const r = guard(STEPS + step);
+    expect(r.stdout + r.stderr).toContain('ci-guard: ok');
+    expect(r.status).toBe(0);
+  });
+
+  it('fails on a file that is not valid YAML', () => {
+    const r = guard('jobs:\n  t: [\n');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/ci\.yml:\d+:/);
+  });
+});
+
+describe('ci-guard permissions after YAML resolution', () => {
+  const DEPLOY = `    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/deploy-pages@v4
+`;
+  const BUILD = `    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm build
+`;
+
+  it.each([
+    ['quoted write values on a build job', `on: push\njobs:\n  b:\n    permissions:\n      pages: 'write'\n      id-token: "write"\n${BUILD}`],
+    ['a quoted scope key on a build job', `on: push\njobs:\n  b:\n    permissions:\n      "pages": write\n${BUILD}`],
+    ['an upper-case WRITE on a build job', `on: push\njobs:\n  b:\n    permissions:\n      id-token: WRITE\n${BUILD}`],
+    [
+      'an alias that reuses the deploy grants on a build job',
+      `on: push\njobs:\n  d:\n    permissions: &deploy\n      pages: write\n      id-token: write\n${DEPLOY}  b:\n    permissions: *deploy\n${BUILD}`,
+    ],
+    [
+      'a merge key that reuses the deploy grants on a build job',
+      `on: push\njobs:\n  d:\n    permissions: &deploy\n      pages: write\n${DEPLOY}  b:\n    permissions:\n      <<: *deploy\n      contents: read\n${BUILD}`,
+    ],
+    ['a quoted write at workflow level', `on: push\npermissions:\n  pages: "write"\njobs:\n  d:\n${DEPLOY}`],
+    ['a quoted write-all on a job', `on: push\njobs:\n  b:\n    permissions: 'write-all'\n${BUILD}`],
+  ])('fails on %s', (_name, workflow) => {
+    const r = guard(workflow);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/ci\.yml:\d+:/);
+  });
+
+  it.each([
+    ['quoted grants on the deploy job', `on: push\njobs:\n  d:\n    permissions:\n      'pages': "write"\n      id-token: 'write'\n${DEPLOY}`],
+    [
+      'deploy grants reached through an alias on the deploy job',
+      `on: push\nx-grants: &deploy\n  pages: write\njobs:\n  d:\n    permissions: *deploy\n${DEPLOY}`,
+    ],
+  ])('passes %s', (_name, workflow) => {
+    const r = guard(workflow);
+    expect(r.stdout + r.stderr).toContain('ci-guard: ok');
+    expect(r.status).toBe(0);
+  });
+});
