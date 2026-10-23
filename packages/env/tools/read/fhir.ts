@@ -2,7 +2,7 @@
 // resources, so every entry is exposed, except notes and reports in fhir_search: those come
 // without their text and are referenced until fhir_read returns it (notes.ts).
 import type { Resource } from '@medplum/fhirtypes';
-import { search, SearchError, type SearchQuery } from '../../search.ts';
+import { search, SearchError, sortStart } from '../../search.ts';
 import { ToolError } from '../errors.ts';
 import type { Tool } from '../registry.ts';
 import type { ReadContext } from './context.ts';
@@ -81,6 +81,19 @@ export function filterQuery(type: string, input: Partial<Record<Filter, string |
 }
 
 const byId = (a: Resource, b: Resource) => (a.id! < b.id! ? -1 : a.id! > b.id! ? 1 : 0);
+// Not a subtraction: an open period start is -Infinity, and -Infinity - -Infinity is NaN.
+const cmp = (x: number, y: number) => (x < y ? -1 : x > y ? 1 : 0);
+
+// Date order (descending for -date), then id; resources without a date last, as the search
+// module's _sort puts them.
+function byDate(resources: ReadonlyArray<Readonly<Resource>>, descending: boolean): Array<Readonly<Resource>> {
+  const keyed = resources.map((r) => ({ r, start: sortStart(r) }));
+  keyed.sort((a, b) => {
+    if (a.start === undefined || b.start === undefined) return a.start !== undefined ? -1 : b.start !== undefined ? 1 : byId(a.r, b.r);
+    return (descending ? cmp(b.start, a.start) : cmp(a.start, b.start)) || byId(a.r, b.r);
+  });
+  return keyed.map((k) => k.r);
+}
 
 type SearchInput = {
   resource_type: string;
@@ -129,9 +142,8 @@ export const fhirSearch: Tool<ReadContext> = {
     }
     // The query is checked above, so a SearchError from here on is the environment's fault
     // and propagates as INTERNAL.
-    const matches = [...world.search(type, query).resources].sort(byId);
-    // The search module's sort is stable, so equal dates keep the id order given here.
-    const ordered = dated ? search(matches, type, { _sort: input.sort ?? 'date' } satisfies SearchQuery).resources : matches;
+    const matches = world.search(type, query).resources;
+    const ordered = dated ? byDate(matches, input.sort === '-date') : [...matches].sort(byId);
     // Notes and reports come without their text: fhir_read returns it (notes.ts).
     return page(ordered.map((r) => withoutNoteData(r, true)), input.offset ?? 0, input.count ?? 20);
   },

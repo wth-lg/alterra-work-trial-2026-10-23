@@ -281,6 +281,14 @@ export function checkDates(resource: Resource): void {
   }
 }
 
+// The instant a resource sorts by on _sort=date: the start of its first date value, or
+// undefined when it has none or its type has no date parameter.
+export function sortStart(resource: Readonly<Resource>): number | undefined {
+  const params = Object.hasOwn(PARAMS, resource.resourceType) ? PARAMS[resource.resourceType]! : {};
+  const def = Object.hasOwn(params, 'date') ? params.date! : undefined;
+  return def ? rangesOf(paramValues(resource as unknown as Json, def))[0]?.[0] : undefined;
+}
+
 // ---- references ----
 
 function referencesOf(values: unknown[], patientOnly: boolean): string[] {

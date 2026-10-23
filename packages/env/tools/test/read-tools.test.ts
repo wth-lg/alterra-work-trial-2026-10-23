@@ -3,7 +3,7 @@
 // Contract tests for the read tools (design section 3): strict schemas, error codes, stable
 // order, the 8k-token page cap with next_offset, and exposure tags that match the payload.
 import { readFileSync } from 'node:fs';
-import type { DiagnosticReport, DocumentReference, Observation, Resource, Task } from '@medplum/fhirtypes';
+import type { DiagnosticReport, DocumentReference, Observation, Procedure, Resource, Task } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
 import { clock, NOW } from '../../clock.ts';
 import { parseNdjson } from '../../fixture-source.ts';
@@ -241,6 +241,20 @@ describe('fhir_search', () => {
   });
   it('returns an empty page, not an error, for a patient with no matches', () => {
     expect(ok(call('fhir_search', { resource_type: 'Observation', patient: 'pt-9999' }))).toEqual({ total: 0, entries: [] });
+  });
+  it('breaks a date tie by id in both directions, whatever the period ends', () => {
+    const proc = (id: string, end: string): Procedure => ({
+      resourceType: 'Procedure',
+      id,
+      status: 'completed',
+      subject: { reference: 'Patient/pt-0060' },
+      performedPeriod: { start: '2019-06-01T22:00:00-04:00', end },
+    });
+    const c = context([proc('proc-z-1', '2019-06-01T23:10:00-04:00'), proc('proc-z-2', '2019-06-01T22:43:00-04:00')]);
+    const ids = (sort: string) =>
+      (ok(call('fhir_search', { resource_type: 'Procedure', patient: 'pt-0060', date_ge: '2019-06-01', date_le: '2019-06-02', sort }, c)).entries as Resource[]).map((e) => e.id);
+    expect(ids('date')).toEqual(['proc-z-1', 'proc-z-2']);
+    expect(ids('-date')).toEqual(['proc-z-1', 'proc-z-2']);
   });
   it('dates a report without an effective time by its issued time, as search_notes rows do', () => {
     const report: DiagnosticReport = {
