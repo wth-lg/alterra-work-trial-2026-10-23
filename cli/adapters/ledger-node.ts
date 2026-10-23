@@ -5,14 +5,15 @@
 //            directory is missing, or SPEND_LEDGER names another file. It never creates a
 //            directory. Only a grant minted over the canonical file passes assertGrant.
 //   default  SPEND_LEDGER, else ~/.chartr/spend.jsonl, created on first live open.
-// The caps are the same in both modes; packages/core/ledger.ts enforces them.
+// A ledger is known by its real path, so a symlink or a relative name reaches the same file
+// and the same lock. The caps are the same in both modes; packages/core/ledger.ts enforces them.
 import { randomUUID } from 'node:crypto';
 import {
   closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync,
-  renameSync, rmSync, truncateSync, unlinkSync, writeFileSync, writeSync,
+  realpathSync, renameSync, rmSync, truncateSync, unlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { homedir, hostname } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { TrialObservation, Usage } from '../../packages/core/cost.ts';
 import {
   assertGrant, createLedger, parseRow, restrictGrants,
@@ -24,6 +25,22 @@ type Env = Record<string, string | undefined>;
 
 const LOCK_TIMEOUT_MS = 30_000;
 
+// The real path of a ledger file: realpath of the file, or, for a file not created yet, the
+// realpath of its nearest existing ancestor joined with the rest.
+export function realLedgerPath(path: string): string {
+  const rest: string[] = [];
+  for (let at = resolve(path); ; at = dirname(at)) {
+    try {
+      return join(realpathSync(at), ...rest);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw e;
+      if (dirname(at) === at) return resolve(path);
+      rest.unshift(basename(at));
+    }
+  }
+}
+
 export function resolveLedgerPath(env: Env = process.env): { mode: LedgerMode; path: string; problems: string[] } {
   const marker = env.CHARTR_CANONICAL_LEDGER;
   if (marker !== undefined) {
@@ -31,7 +48,7 @@ export function resolveLedgerPath(env: Env = process.env): { mode: LedgerMode; p
     if (marker === '') problems.push('CHARTR_CANONICAL_LEDGER is set but empty');
     else if (!isAbsolute(marker)) problems.push(`CHARTR_CANONICAL_LEDGER=${marker} is not an absolute path`);
     else if (!existsSync(dirname(marker))) problems.push(`the directory of CHARTR_CANONICAL_LEDGER=${marker} does not exist`);
-    if (env.SPEND_LEDGER && resolve(env.SPEND_LEDGER) !== resolve(marker)) {
+    if (env.SPEND_LEDGER && realLedgerPath(env.SPEND_LEDGER) !== realLedgerPath(marker)) {
       problems.push(`SPEND_LEDGER=${env.SPEND_LEDGER} names another file than CHARTR_CANONICAL_LEDGER=${marker}`);
     }
     return { mode: 'own-run', path: marker, problems };
@@ -168,8 +185,8 @@ export class FileLedgerStore implements LedgerStore {
   private readonly createDir: boolean;
 
   constructor(path: string, opts: { createDir: boolean }) {
-    this.path = path;
-    this.lock = `${path}.lock`;
+    this.path = realLedgerPath(path);
+    this.lock = `${this.path}.lock`;
     this.createDir = opts.createDir;
   }
 
