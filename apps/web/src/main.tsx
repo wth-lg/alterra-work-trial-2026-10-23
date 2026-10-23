@@ -1,6 +1,9 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { installEgressGuard } from '../../../packages/core/egress.ts';
 import './index.css';
+
+installEgressGuard(globalThis);
 
 function App() {
   return (

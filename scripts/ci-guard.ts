@@ -1,5 +1,8 @@
 // Fails if any workflow could read a repository credential, run a live Playwright spec, or
-// hand the Pages deploy token scopes to a job that does not deploy.
+// hand the Pages deploy token scopes to a job that does not deploy, or if an eslint.config.*
+// exists below the repo root (the current directory): ESLint looks a config up from each
+// file's directory, so a nested one could turn the repo's rules off there. pnpm lint pins the
+// root config too.
 //
 //   pnpm ci:guard [dir]   dir defaults to .github/workflows
 //
@@ -262,6 +265,22 @@ function workflowProblems(content: string): Finding[] {
   return [...out, ...permissionProblems(root), ...valueProblems(root)];
 }
 
+// eslint.config.* files below the root, as root-relative paths. node_modules and .git are skipped:
+// ESLint never lints them.
+function nestedEslintConfigs(root: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
+      const path = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (e.name !== 'node_modules' && e.name !== '.git') walk(path);
+      } else if (rel && /^eslint\.config\.[cm]?[jt]s$/.test(e.name)) out.push(path);
+    }
+  };
+  walk('');
+  return out.sort();
+}
+
 function main(): void {
   const dir = process.argv[2] ?? '.github/workflows';
   if (!existsSync(dir)) {
@@ -275,6 +294,7 @@ function main(): void {
     const found = workflowProblems(readFileSync(path, 'utf8')).sort((a, b) => a.line - b.line);
     for (const { line, reason } of found) findings.add(`${path}:${line}: ${reason}`);
   }
+  for (const path of nestedEslintConfigs('.')) findings.add(`${path}:1: is an ESLint config below the repo root; only ./eslint.config.js may configure lint`);
   for (const f of findings) process.stdout.write(`${f}\n`);
   if (findings.size) {
     process.stderr.write(`ci-guard: ${findings.size} finding(s) in ${files.length} workflow file(s)\n`);
