@@ -13,8 +13,9 @@
 //   - an import, export, require or other call naming 'undici' or 'node:undici' (or a subpath)
 //   - getBuiltinModule, which loads node:https and the other socket modules without an import
 //   - a computed member of Symbol, Object, Reflect or process whose key is not static
-// What a static rule cannot see (a name built at runtime on an alias of globalThis, eval, new
-// Function, node:vm, a preload) is a residual recorded in packages/core/anthropic.ts.
+// This rule is the second layer. What it cannot see (a name built at runtime, eval, new
+// Function, node:vm) still finds only the guarded dispatcher that installEgressGuard() locks
+// into both slots; the routes that stay open are listed in packages/core/anthropic.ts.
 
 import { relative, sep } from 'node:path';
 
