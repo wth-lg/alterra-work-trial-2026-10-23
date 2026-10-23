@@ -53,6 +53,7 @@ export default async function spend(args: string[]): Promise<number> {
   if (!opts.has('--check') && ['--projected', '--final-reserve', '--cost-from'].some((o) => opts.has(o))) {
     return usage('--projected, --final-reserve and --cost-from go with --check');
   }
+  if (opts.has('--cost-from') && !opts.has('--final-reserve')) return usage('--cost-from goes with --final-reserve');
 
   if (opts.has('--where')) {
     const where = resolveLedgerPath();
