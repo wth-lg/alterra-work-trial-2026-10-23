@@ -153,6 +153,22 @@ function checkCacheTtl(v: unknown, path: string): void {
   }
 }
 
+// Client tools only: the design's agent acts through native client tools. A server tool (any
+// type but custom) runs on Anthropic's side, bills per use, and can run several sampling passes
+// inside one request, so its input tokens are not bounded by the body size the reservation
+// covers. Other server-billed features (mcp_servers, container, speed) are not in ALLOWED, and
+// a forced tool_choice is refused below.
+function checkTools(tools: unknown): void {
+  if (tools === undefined) return;
+  if (!Array.isArray(tools)) throw new TypeError('request rejected: tools must be an array of client tool definitions');
+  for (const t of tools as unknown[]) {
+    if (typeof t !== 'object' || t === null || Array.isArray(t)) throw new TypeError('request rejected: a tool must be a client tool definition object');
+    const { type, name, input_schema } = t as Record<string, unknown>;
+    if (type !== undefined && type !== 'custom') throw new TypeError(`request rejected: server tool ${String(type)}: only client tools are allowed, since a server tool bills per use beyond what the reservation covers`);
+    if (typeof name !== 'string' || typeof input_schema !== 'object' || input_schema === null) throw new TypeError('request rejected: a client tool needs a name and an input_schema');
+  }
+}
+
 // Returns max_tokens as the body sends it, which is what the reservation must cover.
 function checkRequest(params: MessageParams, body: string): number {
   for (const k of ['model', 'messages', 'stream']) if (Object.hasOwn(params, k)) throw new TypeError(`request rejected: ${BANNED[k]}`);
@@ -168,6 +184,7 @@ function checkRequest(params: MessageParams, body: string): number {
   const history = Array.isArray(b.messages) ? (b.messages as Array<{ role?: unknown }>) : [];
   if (history.length === 0 || history[0]?.role !== 'user') throw new TypeError('request rejected: the conversation must start with a user turn');
   if (history.at(-1)?.role === 'assistant') throw new TypeError(`request rejected: a prefill (history ending in an assistant turn) is a 400 on ${MODEL}`);
+  checkTools(b.tools);
   checkCacheTtl(b, 'request');
   if (!Number.isSafeInteger(b.max_tokens) || (b.max_tokens as number) < 1) throw new TypeError('request rejected: max_tokens must be a positive integer');
   return b.max_tokens as number;

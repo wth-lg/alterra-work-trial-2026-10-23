@@ -482,7 +482,7 @@ describe('the probe page transport', () => {
   });
 });
 
-// P2 second fix round (pr-review-P2-7 defect 2): each test below fails at 6e517a9.
+// P2 second fix round (pr-review-P2-7 defects 2 and 3): each test below fails at 6e517a9.
 describe('the transport gets one single-use Request', () => {
   it('is called with exactly one argument, a Request that carries the URL, headers and body', async () => {
     const t = await client([ok()]);
@@ -521,3 +521,48 @@ describe('the transport gets one single-use Request', () => {
   });
 });
 
+describe('server tools and server-billed features are rejected before reserve or fetch', () => {
+  it.each([
+    ['web search', { type: 'web_search_20250305', name: 'web_search', max_uses: 50 }],
+    ['code execution', { type: 'code_execution_20250825', name: 'code_execution' }],
+    ['web fetch', { type: 'web_fetch_20250910', name: 'web_fetch' }],
+    ['a tool without an input_schema', { name: 'x' }],
+    ['a tool that is not an object', 'web_search'],
+  ])('rejects %s with 0 reserves and 0 fetch calls', async (_name, tool) => {
+    const t = await client([ok()]);
+    await expect(t.c.send(user(), { ...PARAMS, tools: [tool as Record<string, unknown>] })).rejects.toThrow(/tool/);
+    expect(t.calls).toHaveLength(0);
+    expect(rows(t.store, 'reserve')).toHaveLength(0);
+  });
+
+  it('accepts a plain client tool, with or without type custom', async () => {
+    const t = await client([ok(), ok()]);
+    const schema = { type: 'object', properties: {} };
+    await t.c.send(user(), { ...PARAMS, tools: [{ name: 'a', description: 'd', input_schema: schema, strict: true }] });
+    await t.c.send(user(), { ...PARAMS, tools: [{ type: 'custom', name: 'b', input_schema: schema }] });
+    expect(t.calls).toHaveLength(2);
+  });
+
+  it.each([['mcp_servers', { mcp_servers: [{ type: 'url', url: 'https://example.org', name: 'x' }] }], ['container', { container: 'c' }], ['speed', { speed: 'fast' }]])(
+    'rejects %s with 0 fetch calls',
+    async (_name, extra) => {
+      const t = await client([ok()]);
+      await expect(t.c.send(user(), { ...PARAMS, ...extra } as never)).rejects.toThrow(/rejected/);
+      expect(t.calls).toHaveLength(0);
+    },
+  );
+
+  it('a settle above 2x its reservation is recorded at actual and flagged in its row', async () => {
+    const big: Step = () =>
+      new Response(body([sse([{ ...start(), message: { ...start().message, usage: { input_tokens: 200_000, output_tokens: 1 } } }, { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } }, { type: 'message_stop' }])]), { status: 200 });
+    const t = await client([big, ok()]);
+    await t.c.send(user(), PARAMS);
+    await t.c.send(user(), PARAMS);
+    const [r1, r2] = rows(t.store, 'reserve');
+    const [s1, s2] = rows(t.store, 'settle');
+    expect(s1?.cost_usd).toBeGreaterThan(2 * (r1?.cost_usd ?? 0));
+    expect(s1?.reason).toMatch(/exceeds 2x its reservation/);
+    expect(s2?.cost_usd).toBeLessThanOrEqual(r2?.cost_usd ?? 0);
+    expect(s2).not.toHaveProperty('reason');
+  });
+});

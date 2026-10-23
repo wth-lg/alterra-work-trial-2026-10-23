@@ -381,8 +381,13 @@ export function createLedger(deps: LedgerDeps): Ledger {
         const cost_usd = priced ?? reserve.cost_usd;
         const prior = t.settledMax.get(res.call_id);
         if (prior !== undefined && µ(cost_usd) <= prior) return { append: [], result: rows };
+        // A call that costs more than twice its worst case means the cost model missed something
+        // the request can bill (the client rejects server tools for this reason). It is still
+        // recorded at actual; the reason makes it findable in `pnpm cli spend`.
+        const over = µ(cost_usd) > 2 * µ(reserve.cost_usd);
         const settle = row('settle', {
           call_id: res.call_id, batch_id: reserve.batch_id, trial: reserve.trial, usage: priced === null ? null : usage, cost_usd,
+          ...(over ? { reason: `settled $${cost_usd.toFixed(6)} exceeds 2x its reservation $${reserve.cost_usd.toFixed(6)}` } : {}),
         });
         return { append: [settle], result: [...rows, settle] };
       });
