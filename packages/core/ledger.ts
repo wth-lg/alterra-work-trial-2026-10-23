@@ -440,15 +440,12 @@ export function createLedger(deps: LedgerDeps): Ledger {
       batch_id,
       projection,
       signal: controller.signal,
+      // A refusal for this call's own worst case throws for this call only; once settled
+      // spend reaches $500, `guarded` aborts every live grant, this one included.
       async reserve(req) {
         assertGrant(grant);
         if (controller.signal.aborted) throw controller.signal.reason;
-        try {
-          return await ledger.reserve(req, batch_id);
-        } catch (e) {
-          if (e instanceof SpendRefused && e.cap === 'actual') controller.abort(e);
-          throw e;
-        }
+        return ledger.reserve(req, batch_id);
       },
       // A grant settles after close too: a call that was in flight still has to be recorded.
       settle: (res, usage) => ledger.settle(res, usage),
