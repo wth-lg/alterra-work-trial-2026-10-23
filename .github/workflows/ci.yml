@@ -15,7 +15,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -39,7 +39,29 @@ jobs:
       - run: pnpm build
       - name: keyscan working tree and build output
         run: pnpm keyscan
-      - run: pnpm --filter web exec playwright install --with-deps chromium firefox webkit
+
+  # Browsers and their system libraries come from the image, so this job installs nothing
+  # with apt. The tag must equal @playwright/test in apps/web/package.json
+  # (scripts/test/ci-workflow.test.ts fails when they drift).
+  e2e:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      # Firefox will not launch as root when $HOME belongs to another user; the runner mounts
+      # $HOME owned by uid 1001.
+      options: --user 1001
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # playwright.config.ts serves the build with vite preview.
+      - run: pnpm build
       - run: pnpm --filter web exec playwright test --project=mocked --project=xbrowser
       - if: failure()
         uses: actions/upload-artifact@v4
