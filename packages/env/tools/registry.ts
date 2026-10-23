@@ -8,9 +8,12 @@
 //   - exposed_ids: every object in the payload with a string resourceType and id, i.e. a full
 //     resource (or a full policy, resourceType 'Policy') returned with its content;
 //   - referenced_ids: every other string in the payload of the form <Kind>/<id>: references
-//     inside those resources and the ids that summary rows and snippets name.
-// Tools follow one convention for this to hold: a summary row names ids as references
-// ('Patient/pt-0001') and never carries a resourceType.
+//     inside those resources and the ids that summary rows and snippets name, plus resources
+//     returned without their decisive content (below).
+// Tools follow two conventions for this to hold: a summary row names ids as references
+// ('Patient/pt-0001') and never carries a resourceType; and a resource returned with content
+// left out holds an object with a `read_with` key naming the tool that returns it (a note's
+// text attachment in fhir_search), which makes the resource referenced, not exposed.
 import { RESOURCE_TYPES } from '../world.ts';
 import { ToolError, type ErrorBody } from './errors.ts';
 
@@ -101,16 +104,18 @@ export function validateInput(schema: ObjectSchema, input: unknown): ToolError |
 
 const REF = new RegExp(`^(${[...RESOURCE_TYPES, 'Policy'].join('|')})/[A-Za-z0-9.-]{1,64}$`);
 
-function walk(value: unknown, exposed: Set<string>, refs: Set<string>): void {
+// Walks one value; returns whether it holds content left out (an object with read_with).
+function walk(value: unknown, exposed: Set<string>, refs: Set<string>): boolean {
   if (typeof value === 'string') {
     if (REF.test(value)) refs.add(value);
-  } else if (Array.isArray(value)) {
-    for (const v of value) walk(v, exposed, refs);
-  } else if (value !== null && typeof value === 'object') {
-    const { resourceType, id } = value as { resourceType?: unknown; id?: unknown };
-    if (typeof resourceType === 'string' && typeof id === 'string') exposed.add(`${resourceType}/${id}`);
-    for (const v of Object.values(value)) walk(v, exposed, refs);
+    return false;
   }
+  if (value === null || typeof value !== 'object') return false;
+  let partial = !Array.isArray(value) && Object.hasOwn(value, 'read_with');
+  for (const v of Object.values(value)) partial = walk(v, exposed, refs) || partial;
+  const { resourceType, id } = value as { resourceType?: unknown; id?: unknown };
+  if (typeof resourceType === 'string' && typeof id === 'string') (partial ? refs : exposed).add(`${resourceType}/${id}`);
+  return partial;
 }
 
 export function exposure(payload: unknown): Pick<ToolResult, 'exposed_ids' | 'referenced_ids'> {

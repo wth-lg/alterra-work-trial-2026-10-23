@@ -3,7 +3,7 @@
 // Contract tests for the read tools (design section 3): strict schemas, error codes, stable
 // order, the 8k-token page cap with next_offset, and exposure tags that match the payload.
 import { readFileSync } from 'node:fs';
-import type { DocumentReference, Observation, Resource, Task } from '@medplum/fhirtypes';
+import type { DiagnosticReport, DocumentReference, Observation, Resource, Task } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
 import { clock, NOW } from '../../clock.ts';
 import { parseNdjson } from '../../fixture-source.ts';
@@ -75,7 +75,8 @@ function payloadIds(content: unknown): { exposed: string[]; referenced: string[]
     if (typeof v === 'string' && REF.test(v)) refs.add(v);
     else if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
       const { resourceType, id } = v as { resourceType?: unknown; id?: unknown };
-      if (typeof resourceType === 'string' && typeof id === 'string') exposed.add(`${resourceType}/${id}`);
+      // A resource whose note text was left out (an attachment naming read_with) is referenced.
+      if (typeof resourceType === 'string' && typeof id === 'string') (JSON.stringify(v).includes('"read_with":') ? refs : exposed).add(`${resourceType}/${id}`);
     }
     return v;
   });
@@ -243,6 +244,51 @@ describe('fhir_search', () => {
   });
 });
 
+// Design section 3: a note counts as exposed only when the tool returned its readable text,
+// which fhir_read does. fhir_search returns notes and reports with each text attachment's
+// base64 replaced by its size and read_with: 'fhir_read', and tags them as referenced.
+describe('note text and exposure', () => {
+  const decoded = (data: string) => new TextDecoder().decode(Uint8Array.from(atob(data), (c) => c.charCodeAt(0)));
+  const withText = <T extends Resource>(type: string, attachments: (r: T) => Array<{ data?: string }> | undefined) =>
+    ctx.world.search<T>(type, { patient: 'pt-0001' }).resources.filter((r) => attachments(r)?.some((a) => a.data !== undefined));
+
+  it.each([
+    ['DocumentReference', (r: DocumentReference) => r.content.map((c) => c.attachment)],
+    ['DiagnosticReport', (r: DiagnosticReport) => r.presentedForm],
+  ] as const)('fhir_search returns %s without its text and tags it as referenced', (type, attachments) => {
+    const stored = withText(type, attachments as (r: Resource) => Array<{ data?: string }> | undefined);
+    expect(stored.length).toBeGreaterThan(0);
+    const r = call('fhir_search', { resource_type: type, patient: 'pt-0001', count: 50 });
+    const entries = ok(r).entries as Resource[];
+    const refs = stored.map((s) => `${type}/${s.id}`);
+    for (const s of stored) {
+      const entry = entries.find((e) => e.id === s.id)!;
+      const original = (attachments as (r: Resource) => Array<{ data?: string }>)(s);
+      const shown = (attachments as (r: Resource) => Array<Record<string, unknown>>)(entry);
+      shown.forEach((a, i) => {
+        expect(a.data).toBeUndefined();
+        expect(a).toMatchObject({ read_with: 'fhir_read', size: new TextEncoder().encode(decoded(original[i]!.data!)).length });
+      });
+    }
+    expect(r.exposed_ids).not.toEqual(expect.arrayContaining([refs[0]]));
+    expect(r.referenced_ids).toEqual(expect.arrayContaining(refs));
+    expectTagsMatch(r);
+    // The stored resources keep their data: the tool returned copies.
+    expect((attachments as (r: Resource) => Array<{ data?: string }>)(ctx.world.get(type, stored[0]!.id!)!)[0]!.data).toBeDefined();
+  });
+  it('fhir_read returns the decoded text once, without the base64, and exposes the note', () => {
+    const doc = ctx.world.get<DocumentReference>('DocumentReference', 'doc-00001')!;
+    const r = call('fhir_read', { resource_type: 'DocumentReference', id: 'doc-00001' });
+    const body = ok(r) as { resource: DocumentReference; text: string };
+    expect(body.text).toBe(decoded(doc.content[0]!.attachment.data!));
+    expect(body.resource.content[0]!.attachment.data).toBeUndefined();
+    expect(body.resource.content[0]!.attachment).not.toHaveProperty('read_with');
+    expect(body.resource.content[0]!.attachment.size).toBe(new TextEncoder().encode(body.text).length);
+    expect(r.exposed_ids).toEqual(['DocumentReference/doc-00001']);
+    expectTagsMatch(r);
+  });
+});
+
 describe('fhir_read', () => {
   it('returns the stored resource and exposes it', () => {
     const r = call('fhir_read', { resource_type: 'Observation', id: 'obs-00001' });
@@ -250,13 +296,6 @@ describe('fhir_read', () => {
     expect(r.exposed_ids).toEqual(['Observation/obs-00001']);
     expect(r.referenced_ids).toEqual(['Patient/pt-0001']);
     expectTagsMatch(r);
-  });
-  it('decodes a note', () => {
-    const doc = ctx.world.get<DocumentReference>('DocumentReference', 'doc-00001')!;
-    const text = new TextDecoder().decode(Uint8Array.from(atob(doc.content[0]!.attachment.data!), (c) => c.charCodeAt(0)));
-    const r = ok(call('fhir_read', { resource_type: 'DocumentReference', id: 'doc-00001' }));
-    expect(r.text).toBe(text);
-    expect(r.text).toContain('# Chief Complaint');
   });
   it('answers an unknown id with NOT_FOUND', () => {
     expect(err(call('fhir_read', { resource_type: 'Observation', id: 'obs-99999' }))).toMatchObject({ code: 'NOT_FOUND', field: 'id' });

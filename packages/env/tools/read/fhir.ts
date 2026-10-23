@@ -1,11 +1,12 @@
 // fhir_search and fhir_read (design section 3): generic FHIR-shaped reads that return full
-// resources, so every entry is exposed.
+// resources, so every entry is exposed, except notes and reports in fhir_search: those come
+// without their text and are referenced until fhir_read returns it (notes.ts).
 import type { Resource } from '@medplum/fhirtypes';
 import { search, SearchError, type SearchQuery } from '../../search.ts';
 import { ToolError } from '../errors.ts';
 import type { Tool } from '../registry.ts';
 import type { ReadContext } from './context.ts';
-import { noteText } from './notes.ts';
+import { noteText, withoutNoteData } from './notes.ts';
 import { page } from './page.ts';
 import { count, date, FHIR_ID, offset, patient, resourceType } from './schema.ts';
 
@@ -100,6 +101,7 @@ export const fhirSearch: Tool<ReadContext> = {
     'Search one FHIR R4 resource type. Filters combine with AND; a comma inside code, category or status means OR. ' +
     "code and category take 'system|code' or a bare code. Entries are full resources, ordered by date (sort=date, the default, or -date), then id; " +
     'types without a date order by id. Not every type supports every filter; an unsupported one returns NOT_SUPPORTED with the supported list. ' +
+    'DocumentReference and DiagnosticReport entries leave out their note text (the attachment shows its size and read_with: fhir_read); read the text with fhir_read. ' +
     'Pages are capped in size: when next_offset is present, call again with offset=next_offset for the rest.',
   inputSchema: {
     type: 'object',
@@ -130,7 +132,8 @@ export const fhirSearch: Tool<ReadContext> = {
     const matches = [...world.search(type, query).resources].sort(byId);
     // The search module's sort is stable, so equal dates keep the id order given here.
     const ordered = dated ? search(matches, type, { _sort: input.sort ?? 'date' } satisfies SearchQuery).resources : matches;
-    return page(ordered, input.offset ?? 0, input.count ?? 20);
+    // Notes and reports come without their text: fhir_read returns it (notes.ts).
+    return page(ordered.map((r) => withoutNoteData(r, true)), input.offset ?? 0, input.count ?? 20);
   },
 };
 
@@ -138,7 +141,8 @@ export const fhirRead: Tool<ReadContext> = {
   name: 'fhir_read',
   description:
     "Read one resource by type and id (for the reference 'DocumentReference/doc-00001', resource_type DocumentReference and id doc-00001). " +
-    'Returns {resource}; for a DocumentReference or DiagnosticReport with a text attachment it also returns the decoded note text as {text}.',
+    'Returns {resource}; for a DocumentReference or DiagnosticReport with a text attachment it also returns the decoded note text as {text}, ' +
+    'and the attachment in the resource shows its size in place of the base64 data.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -152,6 +156,6 @@ export const fhirRead: Tool<ReadContext> = {
     const resource = world.get(input.resource_type, input.id);
     if (!resource) throw new ToolError('NOT_FOUND', `no ${input.resource_type} with id '${input.id}'`, 'id');
     const text = noteText(resource);
-    return text === undefined ? { resource } : { resource, text };
+    return text === undefined ? { resource } : { resource: withoutNoteData(resource, false), text };
   },
 };

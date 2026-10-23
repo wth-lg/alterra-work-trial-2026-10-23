@@ -212,7 +212,8 @@ function payloadIds(content: unknown): { exposed: string[]; referenced: string[]
     if (typeof v === 'string' && REF.test(v)) refs.add(v);
     else if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
       const { resourceType, id } = v as { resourceType?: unknown; id?: unknown };
-      if (typeof resourceType === 'string' && typeof id === 'string') exposed.add(`${resourceType}/${id}`);
+      // A resource whose note text was left out (an attachment naming read_with) is referenced.
+      if (typeof resourceType === 'string' && typeof id === 'string') (JSON.stringify(v).includes('"read_with":') ? refs : exposed).add(`${resourceType}/${id}`);
     }
     return v;
   });

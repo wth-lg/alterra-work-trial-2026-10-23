@@ -22,12 +22,32 @@ function attachments(resource: Readonly<Resource>): readonly Attachment[] {
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 const decode = (base64: string) => utf8.decode(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
 
+const isText = (a: Attachment) => a.data !== undefined && (a.contentType ?? '').toLowerCase().startsWith('text/');
+
 // The decoded text of a note or report's inline text attachments, or undefined if it has none.
 export function noteText(resource: Readonly<Resource>): string | undefined {
-  const texts = attachments(resource)
-    .filter((a) => a.data !== undefined && (a.contentType ?? '').toLowerCase().startsWith('text/'))
-    .map((a) => decode(a.data!));
+  const texts = attachments(resource).filter(isText).map((a) => decode(a.data!));
   return texts.length === 0 ? undefined : texts.join('\n\n');
+}
+
+// The resource as a read tool returns it: each inline text attachment's base64 `data` is
+// replaced by `size`, its length in bytes, because the base64 is unreadable and costs 4/3 of
+// the text's tokens. With readWith (fhir_search), the attachment also names the tool that
+// returns the text, which tags the resource as referenced, not exposed (registry.ts): design
+// section 3 exposes a note only with its readable text. Other resources come back as stored.
+export function withoutNoteData(resource: Readonly<Resource>, readWith: boolean): Readonly<Resource> {
+  if (!attachments(resource).some(isText)) return resource;
+  const strip = (a: Attachment): Attachment => {
+    if (!isText(a)) return a;
+    const { data, ...rest } = a;
+    return { ...rest, size: atob(data!).length, ...(readWith ? { read_with: 'fhir_read' } : {}) };
+  };
+  if (resource.resourceType === 'DocumentReference') {
+    const doc = resource as DocumentReference;
+    return { ...doc, content: doc.content.map((c) => ({ ...c, attachment: strip(c.attachment) })) };
+  }
+  const report = resource as DiagnosticReport;
+  return { ...report, presentedForm: report.presentedForm!.map(strip) };
 }
 
 const TOKEN = /[\p{L}\p{N}]+/gu;
