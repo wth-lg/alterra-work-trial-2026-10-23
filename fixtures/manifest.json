@@ -31,6 +31,8 @@
       "7",
       "-r",
       "20261023",
+      "-e",
+      "20261024",
       "-p",
       "60",
       "--generate.append_numbers_to_person_names=false",
@@ -56,27 +58,35 @@
   },
   "overlays": [],
   "inputs": {
-    "packages/env/clock.ts": "39179a193df6b7f92249336c2728648c2c48e43d51d48a6052b6a5b4730bfad1",
-    "packages/env/overlay.ts": "f8b4c94c2d0cb80ae93e45978b742df5d558a2ea95b8b3cbad35acd1a6d7974b",
-    "packages/env/world.ts": "2d622c045824de83b54923114bf42fabce50f85676945e8ba32e6105a619e655"
+    "fixtures/synthea/generate.sh": "9c20f04e81cd71443b418aaa2c2782b47d3f20fffccdce06959da03b40c33fed",
+    "packages/env/clock.ts": "ed40c54a55e7dfeb896563636eca1dfd670174f66294b815245e6c621c5452d3",
+    "packages/env/overlay.ts": "79ddb1445970e7a1a567e2db0cf778e2b9bfa8ede2ae016e39a04ad0cd18454f",
+    "packages/env/world.ts": "cc7dd7c88d47251d63bc5290d7b2faa76ac0f0305aa5f1d94d01384570e8b678",
+    "scripts/fixtures-synthea.ts": "44162b65dc576e507b526132164eda54cb14000936331d48b575f46d9c49d752"
   },
   "definitions": {
     "file": "fixtures/definitions-pruned.json",
     "from": "@medplum/definitions 5.2.7",
-    "sha256": "85e1eb877f60518808faed2842d1d2ca00ed2aa0bf5d41749258b715f230af3b",
+    "sha256": "8576ea1ae12139b1ad6e4a37ec5331980ddb6df73610af5b99a1c6e620aaccc8",
     "types": [
       "AllergyIntolerance",
+      "Appointment",
+      "Communication",
       "Condition",
       "DiagnosticReport",
       "DocumentReference",
       "Encounter",
+      "EpisodeOfCare",
       "Group",
       "MedicationRequest",
       "Observation",
       "Organization",
       "Patient",
       "Practitioner",
-      "Procedure"
+      "Procedure",
+      "Provenance",
+      "ServiceRequest",
+      "Task"
     ]
   }
 }

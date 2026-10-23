@@ -7,7 +7,7 @@
 // world.ndjson.gz, manifest.json and definitions-pruned.json. The output depends only on the
 // inputs the manifest lists, so fixtures:verify can rebuild it and compare.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, findPackageJSON } from 'node:module';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NOW } from '../packages/env/clock.ts';
@@ -15,14 +15,22 @@ import { parseNdjson } from '../packages/env/fixture-source.ts';
 import { stateHash } from '../packages/env/hash.ts';
 import { applyOverlays, type Overlay } from '../packages/env/overlay.ts';
 import { Store } from '../packages/env/store.ts';
-import { SETTING, SETTING_LINT } from '../packages/env/world.ts';
+import { RESOURCE_TYPES, SETTING, SETTING_LINT } from '../packages/env/world.ts';
 import { gunzip, gzip, sha256, toNdjson } from './fixtures-lib.ts';
 
 export const repo = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const BASE = 'fixtures/synthea/base.ndjson.gz';
 const BASE_META = 'fixtures/synthea/base.json';
-// Overlay code whose bytes the manifest pins, besides each tasks/<id>/overlay.ts.
-const OVERLAY_SOURCES = ['packages/env/clock.ts', 'packages/env/overlay.ts', 'packages/env/world.ts'];
+// Code whose bytes the manifest pins, besides each tasks/<id>/overlay.ts: the overlay code, and
+// the generator and prune behind base.ndjson.gz, so changing either without regenerating fails
+// fixtures:verify.
+const OVERLAY_SOURCES = [
+  'fixtures/synthea/generate.sh',
+  'packages/env/clock.ts',
+  'packages/env/overlay.ts',
+  'packages/env/world.ts',
+  'scripts/fixtures-synthea.ts',
+];
 
 const posix = (p: string) => p.split('\\').join('/');
 
@@ -41,13 +49,21 @@ export async function loadOverlays(files: readonly string[]): Promise<Overlay[]>
   return overlays;
 }
 
-// The R4 StructureDefinitions validateResource needs for the world's types: every data type
-// plus the world's resource types and the base Resource and DomainResource, with the prose
-// fields validation never reads removed.
+const requireEnv = createRequire(join(repo, 'packages/env/package.json'));
+
+// The manifest's label for the definitions: the installed package and version.
+export function definitionsLabel(): string {
+  const file = findPackageJSON('@medplum/definitions', pathToFileURL(join(repo, 'packages/env/package.json')));
+  const { name, version } = JSON.parse(readFileSync(file!, 'utf8')) as { name: string; version: string };
+  return `${name} ${version}`;
+}
+
+// The R4 StructureDefinitions validateResource needs for RESOURCE_TYPES: every data type plus
+// those resource types and the base Resource and DomainResource, with the prose fields
+// validation never reads removed.
 const PROSE = new Set(['definition', 'comment', 'requirements', 'mapping', 'alias', 'short', 'meaning']);
 async function prunedDefinitions(types: readonly string[]): Promise<unknown> {
-  const require = createRequire(join(repo, 'packages/env/package.json'));
-  const { readJson } = (await import(pathToFileURL(require.resolve('@medplum/definitions')).href)) as { readJson(path: string): { entry: Array<{ resource: Record<string, unknown> }> } };
+  const { readJson } = (await import(pathToFileURL(requireEnv.resolve('@medplum/definitions')).href)) as { readJson(path: string): { entry: Array<{ resource: Record<string, unknown> }> } };
   const keep = new Set(['Resource', 'DomainResource', ...types]);
   const defs = ['fhir/r4/profiles-types.json', 'fhir/r4/profiles-resources.json']
     .flatMap((f) => readJson(f).entry.map((e) => e.resource))
@@ -80,7 +96,10 @@ export async function build(outDir: string): Promise<{ stateHash: string; resour
   const byType: Record<string, number> = {};
   for (const r of world.resources) byType[r.resourceType] = (byType[r.resourceType] ?? 0) + 1;
   const types = Object.keys(byType).sort();
-  const definitions = `${JSON.stringify(await prunedDefinitions(types))}\n`;
+  const outside = types.filter((t) => !(RESOURCE_TYPES as readonly string[]).includes(t));
+  if (outside.length) throw new Error(`the world holds ${outside.join(', ')}, which RESOURCE_TYPES (packages/env/world.ts) does not list`);
+  const defTypes = [...RESOURCE_TYPES].sort();
+  const definitions = `${JSON.stringify(await prunedDefinitions(defTypes))}\n`;
 
   const inputs = Object.fromEntries([...OVERLAY_SOURCES, ...overlayFiles].sort().map((f) => [f, sha256(readFileSync(join(repo, f)))]));
   const manifest = {
@@ -95,7 +114,7 @@ export async function build(outDir: string): Promise<{ stateHash: string; resour
     base: { file: BASE, ...baseMeta },
     overlays: overlays.map((o) => o.task).sort(),
     inputs,
-    definitions: { file: 'fixtures/definitions-pruned.json', from: '@medplum/definitions 5.2.7', sha256: sha256(definitions), types },
+    definitions: { file: 'fixtures/definitions-pruned.json', from: definitionsLabel(), sha256: sha256(definitions), types: defTypes },
   };
 
   mkdirSync(outDir, { recursive: true });

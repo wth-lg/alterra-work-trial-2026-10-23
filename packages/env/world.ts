@@ -6,6 +6,30 @@ import type { Resource } from '@medplum/fhirtypes';
 import { NOW_PROMPT } from './clock.ts';
 import type { LintSpec } from './lint/index.ts';
 
+// Every resource type the world may hold and the tools write or validate (design section 2,
+// "Store"). fixtures:build prunes the R4 definitions to these, so a write of any of them can be
+// validated even before the world holds one.
+export const RESOURCE_TYPES = [
+  'Patient',
+  'Practitioner',
+  'Organization',
+  'Group',
+  'Encounter',
+  'EpisodeOfCare',
+  'Appointment',
+  'Condition',
+  'Observation',
+  'DiagnosticReport',
+  'DocumentReference',
+  'AllergyIntolerance',
+  'Procedure',
+  'MedicationRequest',
+  'ServiceRequest',
+  'Task',
+  'Communication',
+  'Provenance',
+] as const;
+
 export const CLINIC = 'org-riverbend';
 export const OUTSIDE_HOSPITAL = 'org-st-brigid';
 // The user is Dr. Okafor; the other two share the base cohort's encounters and orders.
