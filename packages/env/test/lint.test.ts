@@ -1,4 +1,3 @@
-/* eslint-disable local/isomorphic-imports -- Node-only test: it runs the fixtures:lint CLI. */
 // Fixture lint (design section 2, "Fixture lint"): each rule fails on a planted defect and
 // passes just outside its margin, and the CLI exits 0 on the committed world and 1 on
 // packages/env/test/fixtures/lint-bad.

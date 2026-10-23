@@ -238,6 +238,29 @@ describe('string evaluation is banned in shared code', () => {
   });
 });
 
+describe('package tests run under Node', () => {
+  const NODE_ONLY = "import { readFileSync } from 'node:fs';\nexport const t = Date.now() + readFileSync('x').length;\nexport const a = [1, , 3];";
+
+  it('lets a package test use Node builtins, the clock and sparse arrays', async () => {
+    for (const path of ['packages/env/test/x.test.ts', 'packages/core/test/x.test.ts']) {
+      expect(await ruleIds(NODE_ONLY, path)).toEqual([]);
+    }
+  });
+
+  it('still bans them in the package source next to the tests', async () => {
+    const ids = await ruleIds(NODE_ONLY, 'packages/env/x.ts');
+    expect(ids).toContain(ISO);
+    expect(ids).toContain(DET);
+    expect(ids).toContain('no-sparse-arrays');
+  });
+
+  it('ignores an inline disable of a P2 rule in a package test', async () => {
+    const host = ['api', 'anthropic', 'com'].join('.');
+    const code = `/* eslint-disable local/no-direct-anthropic */\nexport const r = fetch('https://${host}/v1/messages');`;
+    expect(await ruleIds(code, 'packages/env/test/x.test.ts')).toContain('local/no-direct-anthropic');
+  });
+});
+
 describe('clean fixture', () => {
   it('passes every rule in every scoped directory', async () => {
     for (const path of ['packages/env/a.ts', 'packages/core/loop.ts', 'packages/grader/a.ts', 'tasks/t1/a.ts']) {

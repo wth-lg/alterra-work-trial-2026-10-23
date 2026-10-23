@@ -1,5 +1,3 @@
-/* eslint-disable local/isomorphic-imports -- Node-only test: it reads the committed fixtures
-   with node:fs. */
 // Medplum validateResource over every resource in the committed world, against the pruned R4
 // definitions the tool layer will validate writes with (design section 2, "Store" and "Write
 // validation"). Only the pruned bundle is indexed, so a type the world uses but the pruned
