@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertGrant,
   createLedger,
+  parseRow,
   SpendRefused,
   totals,
   type BatchGrant,
@@ -9,7 +10,7 @@ import {
   type LedgerRow,
   type LedgerStore,
 } from '../ledger.ts';
-import { usageCostUsd, worstCaseUsd, type Usage } from '../cost.ts';
+import { INPUT_OVERHEAD_TOKENS, usageCostUsd, worstCaseUsd, type Usage } from '../cost.ts';
 
 // An in-memory LedgerStore: a promise chain stands in for the file lock, and a throwing
 // transaction appends nothing, as in the Node adapter.
@@ -30,7 +31,8 @@ class MemoryStore implements LedgerStore {
   }
 }
 
-function ledgerOn(store: MemoryStore, pid = 1): Ledger {
+// `alive` lists the pids that count as running on test-host; every other pid is dead.
+function ledgerOn(store: MemoryStore, pid = 1, alive: readonly number[] = [pid]): Ledger {
   let n = 0;
   return createLedger({
     store,
@@ -40,6 +42,7 @@ function ledgerOn(store: MemoryStore, pid = 1): Ledger {
     runId: 'run-test',
     pid,
     host: 'test-host',
+    isAlive: (p) => alive.includes(p),
   });
 }
 
@@ -83,9 +86,9 @@ describe('cost model', () => {
     ).toBeCloseTo(13, 9);
   });
 
-  it('reserves body bytes as tokens at the $5 write price plus max_tokens at $20/MTok', () => {
-    expect(worstCaseUsd({ bodyBytes: 1e6, maxTokens: 1e6 })).toBeCloseTo(25, 9);
-    expect(worstCaseUsd({ bodyBytes: 200_000, maxTokens: 32_000 })).toBeCloseTo(1 + 0.64, 9);
+  it('reserves body bytes plus the overhead allowance as tokens at the $8 1-hour write price, plus max_tokens at $20/MTok', () => {
+    expect(worstCaseUsd({ bodyBytes: 1e6, maxTokens: 1e6 })).toBeCloseTo(((1e6 + INPUT_OVERHEAD_TOKENS) * 8) / 1e6 + 20, 9);
+    expect(worstCaseUsd({ bodyBytes: 200_000, maxTokens: 32_000 })).toBeCloseTo(((200_000 + INPUT_OVERHEAD_TOKENS) * 8) / 1e6 + 0.64, 9);
   });
 });
 
@@ -170,8 +173,9 @@ describe('actual cap', () => {
     const store = new MemoryStore();
     seedSettled(store, 400);
     const grant = await ledgerOn(store).batchStart(50);
-    seedSettled(store, 99); // spend from another source after batch start
-    await grant.reserve({ bodyBytes: 0, maxTokens: 50_000 }); // $1.00, settled + reserved = 500.00
+    const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 50_000 }); // about $1.03
+    seedSettled(store, 100 - w); // spend from another source after batch start
+    await grant.reserve({ bodyBytes: 0, maxTokens: 50_000 }); // settled + reserved = 500.00
     await expect(grant.reserve({ bodyBytes: 0, maxTokens: 1 })).rejects.toThrow(/actual/);
     const t = totals(store.rows);
     expect(t.settled + t.reserved).toBeCloseTo(500, 6);
@@ -182,7 +186,7 @@ describe('actual cap', () => {
     seedSettled(store, 440);
     const grant = await ledgerOn(store).batchStart(5);
     const res = await grant.reserve({ bodyBytes: 100, maxTokens: 100 });
-    expect(res.worst_usd).toBeLessThan(0.01);
+    expect(res.worst_usd).toBeLessThan(0.1);
     // 1-hour cache writes at $8/MTok: 7.5M tokens is $60, far above the reservation.
     await grant.settle(res, { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 7.5e6, cache_creation: { ephemeral_1h_input_tokens: 7.5e6 } });
     const settle = store.rows.find((r) => r.kind === 'settle' && r.call_id === res.call_id);
@@ -223,7 +227,7 @@ describe('settle on failure', () => {
     const store = new MemoryStore();
     const grant = await ledgerOn(store).batchStart(10);
     await fakeClient(grant, async () => SMALL).send();
-    expect(totals(store.rows).settled).toBeCloseTo(usageCostUsd(SMALL), 9);
+    expect(totals(store.rows).settled).toBeCloseTo(usageCostUsd(SMALL) as number, 9);
     expect(totals(store.rows).reserved).toBe(0);
   });
 });
@@ -233,12 +237,13 @@ describe('restart', () => {
     const store = new MemoryStore();
     seedSettled(store, 12.5);
     const grant = await ledgerOn(store, 1).batchStart(30);
-    const res = await grant.reserve({ bodyBytes: 0, maxTokens: 100_000 }); // $2, never settled
-    expect(res.worst_usd).toBeCloseTo(2, 9);
+    const res = await grant.reserve({ bodyBytes: 0, maxTokens: 100_000 }); // about $2, never settled
+    const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 100_000 });
+    expect(res.worst_usd).toBeCloseTo(w, 9);
     // The first process is gone; a new one reads the same store.
     const t = await ledgerOn(store, 2).totals();
     expect(t.settled).toBeCloseTo(12.5, 9);
-    expect(t.reserved).toBeCloseTo(2, 9);
+    expect(t.reserved).toBeCloseTo(w, 9);
     expect(t.open).toEqual([expect.objectContaining({ batch_id: grant.batch_id, projection: 30, pid: 1, host: 'test-host' })]);
     expect(t.exposure).toBeCloseTo(12.5 + 30, 9);
   });
@@ -250,7 +255,7 @@ describe('restart', () => {
     await ledgerOn(store, 2).close(grant.batch_id);
     const t = totals(store.rows);
     expect(t.open).toEqual([]);
-    expect(t.exposure).toBeCloseTo(2, 9);
+    expect(t.exposure).toBeCloseTo(worstCaseUsd({ bodyBytes: 0, maxTokens: 100_000 }), 9);
     // Closing twice is a no-op.
     await ledgerOn(store, 2).close(grant.batch_id);
     expect(store.rows.filter((r) => r.kind === 'close')).toHaveLength(1);
@@ -281,5 +286,172 @@ describe('ingest', () => {
     expect(await ledgerOn(store).ingest(rows)).toBe(2);
     expect(await ledgerOn(store).ingest(rows)).toBe(0);
     expect(totals(store.rows).settled).toBeCloseTo(0.5, 9);
+  });
+});
+
+describe('numeric inputs at the ledger boundary', () => {
+  const bad: Array<[string, { bodyBytes: number; maxTokens: number }]> = [
+    ['maxTokens missing', { bodyBytes: 10 } as { bodyBytes: number; maxTokens: number }],
+    ['maxTokens NaN', { bodyBytes: 10, maxTokens: Number.NaN }],
+    ['maxTokens negative', { bodyBytes: 10, maxTokens: -1_000_000 }],
+    ['maxTokens fractional', { bodyBytes: 10, maxTokens: 1.5 }],
+    ['bodyBytes NaN', { bodyBytes: Number.NaN, maxTokens: 10 }],
+    ['bodyBytes negative', { bodyBytes: -10, maxTokens: 10 }],
+    ['bodyBytes infinite', { bodyBytes: Number.POSITIVE_INFINITY, maxTokens: 10 }],
+  ];
+
+  it('rejects a non-finite, negative or fractional bodyBytes or maxTokens before any row or call', async () => {
+    const store = new MemoryStore();
+    const grant = await ledgerOn(store).batchStart(0);
+    seedSettled(store, 499.99);
+    const before = store.rows.length;
+    for (const [why, req] of bad) {
+      let calls = 0;
+      await expect(grant.metered(req, async () => (calls++, { usage: SMALL })), why).rejects.toThrow(TypeError);
+      expect(calls, why).toBe(0);
+      expect(store.rows.length, why).toBe(before);
+    }
+    expect(() => totals(store.rows)).not.toThrow();
+  });
+
+  it('settles a usage that cannot be priced at the reservation’s worst case, never null', async () => {
+    const usages: Array<[string, unknown]> = [
+      ['input_tokens missing', { output_tokens: 10 }],
+      ['output_tokens NaN', { input_tokens: 10, output_tokens: Number.NaN }],
+      ['negative output_tokens', { input_tokens: 10, output_tokens: -5_000_000 }],
+      ['negative cache read', { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: -1e9 }],
+      ['string tokens', { input_tokens: '10', output_tokens: 10 }],
+      ['unknown speed', { input_tokens: 10, output_tokens: 10, speed: 'warp' }],
+      ['not an object', 'usage'],
+    ];
+    for (const [why, usage] of usages) {
+      const store = new MemoryStore();
+      const grant = await ledgerOn(store).batchStart(10);
+      const res = await grant.reserve({ bodyBytes: 1000, maxTokens: 1000 });
+      await grant.settle(res, usage as Usage);
+      const settle = store.rows.find((r) => r.kind === 'settle');
+      expect(settle?.cost_usd, why).toBeCloseTo(worstCaseUsd({ bodyBytes: 1000, maxTokens: 1000 }), 9);
+      expect(() => parseRow(JSON.parse(JSON.stringify(settle))), why).not.toThrow();
+      expect(totals(store.rows).reserved, why).toBe(0);
+    }
+  });
+
+  it('rejects an open row whose projection is missing, non-numeric or negative, so batchStart cannot pass on NaN', async () => {
+    const open = { ts: 't', call_id: 'open:x', kind: 'open', source: 'node', run_id: null, batch_id: 'x', trial: null, usage: null, cost_usd: 0, pid: 9, host: 'h' };
+    for (const projection of [undefined, 'lots', -1, null]) {
+      expect(() => parseRow({ ...open, projection }), String(projection)).toThrow(/not a ledger row/);
+    }
+    expect(parseRow({ ...open, projection: 300 }).projection).toBe(300);
+    const store = new MemoryStore();
+    store.rows.push({ ...open, projection: 'lots' } as unknown as LedgerRow);
+    await expect(ledgerOn(store).batchStart(10_000)).rejects.toThrow(/not a ledger row/);
+  });
+});
+
+describe('settle is authoritative per call_id', () => {
+  it('records the highest settle: a forged cheap settle before the real one cannot lower spend', async () => {
+    const store = new MemoryStore();
+    const ledger = ledgerOn(store);
+    const grant = await ledger.batchStart(200);
+    const res = await grant.reserve({ bodyBytes: 0, maxTokens: 100_000 });
+    await ledger.settle({ ...res, worst_usd: 0 }, { input_tokens: 0, output_tokens: 0 });
+    await grant.settle(res, usdOutput(100));
+    expect(totals(store.rows).settled).toBeCloseTo(100, 6);
+    // A lower settle afterwards changes nothing and writes nothing.
+    const n = store.rows.length;
+    await grant.settle(res, { input_tokens: 0, output_tokens: 0 });
+    expect(totals(store.rows).settled).toBeCloseTo(100, 6);
+    expect(store.rows).toHaveLength(n);
+  });
+
+  it('takes the worst case from the ledger’s reserve row, not the caller’s Reservation', async () => {
+    const store = new MemoryStore();
+    const grant = await ledgerOn(store).batchStart(10);
+    const res = await grant.reserve({ bodyBytes: 1000, maxTokens: 1000 });
+    await grant.settle({ ...res, worst_usd: 0 }, null);
+    expect(totals(store.rows).settled).toBeCloseTo(worstCaseUsd({ bodyBytes: 1000, maxTokens: 1000 }), 9);
+  });
+
+  it('refuses to settle a call_id it never reserved', async () => {
+    const store = new MemoryStore();
+    const ledger = ledgerOn(store);
+    await expect(ledger.settle({ call_id: 'never-reserved', batch_id: null, trial: null, worst_usd: 0 }, SMALL)).rejects.toThrow(/reserv/);
+    expect(store.rows).toEqual([]);
+  });
+});
+
+describe('ingest accepts only browser reserve and settle rows', () => {
+  const browser = (kind: 'reserve' | 'settle', call_id: string, cost_usd: number): LedgerRow => ({
+    ts: 't', call_id, kind, source: 'browser', run_id: 'r', batch_id: null, trial: null, usage: null, cost_usd,
+  });
+
+  it('refuses node rows, open and close rows, and a settle for a call the browser did not reserve; appends nothing', async () => {
+    const store = new MemoryStore();
+    seedSettled(store, 100);
+    const grant = await ledgerOn(store).batchStart(300);
+    const inflight = await grant.reserve({ bodyBytes: 0, maxTokens: 100_000 });
+    const before = store.rows.length;
+    const exposure = totals(store.rows).exposure;
+    const forged: Array<[string, LedgerRow]> = [
+      ['node settle', { ...browser('settle', inflight.call_id, 0), source: 'node' }],
+      ['browser settle for a node call', browser('settle', inflight.call_id, 0)],
+      ['browser settle with no reservation', browser('settle', 'b-unknown', 0)],
+      ['close row', { ...browser('reserve', `close:${grant.batch_id}`, 0), kind: 'close', batch_id: grant.batch_id }],
+      ['open row', { ...browser('reserve', 'open:b', 0), kind: 'open', batch_id: 'b', projection: 0 }],
+    ];
+    for (const [why, row] of forged) {
+      await expect(ledgerOn(store, 2).ingest([browser('reserve', `ok-${why}`, 1), row]), why).rejects.toThrow();
+      expect(store.rows.length, why).toBe(before);
+    }
+    expect(totals(store.rows).exposure).toBeCloseTo(exposure, 9);
+    // The real settle still counts.
+    await grant.settle(inflight, usdOutput(20));
+    expect(totals(store.rows).settled).toBeCloseTo(120, 6);
+  });
+
+  it('keeps the highest browser settle and dedupes repeats', async () => {
+    const store = new MemoryStore();
+    const ledger = ledgerOn(store);
+    expect(await ledger.ingest([browser('reserve', 'b1', 3), browser('settle', 'b1', 2)])).toBe(2);
+    expect(await ledger.ingest([browser('settle', 'b1', 0.5)])).toBe(0);
+    expect(await ledger.ingest([browser('reserve', 'b1', 3), browser('settle', 'b1', 2)])).toBe(0);
+    expect(totals(store.rows).settled).toBeCloseTo(2, 9);
+  });
+});
+
+describe('grant binding', () => {
+  it('a grant passes assertGrant only for the ledger that minted it', async () => {
+    const a = ledgerOn(new MemoryStore());
+    const b = ledgerOn(new MemoryStore());
+    const grant = await a.batchStart(1);
+    expect(() => assertGrant(grant, a)).not.toThrow();
+    expect(() => assertGrant(grant, b)).toThrow(/grant/);
+  });
+});
+
+describe('closing a batch', () => {
+  it('refuses to close a batch whose pid is alive on this host unless forced, and records the reason', async () => {
+    const store = new MemoryStore();
+    seedSettled(store, 100);
+    const grant = await ledgerOn(store, 1).batchStart(300);
+    const cli = ledgerOn(store, 2, [1, 2]); // pid 1 is still running
+    await expect(cli.close(grant.batch_id)).rejects.toThrow(/alive/);
+    expect(store.rows.filter((r) => r.kind === 'close')).toEqual([]);
+    await expect(ledgerOn(store, 3).batchStart(300)).rejects.toThrow(SpendRefused);
+
+    expect(await cli.close(grant.batch_id, { force: 'stuck in a retry loop, killed by hand' })).toBe(true);
+    expect(store.rows.find((r) => r.kind === 'close')?.reason).toBe('stuck in a retry loop, killed by hand');
+    // The closed batch's grant cannot reserve any more.
+    await expect(grant.reserve({ bodyBytes: 1, maxTokens: 1 })).rejects.toThrow(/closed/);
+  });
+
+  it('refuses to close a batch opened on another host unless forced', async () => {
+    const store = new MemoryStore();
+    const other = createLedger({
+      store, clock: { now: () => 't' }, newId: () => 'b-other', source: 'node', runId: null, pid: 1, host: 'other-host', isAlive: () => false,
+    });
+    const grant = await other.batchStart(10);
+    await expect(ledgerOn(store, 2).close(grant.batch_id)).rejects.toThrow(/other-host/);
+    expect(await ledgerOn(store, 2).close(grant.batch_id, { force: 'other host rebooted' })).toBe(true);
   });
 });

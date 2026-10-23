@@ -1,27 +1,33 @@
 // pnpm cli spend [--where] [--check [--projected X] [--final-reserve [--cost-from <run,...>]]]
-//                [--close <batch_id>] [--ingest <file>] [--export <path>]
+//                [--close <batch_id> [--force <reason>]] [--ingest <file>] [--export <path>]
 // With no action, prints the ledger totals.
 //   --where           prints the ledger mode and path: `own-run <path>` or `default <path>`
 //   --check           prints each term and exits 1 when settled + reserved + open batch
 //                     projections + X (+ the remaining final-run projection with
 //                     --final-reserve) > $450
 //   --close <id>      closes a batch whose process died; its settled rows and unsettled
-//                     reservations keep counting
-//   --ingest <file>   appends browser rows (JSONL), deduped by call_id and kind
+//                     reservations keep counting. Refuses while its pid is alive on this
+//                     host, or when it was opened on another host, unless --force <reason>,
+//                     which the close row records
+//   --ingest <file>   appends browser reserve and settle rows (JSONL), deduped by call_id;
+//                     refuses the whole file on any other row
+//   --check --final-reserve counts the planned tasks in tasks/ under the current directory.
 //   --export <path>   writes a byte-equal copy of the ledger
 // The final run is results/runs/final-1 under RESULTS_ROOT (default: the current directory).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { finalReserve, formatProjection, money } from '../packages/core/cost.ts';
 import { checkProjected, parseRow, PROJECTED_CAP_USD, type Totals } from '../packages/core/ledger.ts';
-import { auditorDone, loadFinalTrials, loadTrialObservations, openNodeLedger, resolveLedgerPath } from './adapters/ledger-node.ts';
+import {
+  auditorDone, loadFinalTrials, loadPlannedTasks, loadTrialObservations, openNodeLedger, resolveLedgerPath,
+} from './adapters/ledger-node.ts';
 
 const ACTIONS = ['--where', '--check', '--close', '--ingest', '--export'];
-const WITH_VALUE = new Set(['--close', '--ingest', '--export', '--projected', '--cost-from']);
+const WITH_VALUE = new Set(['--close', '--force', '--ingest', '--export', '--projected', '--cost-from']);
 const FLAGS = new Set(['--where', '--check', '--final-reserve']);
 
 function usage(problem: string): number {
-  process.stderr.write(`spend: ${problem}\nusage: pnpm cli spend [--where] [--check [--projected X] [--final-reserve [--cost-from <run,...>]]] [--close <batch_id>] [--ingest <file>] [--export <path>]\n`);
+  process.stderr.write(`spend: ${problem}\nusage: pnpm cli spend [--where] [--check [--projected X] [--final-reserve [--cost-from <run,...>]]] [--close <batch_id> [--force <reason>]] [--ingest <file>] [--export <path>]\n`);
   return 2;
 }
 
@@ -38,6 +44,15 @@ function printTotals(t: Totals): void {
 }
 
 export default async function spend(args: string[]): Promise<number> {
+  try {
+    return await run(args);
+  } catch (e) {
+    process.stderr.write(`spend: ${(e as Error).message}\n`);
+    return 1;
+  }
+}
+
+async function run(args: string[]): Promise<number> {
   const opts = new Map<string, string>();
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string;
@@ -54,6 +69,8 @@ export default async function spend(args: string[]): Promise<number> {
     return usage('--projected, --final-reserve and --cost-from go with --check');
   }
   if (opts.has('--cost-from') && !opts.has('--final-reserve')) return usage('--cost-from goes with --final-reserve');
+  if (opts.has('--force') && !opts.has('--close')) return usage('--force goes with --close');
+  if (opts.get('--force')?.trim() === '') return usage('--force needs a reason');
 
   if (opts.has('--where')) {
     const where = resolveLedgerPath();
@@ -66,7 +83,8 @@ export default async function spend(args: string[]): Promise<number> {
 
   if (opts.has('--close')) {
     const id = opts.get('--close') as string;
-    const wrote = await ledger.close(id);
+    const force = opts.get('--force');
+    const wrote = await ledger.close(id, force === undefined ? {} : { force });
     process.stdout.write(wrote ? `closed batch ${id}\n` : `batch ${id} was already closed\n`);
     return 0;
   }
@@ -110,6 +128,7 @@ export default async function spend(args: string[]): Promise<number> {
     const costFrom = (opts.get('--cost-from') ?? '').split(',').filter((s) => s !== '');
     const finalRun = join(process.env.RESULTS_ROOT || process.cwd(), 'results', 'runs', 'final-1');
     const p = finalReserve({
+      plannedTasks: loadPlannedTasks(process.cwd()),
       observations: loadTrialObservations(costFrom),
       finalTrials: loadFinalTrials(finalRun),
       auditorDone: auditorDone(finalRun),

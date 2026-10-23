@@ -1,15 +1,16 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { repoRoot, runScript, tempDir, write } from '../../../scripts/test/helpers.ts';
 import { assertGrant, SpendRefused, totals, type LedgerRow } from '../../../packages/core/ledger.ts';
-import { AUDITOR_ALLOWANCE_USD } from '../../../packages/core/cost.ts';
+import { AUDITOR_ALLOWANCE_USD, worstCaseUsd } from '../../../packages/core/cost.ts';
 import { openNodeLedger, readRows, reserveSpend, resolveLedgerPath, settleSpend } from '../ledger-node.ts';
 
 const ADAPTER = pathToFileURL(join(repoRoot, 'cli/adapters/ledger-node.ts')).href;
+const CORE = pathToFileURL(join(repoRoot, 'packages/core/ledger.ts')).href;
 
 // Every test names its ledger, so none reads the shell's settings or this machine's ledger.
 function envFor(home: string, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
@@ -36,6 +37,10 @@ function child(code: string, env: Record<string, string | undefined>, cwd: strin
 
 function settleRow(usd: number, call_id: string, source: 'node' | 'browser' = 'node'): LedgerRow {
   return { ts: '2026-10-22T00:00:00.000Z', call_id, kind: 'settle', source, run_id: 'seed', batch_id: null, trial: null, usage: null, cost_usd: usd };
+}
+
+function reserveRow(usd: number, call_id: string, source: 'node' | 'browser' = 'node'): LedgerRow {
+  return { ...settleRow(usd, call_id, source), kind: 'reserve' };
 }
 
 function seed(path: string, rows: LedgerRow[]): void {
@@ -125,9 +130,11 @@ describe('cross-process caps', () => {
   it('4 concurrent processes near $500 never take settled + reserved past $500 (case 6)', async () => {
     const root = tempDir('ledger-c6');
     const path = join(root, 'spend.jsonl');
-    seed(path, history(499.98));
-    // All four reserve $0.01 in the same millisecond and 2 fit. Each reads a long ledger
-    // before it appends, so without the lock all four see room and all four append.
+    // Each reservation's worst case is w; the seeded room fits exactly 2 of them.
+    const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 500 });
+    seed(path, history(500 - 2.1 * w));
+    // All four reserve in the same millisecond and 2 fit. Each reads a long ledger before it
+    // appends, so without the lock all four see room and all four append.
     const start = Date.now() + 1500;
     const code = `
 const { ledger } = L.openNodeLedger({ transport: 'live' });
@@ -171,10 +178,11 @@ process.kill(process.pid, 'SIGKILL');
     const close = spendCli(['--close', batchId], env, root);
     expect(close.stderr).toBe('');
     expect(close.status).toBe(0);
-    // The close keeps the dead batch's unsettled $5 reservation.
+    // The close keeps the dead batch's unsettled reservation (max_tokens 250,000: about $5).
+    const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 250_000 });
     const t = totals(readRows(path));
-    expect(t.reserved).toBeCloseTo(5, 9);
-    expect(t.exposure).toBeCloseTo(105, 9);
+    expect(t.reserved).toBeCloseTo(w, 9);
+    expect(t.exposure).toBeCloseTo(100 + w, 9);
     assertGrant(await ledger.batchStart(100));
   });
 
@@ -191,9 +199,11 @@ await grant.reserve({ bodyBytes: 0, maxTokens: 150000 });
     expect(r.code).toBe(0);
     const t = await openNodeLedger({ transport: 'offline', env }).ledger.totals();
     expect(t.settled).toBeCloseTo(7, 9);
-    expect(t.reserved).toBeCloseTo(3, 9);
+    const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 150_000 });
+    expect(t.reserved).toBeCloseTo(w, 9);
     expect(t.open).toEqual([expect.objectContaining({ projection: 40, host: hostname() })]);
-    expect(t.exposure).toBeCloseTo(47, 9);
+    // The open batch counts at max(projection 40, its own reserved w).
+    expect(t.exposure).toBeCloseTo(7 + 40, 9);
   });
 
   it('breaks a lock left by a dead process on this host', async () => {
@@ -215,17 +225,18 @@ describe('spend command', () => {
     const path = join(root, 'spend.jsonl');
     seed(path, [settleRow(1, 'seed')]);
     const browser = join(root, 'browser.jsonl');
-    write(root, 'browser.jsonl', [settleRow(0.25, 'b-1', 'browser'), settleRow(0.5, 'b-2', 'browser')].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const rows = [reserveRow(0.3, 'b-1', 'browser'), settleRow(0.25, 'b-1', 'browser'), reserveRow(0.6, 'b-2', 'browser'), settleRow(0.5, 'b-2', 'browser')];
+    write(root, 'browser.jsonl', rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
     const env = envFor(join(root, 'home'), { SPEND_LEDGER: path });
     const first = spendCli(['--ingest', browser], env, root);
-    expect(first.stdout).toContain('ingested 2 of 2 rows');
+    expect(first.stdout).toContain('ingested 4 of 4 rows');
     const after = totals(readRows(path)).settled;
     expect(after).toBeCloseTo(1.75, 9);
     const second = spendCli(['--ingest', browser], env, root);
     expect(second.status).toBe(0);
-    expect(second.stdout).toContain('ingested 0 of 2 rows');
+    expect(second.stdout).toContain('ingested 0 of 4 rows');
     expect(totals(readRows(path)).settled).toBe(after);
-    expect(readRows(path)).toHaveLength(3);
+    expect(readRows(path)).toHaveLength(5);
   });
 
   it('--export writes a byte-equal copy (case 9)', () => {
@@ -275,6 +286,7 @@ describe('spend --check --final-reserve (case 16)', () => {
     const root = tempDir('ledger-c16b');
     const path = join(root, 'spend.jsonl');
     seed(path, []);
+    for (let t = 1; t <= 6; t++) write(root, `tasks/T${t}/task.toml`, `id = "T${t}"\n`);
     for (let t = 1; t <= 6; t++)
       for (let n = 1; n <= 10; n++)
         write(root, `results/pilot-2/trials/T${t}/${n}.json`, JSON.stringify({ task_id: `T${t}`, task_version: `T${t}-v1`, cost_usd: n / 5, started: `2026-10-23T00:00:${n}Z`, outcome: 'PASS' }));
@@ -287,5 +299,145 @@ describe('spend --check --final-reserve (case 16)', () => {
     expect(r.stdout).toContain('T1: 9 trials x $1.80 per trial (p90 of 10 trials of T1-v1 in results/pilot-2)');
     expect(r.stdout).toMatch(new RegExp(`total\\s+\\$${expected.toFixed(2)}`));
     expect(r.status).toBe(0);
+  });
+});
+
+describe('fixes for the P1 findings', () => {
+  it('an empty CHARTR_CANONICAL_LEDGER is an error, not default mode', () => {
+    const home = tempDir('ledger-empty-marker');
+    const env = envFor(home, { CHARTR_CANONICAL_LEDGER: '' });
+    expect(resolveLedgerPath(env).problems).not.toEqual([]);
+    expect(() => openNodeLedger({ transport: 'live', env })).toThrow(/CHARTR_CANONICAL_LEDGER/);
+    const where = spendCli(['--where'], env, home);
+    expect(where.status).toBe(1);
+    expect(where.stdout).not.toContain('default');
+    expect(existsSync(join(home, '.chartr'))).toBe(false);
+  });
+
+  it('in own-run mode only a grant from the canonical ledger passes assertGrant', async () => {
+    const root = tempDir('ledger-bound');
+    const marker = join(root, 'canon', 'spend.jsonl');
+    mkdirSync(join(root, 'canon'));
+    const shadowPath = join(root, 'shadow', 'spend.jsonl');
+    const home = join(root, 'home');
+    const r = await child(`
+const C = await import(${JSON.stringify(CORE)});
+const out = [];
+const check = (name, g) => { try { C.assertGrant(g); out.push(name + ' passed'); } catch { out.push(name + ' refused'); } };
+const { ledger } = L.openNodeLedger({ transport: 'live' });
+check('canonical', await ledger.batchStart(1));
+const other = L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, SPEND_LEDGER: ${JSON.stringify(shadowPath)} } }).ledger;
+const g = await other.batchStart(1);
+check('SPEND_LEDGER', g);
+const rows = [];
+const mem = C.createLedger({ store: { transact: async (fn) => { const r = fn(rows); rows.push(...r.append); return r.result; }, read: async () => rows },
+  clock: { now: () => 't' }, newId: () => 'm1', source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
+check('memory', await mem.batchStart(1));
+try { await L.reserveSpend(g, { bodyBytes: 1, maxTokens: 1 }); out.push('reserveSpend passed'); } catch { out.push('reserveSpend refused'); }
+console.log(JSON.stringify(out));
+`, envFor(home, { CHARTR_CANONICAL_LEDGER: marker }), root);
+    expect(r.err).toBe('');
+    expect(JSON.parse(r.out)).toEqual(['canonical passed', 'SPEND_LEDGER refused', 'memory refused', 'reserveSpend refused']);
+    expect(readRows(shadowPath).map((x) => x.kind)).toEqual(['open']);
+  });
+
+  it('spend --close refuses a batch whose pid is alive on this host; --force records the reason and the grant stops reserving', async () => {
+    const root = tempDir('ledger-close-live');
+    const path = join(root, 'spend.jsonl');
+    seed(path, [settleRow(100, 'seed')]);
+    const env = envFor(join(root, 'home'), { SPEND_LEDGER: path });
+    const go = join(root, 'go');
+    const running = child(`
+const { ledger } = L.openNodeLedger({ transport: 'live' });
+const grant = await ledger.batchStart(300);
+console.log(grant.batch_id);
+const { existsSync } = await import('node:fs');
+while (!existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20));
+try { await grant.reserve({ bodyBytes: 1, maxTokens: 1 }); console.log('reserve ok'); } catch (e) { console.log('reserve refused: ' + e.message); }
+`, env, root);
+    let batchId = '';
+    for (let i = 0; i < 500 && batchId === ''; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      const open = readRows(path).find((x) => x.kind === 'open');
+      batchId = open?.batch_id ?? '';
+    }
+    expect(batchId).not.toBe('');
+
+    const refused = spendCli(['--close', batchId], env, root);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toMatch(/alive/);
+    expect(readRows(path).filter((x) => x.kind === 'close')).toEqual([]);
+
+    const forced = spendCli(['--close', batchId, '--force', 'runner hung, verifier closing'], env, root);
+    expect(forced.stderr).toBe('');
+    expect(forced.status).toBe(0);
+    expect(readRows(path).find((x) => x.kind === 'close')?.reason).toBe('runner hung, verifier closing');
+    writeFileSync(go, '');
+    const r = await running;
+    expect(r.out).toMatch(/reserve refused: .*closed/);
+    expect(readRows(path).filter((x) => x.kind === 'reserve')).toEqual([]);
+  });
+
+  it('--force goes only with --close and needs a reason', () => {
+    const root = tempDir('ledger-force-usage');
+    const env = envFor(join(root, 'home'), { SPEND_LEDGER: join(root, 'spend.jsonl') });
+    expect(spendCli(['--force', 'why'], env, root).status).toBe(2);
+    expect(spendCli(['--close', 'b', '--force', ''], env, root).status).toBe(2);
+  });
+
+  it('--ingest refuses node rows and settles for calls the browser did not reserve, leaving the ledger as it was', () => {
+    const root = tempDir('ledger-ingest-forged');
+    const path = join(root, 'spend.jsonl');
+    seed(path, [settleRow(1, 'seed'), reserveRow(20, 'node-inflight')]);
+    const env = envFor(join(root, 'home'), { SPEND_LEDGER: path });
+    const before = readFileSync(path);
+    for (const [why, rows] of [
+      ['node row', [settleRow(0, 'x-1', 'node')]],
+      ['settle for a node call', [settleRow(0, 'node-inflight', 'browser')]],
+      ['settle with no reservation', [settleRow(0, 'b-9', 'browser')]],
+    ] as const) {
+      write(root, 'forged.jsonl', rows.map((x) => JSON.stringify(x)).join('\n') + '\n');
+      const r = spendCli(['--ingest', join(root, 'forged.jsonl')], env, root);
+      expect(r.status, why).toBe(1);
+      expect(r.stderr, why).toMatch(/spend: /);
+      expect(readFileSync(path).equals(before), why).toBe(true);
+    }
+  });
+
+  it('ignores and quarantines a torn last line with a warning; any other malformed line still fails closed', async () => {
+    const root = tempDir('ledger-torn');
+    const path = join(root, 'spend.jsonl');
+    seed(path, [settleRow(7, 'a'), settleRow(1, 'b')]);
+    const torn = JSON.stringify(settleRow(4, 'c')).slice(0, -12);
+    appendFileSync(path, torn);
+    expect(totals(readRows(path)).settled).toBeCloseTo(8, 9);
+
+    const env = envFor(join(root, 'home'), { SPEND_LEDGER: path });
+    const r = await child(`
+const { ledger } = L.openNodeLedger({ transport: 'live' });
+const g = await ledger.batchStart(1);
+console.log(g.batch_id);
+`, env, root);
+    expect(r.code).toBe(0);
+    expect(r.err).toMatch(/torn/);
+    expect(readRows(path).map((x) => x.kind)).toEqual(['settle', 'settle', 'open']);
+    const quarantined = readdirSync(root).filter((f) => f.startsWith('spend.jsonl.torn'));
+    expect(quarantined).toHaveLength(1);
+    expect(readFileSync(join(root, quarantined[0] as string), 'utf8')).toBe(torn);
+
+    // A complete last row without its newline is kept, and the next row starts on a new line.
+    const whole = join(root, 'whole.jsonl');
+    writeFileSync(whole, JSON.stringify(settleRow(2, 'w1')));
+    const w = await child(`await L.openNodeLedger({ transport: 'live' }).ledger.batchStart(1);`, envFor(join(root, 'home'), { SPEND_LEDGER: whole }), root);
+    expect(w.code).toBe(0);
+    expect(readRows(whole).map((x) => x.kind)).toEqual(['settle', 'open']);
+
+    // A bad line that is not the torn tail is not skipped.
+    const bad = join(root, 'bad.jsonl');
+    writeFileSync(bad, `${JSON.stringify(settleRow(1, 'x'))}\n{"half":\n${JSON.stringify(settleRow(1, 'y'))}\n`);
+    expect(() => readRows(bad)).toThrow(/bad\.jsonl:2/);
+    // A torn tail that follows a newline-terminated bad line does not hide it either.
+    writeFileSync(bad, `{"kind":"settle"}\n${torn}`);
+    expect(() => readRows(bad)).toThrow(/bad\.jsonl:1/);
   });
 });

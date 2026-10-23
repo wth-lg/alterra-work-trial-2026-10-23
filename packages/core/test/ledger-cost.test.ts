@@ -63,7 +63,7 @@ describe('batch projection (case 14)', () => {
 
 describe('final-run reserve', () => {
   it('with no runs is 60 x $6 x 1.15 plus the auditor allowance', () => {
-    const r = finalReserve({ observations: [], finalTrials: [], auditorDone: false });
+    const r = finalReserve({ plannedTasks: [], observations: [], finalTrials: [], auditorDone: false });
     expect(r.total).toBeCloseTo(60 * 6 * 1.15 + AUDITOR_ALLOWANCE_USD, 9);
     const text = formatProjection(r).join('\n');
     expect(text).toContain('6 tasks without data x 10 trials x $6.00');
@@ -79,11 +79,50 @@ describe('final-run reserve', () => {
       { task_id: 'T1', outcome: 'ENV_ERROR' },
       { task_id: 'T2', outcome: 'INFRA' },
     ];
-    const r = finalReserve({ observations: data, finalTrials, auditorDone: true });
+    const r = finalReserve({ plannedTasks: tasks, observations: data, finalTrials, auditorDone: true });
     // T1 has 2 valid final trials, so 8 remain; every other task has 10 remaining.
     const expected = (8 * 1.3 + tasks.slice(1).reduce((s, _t, i) => s + 10 * (1.3 + i + 1), 0)) * RERUN_FACTOR;
     expect(r.total).toBeCloseTo(expected, 9);
     expect(r.allowance).toEqual({ name: 'auditor', usd: 0 });
     expect(r.lines.find((l) => l.task_id === 'T1')?.trials).toBe(8);
+  });
+});
+
+describe('worst-case reservation is an upper bound', () => {
+  it('prices every body byte and the overhead allowance at the 1-hour write price, and fast mode at 2x', async () => {
+    const { worstCaseUsd, usageCostUsd, INPUT_OVERHEAD_TOKENS, FAST_MODE_MULTIPLIER } = await import('../cost.ts');
+    expect(FAST_MODE_MULTIPLIER).toBe(2);
+    expect(INPUT_OVERHEAD_TOKENS).toBeGreaterThanOrEqual(500);
+    // finding 6: a 10,000-byte body written to a 1-hour cache costs $0.08.
+    const allWrite1h = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 10_000, cache_creation: { ephemeral_1h_input_tokens: 10_000 } };
+    expect(worstCaseUsd({ bodyBytes: 10_000, maxTokens: 0 })).toBeGreaterThanOrEqual(usageCostUsd(allWrite1h) as number);
+    // A 200-byte body plus 500 tokens the API adds, all written to a 1-hour cache, plus max_tokens out.
+    const small = { input_tokens: 0, output_tokens: 1000, cache_creation_input_tokens: 700, cache_creation: { ephemeral_1h_input_tokens: 700 } };
+    expect(worstCaseUsd({ bodyBytes: 200, maxTokens: 1000 })).toBeGreaterThanOrEqual(usageCostUsd(small) as number);
+    expect(worstCaseUsd({ bodyBytes: 200, maxTokens: 1000, fast: true })).toBeCloseTo(2 * worstCaseUsd({ bodyBytes: 200, maxTokens: 1000 }), 12);
+    expect(worstCaseUsd({ bodyBytes: 200, maxTokens: 1000, fast: true })).toBeGreaterThanOrEqual(usageCostUsd({ ...small, speed: 'fast' }) as number);
+  });
+
+  it('prices fast-mode usage at 2x: $8 in and $40 out per MTok', async () => {
+    const { usageCostUsd } = await import('../cost.ts');
+    expect(usageCostUsd({ input_tokens: 1e6, output_tokens: 1e6, speed: 'fast' })).toBeCloseTo(48, 9);
+    expect(usageCostUsd({ input_tokens: 1e6, output_tokens: 1e6, speed: 'standard' })).toBeCloseTo(24, 9);
+  });
+});
+
+describe('final-run reserve counts the planned task list', () => {
+  it('a stray observed task id does not hide a planned task with no data', () => {
+    const planned = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6'];
+    // Pilot data for T1-T5 and for a task that is not planned; none for T6.
+    const data = [...planned.slice(0, 5), 'scratch'].flatMap((t) => obs('results/pilot-2', 2, t, `${t}-v1`, TEN));
+    const r = finalReserve({ plannedTasks: planned, observations: data, finalTrials: [], auditorDone: true });
+    expect(r.lines.map((l) => l.task_id)).toEqual(planned);
+    expect(r.total).toBeCloseTo((5 * 10 * 1.3 + 10 * PER_TRIAL_CAP_USD) * RERUN_FACTOR, 9);
+  });
+
+  it('counts planned tasks not written yet at the cap, up to the 6 planned', () => {
+    const r = finalReserve({ plannedTasks: ['T1', 'T2'], observations: obs('p', 0, 'T1', 'v1', [1]), finalTrials: [], auditorDone: true });
+    expect(r.total).toBeCloseTo((10 * 1 + 10 * 6 + 4 * 10 * 6) * RERUN_FACTOR, 9);
+    expect(formatProjection(r).join('\n')).toContain('4 tasks without data x 10 trials x $6.00');
   });
 });

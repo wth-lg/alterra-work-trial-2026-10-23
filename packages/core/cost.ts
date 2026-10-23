@@ -1,8 +1,10 @@
 // Cost model: prices, the worst case a call reserves, and batch projections. Pure: run
 // directories are read by cli/adapters/ledger-node.ts and passed in as observations.
 
-// USD per million tokens for claude-opus-5-5. The P2 client sends only 5-minute
-// cache_control; a 1-hour write is priced in case usage reports one.
+// USD per million tokens for claude-opus-5-5. Source: the bundled claude-api skill (model
+// table cached 2026-10-06, and shared/prompt-caching.md: 5-minute writes 1.25x input, 1-hour
+// writes 2x, reads $0.20). The P2 client sends only 5-minute cache_control; a 1-hour write
+// is priced in case usage reports one.
 export const PRICE_USD_PER_MTOK = {
   input: 4,
   cache_write_5m: 5,
@@ -10,6 +12,13 @@ export const PRICE_USD_PER_MTOK = {
   cache_read: 0.2,
   output: 20,
 } as const;
+// Fast mode (usage.speed "fast") is $8 in / $40 out on claude-opus-5-5, 2x every standard
+// price (same source, Fast Mode section).
+export const FAST_MODE_MULTIPLIER = 2;
+// Input tokens the API adds to a request beyond its body: the tool-use system prompt and the
+// message template. Those are a few hundred tokens; 4,096 leaves wide margin. Server tools,
+// whose results add input, are not used by the P2 client.
+export const INPUT_OVERHEAD_TOKENS = 4096;
 
 // Per-trial cap: the cost a trial is projected at when no run has observed its task.
 export const PER_TRIAL_CAP_USD = 6;
@@ -35,27 +44,49 @@ export interface Usage {
   cache_creation_input_tokens?: number | null;
   cache_read_input_tokens?: number | null;
   cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
+  speed?: string | null;
 }
 
-export function usageCostUsd(u: Usage): number {
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+const optionalCount = (v: unknown): number | null => (v === undefined || v === null ? 0 : isCount(v) ? v : null);
+
+// The cost of a call from its usage block, or null when the usage cannot be priced (a token
+// field missing, negative or not a number, or an unknown speed). The ledger settles such a
+// call at its worst case.
+export function usageCostUsd(u: Usage): number | null {
+  if (typeof u !== 'object' || u === null || !isCount(u.input_tokens) || !isCount(u.output_tokens)) return null;
+  const cc: unknown = u.cache_creation ?? {};
+  if (typeof cc !== 'object' || cc === null) return null;
+  const { ephemeral_5m_input_tokens: e5m, ephemeral_1h_input_tokens: e1h } = cc as NonNullable<Usage['cache_creation']>;
+  const creation = optionalCount(u.cache_creation_input_tokens);
+  const read = optionalCount(u.cache_read_input_tokens);
+  const write5m = optionalCount(e5m);
+  const write1h = optionalCount(e1h);
+  if (creation === null || read === null || write5m === null || write1h === null) return null;
+  const speed = u.speed ?? 'standard';
+  if (speed !== 'standard' && speed !== 'fast') return null;
   const p = PRICE_USD_PER_MTOK;
-  const write1h = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
-  const writeAll = Math.max(u.cache_creation_input_tokens ?? 0, (u.cache_creation?.ephemeral_5m_input_tokens ?? 0) + write1h);
-  return (
-    (u.input_tokens * p.input +
-      (writeAll - write1h) * p.cache_write_5m +
-      write1h * p.cache_write_1h +
-      (u.cache_read_input_tokens ?? 0) * p.cache_read +
-      u.output_tokens * p.output) /
-    1e6
-  );
+  const writeAll = Math.max(creation, write5m + write1h);
+  const usd =
+    (u.input_tokens * p.input + (writeAll - write1h) * p.cache_write_5m + write1h * p.cache_write_1h + read * p.cache_read + u.output_tokens * p.output) / 1e6;
+  return speed === 'fast' ? usd * FAST_MODE_MULTIPLIER : usd;
 }
 
-// An upper bound on a call's cost before it is sent: every request body byte counted as one
-// input token at the 5-minute cache-write price (above the plain input price), plus
-// max_tokens of output.
-export function worstCaseUsd(req: { bodyBytes: number; maxTokens: number }): number {
-  return (req.bodyBytes * PRICE_USD_PER_MTOK.cache_write_5m + req.maxTokens * PRICE_USD_PER_MTOK.output) / 1e6;
+function assertTokenCount(name: string, v: unknown): void {
+  if (!Number.isSafeInteger(v) || (v as number) < 0) throw new TypeError(`${name} must be a whole number >= 0, got ${String(v)}`);
+}
+
+// An upper bound on a call's cost before it is sent. Input: every request body byte counted
+// as one token (a token covers at least one byte of text), plus INPUT_OVERHEAD_TOKENS, all at
+// the 1-hour cache-write price, the highest input rate a call can incur. Output: max_tokens,
+// which also caps thinking tokens. Fast mode doubles it. Throws on a bodyBytes or maxTokens
+// that is not a whole number >= 0, so no NaN or negative reservation reaches the cap check.
+export function worstCaseUsd(req: { bodyBytes: number; maxTokens: number; fast?: boolean }): number {
+  assertTokenCount('bodyBytes', req.bodyBytes);
+  assertTokenCount('maxTokens', req.maxTokens);
+  const p = PRICE_USD_PER_MTOK;
+  const usd = ((req.bodyBytes + INPUT_OVERHEAD_TOKENS) * p.cache_write_1h + req.maxTokens * p.output) / 1e6;
+  return req.fast === true ? usd * FAST_MODE_MULTIPLIER : usd;
 }
 
 // One trial record from a --cost-from run. run_order is the run's position in the
@@ -97,7 +128,7 @@ function latestP90(group: TrialObservation[], basis: 'p90' | 'earlier-version-p9
 // task's latest other (earlier) version, else the cap. A null task_version takes the
 // task's latest observed version.
 export function perTrialCost(task_id: string, task_version: string | null, observations: readonly TrialObservation[]): PerTrialCost {
-  const mine = observations.filter((o) => o.task_id === task_id && Number.isFinite(o.cost_usd));
+  const mine = observations.filter((o) => o.task_id === task_id && isCount(o.cost_usd));
   const exact = mine.filter((o) => o.task_version === task_version);
   if (exact.length > 0) return latestP90(exact, 'p90');
   if (mine.length === 0) return { usd: PER_TRIAL_CAP_USD, basis: 'cap' };
@@ -109,7 +140,7 @@ export function perTrialCost(task_id: string, task_version: string | null, obser
 }
 
 export interface ProjectionLine {
-  // null for the line that stands for planned tasks with no data at all.
+  // null for the line that stands for planned tasks not written yet.
   task_id: string | null;
   tasks: number;
   trials: number; // per task
@@ -147,15 +178,17 @@ export function isValidTrial(outcome: string | undefined): boolean {
   return outcome !== undefined && !INVALID_OUTCOMES.has(outcome);
 }
 
-// What the rest of the final run will cost: per task, (10 - valid final trials) x its
-// per-trial cost x 1.15; planned tasks with no data at all (up to 6) at the cap; plus the
-// auditor allowance until the auditor has run. Task ids starting with '_' are not real tasks.
+// What the rest of the final run will cost: per planned task, (10 - valid final trials) x its
+// per-trial cost x 1.15; planned tasks not written yet (up to 6) at the cap; plus the auditor
+// allowance until the auditor has run. Observed task ids outside the plan are ignored, so a
+// stray id cannot stand in for a planned task. Ids starting with '_' are not real tasks.
 export function finalReserve(input: {
+  plannedTasks: readonly string[];
   observations: readonly TrialObservation[];
   finalTrials: ReadonlyArray<{ task_id: string; outcome?: string }>;
   auditorDone: boolean;
 }): Projection {
-  const ids = [...new Set([...input.observations, ...input.finalTrials].map((o) => o.task_id))].filter((id) => !id.startsWith('_')).sort();
+  const ids = [...new Set(input.plannedTasks)].filter((id) => !id.startsWith('_')).sort();
   const lines = ids.map((id) => {
     const valid = input.finalTrials.filter((t) => t.task_id === id && isValidTrial(t.outcome)).length;
     return line(id, 1, Math.max(0, FINAL_TRIALS_PER_TASK - valid), perTrialCost(id, null, input.observations));
