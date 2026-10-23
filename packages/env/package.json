@@ -1,0 +1,12 @@
+{
+  "name": "@riverbend/env",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@medplum/core": "5.2.7",
+    "@medplum/definitions": "5.2.7",
+    "@medplum/fhir-router": "5.2.7",
+    "@medplum/fhirtypes": "5.2.7",
+    "canonicalize": "5.1.0"
+  }
+}

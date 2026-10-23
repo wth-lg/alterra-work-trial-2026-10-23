@@ -1,0 +1,42 @@
+import { defineConfig, devices } from '@playwright/test';
+
+// Projects:
+//   mocked    chromium, e2e/*.spec.ts; runs in CI
+//   xbrowser  chromium, firefox and webkit, e2e/xbrowser/**; runs in CI
+//   live      chromium, e2e/live/**; calls the real API, never runs in CI (scripts/ci-guard.ts).
+//             Each live spec skips itself when ANTHROPIC_API_KEY is unset, so the project still
+//             lists them. Trace, video, screenshot and HAR are off so a key can never land in an artifact.
+const PORT = 4173;
+const xbrowser = { name: 'xbrowser', testDir: './e2e/xbrowser' };
+
+export default defineConfig({
+  testDir: './e2e',
+  forbidOnly: Boolean(process.env.CI),
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+  use: {
+    baseURL: `http://localhost:${PORT}/alterra-work-trial-2026-10-23/`,
+    trace: 'retain-on-failure',
+  },
+  webServer: {
+    command: `pnpm exec vite preview --port ${PORT} --strictPort`,
+    url: `http://localhost:${PORT}/alterra-work-trial-2026-10-23/`,
+    reuseExistingServer: !process.env.CI,
+  },
+  projects: [
+    {
+      name: 'mocked',
+      testDir: './e2e',
+      testIgnore: ['**/xbrowser/**', '**/live/**'],
+      use: { ...devices['Desktop Chrome'] },
+    },
+    { ...xbrowser, use: { ...devices['Desktop Chrome'] } },
+    { ...xbrowser, use: { ...devices['Desktop Firefox'] } },
+    { ...xbrowser, use: { ...devices['Desktop Safari'] } },
+    {
+      name: 'live',
+      testDir: './e2e/live',
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off', screenshot: 'off' },
+    },
+  ],
+});
