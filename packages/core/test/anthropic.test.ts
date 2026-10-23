@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeKey, tempDir, write } from '../../../scripts/test/helpers.ts';
 import { main as liveNode, projection as liveNodeProjection } from '../../../scripts/live-node.ts';
 import * as anthropic from '../anthropic.ts';
+import { installEgressGuard } from '../egress.ts';
 import { ApiError, MessagesClient, type MessageParam, type Transport } from '../anthropic.ts';
 import { admitStore, createLedger, SpendRefused, type BatchGrant, type Ledger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 
@@ -322,7 +323,7 @@ describe('pnpm live:node refuses before any call', () => {
 // P2 fix round (findings p2-findings-1): each test below failed at 63259f5.
 describe('MessagesClient is the only way to send', () => {
   it('exports only the metered client, its error and pure helpers', () => {
-    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'isApiHost', 'requestUrl', 'reserveRequest']);
+    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'EgressRefusal', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'isApiHost', 'requestUrl', 'reserveRequest']);
   });
 
   it('no exported function sends without a grant', async () => {
@@ -567,7 +568,7 @@ describe('server tools and server-billed features are rejected before reserve or
   });
 });
 
-// P2 final fix round (pr-review-P2-9 defects 1 and 2): each test below fails at 9b3d4b9.
+// P2 final fix round (pr-review-P2-9 defects 1, 2 and 5): each test below fails at 9b3d4b9.
 describe('the claim and the guard read a Request from its internal slots', () => {
   it('claimOutbound refuses a client Request whose headers were edited behind an own headers property', async () => {
     const claims: boolean[] = [];
@@ -590,3 +591,30 @@ describe('the claim and the guard read a Request from its internal slots', () =>
   });
 });
 
+describe('a request the egress guard refuses', () => {
+  // The guard over a recording fetch in a scope object, so this file's globals stay as they are.
+  const sends: string[] = [];
+  const scope: { fetch: typeof fetch } = { fetch: (async (input: Request) => (sends.push(input.url), ok()())) as typeof fetch };
+  installEgressGuard(scope);
+
+  it('is settled at $0 and not retried: 1 reserve, 1 settle at $0, 0 sends', async () => {
+    sends.length = 0;
+    const t = await client([], { fetch: ((req: Request) => scope.fetch(req.clone())) as Transport });
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ errorType: 'egress_refused', retryable: false });
+    expect(sends).toEqual([]);
+    expect(rows(t.store, 'reserve')).toHaveLength(1);
+    expect(rows(t.store, 'settle').map((x) => x.cost_usd)).toEqual([0]);
+  });
+
+  it('after the registered Request went out, a refusal of a second send still settles at the worst case', async () => {
+    sends.length = 0;
+    const t = await client([], { maxAttempts: 1, fetch: (async (req: Request) => {
+      await scope.fetch(req);
+      return scope.fetch(req);
+    }) as Transport });
+    await expect(t.c.send(user(), PARAMS)).rejects.toThrow(/egress guard/);
+    expect(sends).toHaveLength(1);
+    const [reserve] = rows(t.store, 'reserve');
+    expect(rows(t.store, 'settle')).toMatchObject([{ cost_usd: reserve?.cost_usd, usage: null }]);
+  });
+});

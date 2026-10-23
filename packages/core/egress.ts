@@ -4,7 +4,7 @@
 // case, templates and joins all resolve to it) unless it is the Request MessagesClient registered
 // for the call in flight, sent once, unchanged and with no init (claimOutbound). A Request's URL
 // and headers are read from its internal slots (requestUrl), and a dispatcher is dropped from
-// any init it forwards. XMLHttpRequest,
+// any init it forwards. A refusal is an EgressRefusal: nothing was sent. XMLHttpRequest,
 // WebSocket, EventSource and navigator.sendBeacon, where present, are refused for those hosts
 // outright: the client never uses them. A URL is resolved once and the resolved string is what
 // gets sent, so an object whose toString answers differently the second time sends nothing new.
@@ -15,12 +15,12 @@
 // Every entry point that can make live calls installs it as its first statement: the cli/index.ts
 // dispatcher, scripts/live-node.ts, the web app and the probe page (later: the local runner, and
 // the Worker that hosts the browser client). See anthropic.ts for the threat model.
-import { claimOutbound, isApiHost, requestUrl } from './anthropic.ts';
+import { claimOutbound, EgressRefusal, isApiHost, requestUrl } from './anthropic.ts';
 
 let installed = false;
 
 const refused = (api: string, url: URL) =>
-  new TypeError(`egress guard: ${api} to ${url.origin} refused: only MessagesClient (packages/core/anthropic.ts) sends to the Anthropic API, once per registered Request`);
+  new EgressRefusal(`egress guard: ${api} to ${url.origin} refused: only MessagesClient (packages/core/anthropic.ts) sends to the Anthropic API, once per registered Request`);
 
 // The globals the guard wraps, where the runtime has them.
 interface Scope {

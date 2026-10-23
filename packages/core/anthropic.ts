@@ -8,6 +8,8 @@
 // (assertClientGrant), and every attempt reserves its worst case under the ledger lock before
 // fetch and settles after:
 //   HTTP error status        settled at $0: the API bills no error response
+//   refused by the egress guard before the Request left
+//                            settled at $0, not retried
 //   complete stream          settled at its usage
 //   dropped or errored stream, malformed frame, network error after send
 //                            settled at the worst case: usage is unknown, and the partial
@@ -85,6 +87,8 @@ function headerSig(request: Request): string {
 // Requests the client has handed to its transport and not yet seen return, each with the
 // header set it was built with. Only sendOnce adds to it.
 const outbound = new WeakMap<Request, string>();
+// Registered Requests a claim let out: the guard forwarded them, so they may have reached the API.
+const sent = new WeakSet<Request>();
 
 // For the egress guard and the probe relay: true once for a Request the client registered, if
 // it comes with no init (which could swap its body or headers), its method and headers are the
@@ -96,7 +100,15 @@ export function claimOutbound(request: unknown, init?: unknown): boolean {
   const sig = outbound.get(r);
   if (sig === undefined) return false;
   outbound.delete(r);
-  return init === undefined && native.method.call(r) === 'POST' && !native.bodyUsed.call(r) && headerSig(r) === sig;
+  if (init !== undefined || native.method.call(r) !== 'POST' || native.bodyUsed.call(r) || headerSig(r) !== sig) return false;
+  sent.add(r);
+  return true;
+}
+
+// What the egress guard throws for a request it refuses: nothing left the process. A TypeError,
+// as fetch's own pre-send failures are.
+export class EgressRefusal extends TypeError {
+  override readonly name = 'EgressRefusal';
 }
 
 export interface ContentBlock {
@@ -374,6 +386,11 @@ async function sendOnce(f: Transport, apiKey: string, body: string, signal?: Abo
   let res: Response;
   try {
     res = await f(request);
+  } catch (e) {
+    // The guard refused the attempt and never let this Request out, so nothing was sent: an
+    // error that is not billed and would recur on retry.
+    if (e instanceof EgressRefusal && !sent.has(request)) throw new ApiError(e.message, { status: null, type: 'egress_refused', retryable: false, stopsBatch: false });
+    throw e;
   } finally {
     outbound.delete(request);
   }
