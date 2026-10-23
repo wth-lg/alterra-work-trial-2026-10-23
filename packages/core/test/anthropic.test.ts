@@ -1,0 +1,313 @@
+// The Messages client against a mocked fetch: retries, stream handling, refusal and model
+// checks, request rules, and that every attempt is reserved before fetch and settled after.
+// This is the one test file no-forged-grant exempts by name: it forges grants on purpose.
+import { describe, expect, it } from 'vitest';
+import { fakeKey, tempDir, write } from '../../../scripts/test/helpers.ts';
+import { main as liveNode, projection as liveNodeProjection } from '../../../scripts/live-node.ts';
+import { ApiError, MESSAGES_URL, MessagesClient, type MessageParam } from '../anthropic.ts';
+import { admitStore, createLedger, SpendRefused, type BatchGrant, type Ledger, type LedgerRow, type LedgerStore } from '../ledger.ts';
+
+class MemoryStore implements LedgerStore {
+  rows: LedgerRow[] = [];
+  async transact<T>(fn: (rows: readonly LedgerRow[]) => { append: LedgerRow[]; result: T }): Promise<T> {
+    const { append, result } = fn(this.rows);
+    this.rows.push(...append);
+    return result;
+  }
+  async read(): Promise<LedgerRow[]> {
+    return [...this.rows];
+  }
+}
+
+function setup() {
+  const store = new MemoryStore();
+  admitStore(store);
+  let n = 0;
+  const ledger = createLedger({
+    store, clock: { now: () => 't' }, newId: () => `id-${++n}`, source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true,
+  });
+  return { store, ledger };
+}
+
+type Step = () => Response | Promise<Response>;
+
+function mockFetch(steps: Step[]) {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    const step = steps.shift();
+    if (step === undefined) throw new Error('unexpected fetch');
+    return step();
+  }) as typeof globalThis.fetch;
+  return { fetch, calls };
+}
+
+const sse = (events: object[]) => events.map((e) => `event: ${(e as { type: string }).type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+
+function body(chunks: string[], end: 'close' | 'error' = 'close'): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  return new ReadableStream({
+    start(c) {
+      for (const chunk of chunks) c.enqueue(enc.encode(chunk));
+      if (end === 'error') c.error(new TypeError('terminated'));
+      else c.close();
+    },
+  });
+}
+
+
+function start(model = 'claude-opus-5-5') {
+  return { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', model, content: [], stop_reason: null, usage: { input_tokens: 100, output_tokens: 1 } } };
+}
+
+function textEvents(text: string, opts: { model?: string; stop?: string; stop_details?: object } = {}): object[] {
+  return [
+    start(opts.model),
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: opts.stop ?? 'end_turn', stop_details: opts.stop_details ?? null }, usage: { output_tokens: 20 } },
+    { type: 'message_stop' },
+  ];
+}
+
+const ok = (text = 'done', opts: Parameters<typeof textEvents>[1] = {}): Step => () =>
+  new Response(body([sse(textEvents(text, opts))]), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+
+const status = (code: number, type: string, headers: Record<string, string> = {}): Step => () =>
+  new Response(JSON.stringify({ type: 'error', error: { type, message: `${type} happened` } }), { status: code, headers: { 'content-type': 'application/json', ...headers } });
+
+// A stream that sends a partial answer, then ends: closed without message_stop, cut by a
+// network error, or with an error event.
+const partial = (how: 'eof' | 'error' | 'overloaded'): Step => () => {
+  const head = sse(textEvents('PARTIAL').slice(0, 3));
+  const tail = how === 'overloaded' ? [sse([{ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }])] : [];
+  return new Response(body([head, ...tail], how === 'error' ? 'error' : 'close'), { status: 200 });
+};
+
+const PARAMS = { max_tokens: 1024, output_config: { effort: 'low' } };
+const user = (): MessageParam[] => [{ role: 'user', content: 'hello' }];
+
+async function client(steps: Step[], opts: { setupLedger?: ReturnType<typeof setup>; projection?: number } = {}) {
+  const s = opts.setupLedger ?? setup();
+  const grant = await s.ledger.batchStart(opts.projection ?? 1);
+  const m = mockFetch(steps);
+  const sleeps: number[] = [];
+  const c = new MessagesClient({ grant, ledger: s.ledger, apiKey: fakeKey(), fetch: m.fetch, sleep: async (ms) => void sleeps.push(ms) });
+  return { ...s, ...m, grant, c, sleeps };
+}
+
+const rows = (store: MemoryStore, kind: LedgerRow['kind']) => store.rows.filter((r) => r.kind === kind);
+
+describe('retries', () => {
+  it('429 then ok: waits retry-after, reserves and settles each attempt, returns the answer', async () => {
+    const t = await client([status(429, 'rate_limit_error', { 'retry-after': '3' }), ok('fine')]);
+    const history = user();
+    const r = await t.c.send(history, PARAMS);
+    expect(r.status).toBe(200);
+    expect(t.calls).toHaveLength(2);
+    expect(t.sleeps).toEqual([3000]);
+    expect(rows(t.store, 'reserve')).toHaveLength(2);
+    expect(rows(t.store, 'settle').map((x) => x.cost_usd)).toEqual([0, (100 * 4 + 20 * 20) / 1e6]);
+    expect(history.at(-1)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'fine' }] });
+  });
+
+  it('529 on every attempt: throws a retryable ApiError after 4 attempts, each one settled', async () => {
+    const t = await client([1, 2, 3, 4].map(() => status(529, 'overloaded_error')));
+    const err = await t.c.send(user(), PARAMS).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 529, retryable: true, stopsBatch: false });
+    expect(t.calls).toHaveLength(4);
+    expect(t.sleeps).toEqual([1000, 2000, 4000]);
+    expect(rows(t.store, 'settle')).toHaveLength(4);
+  });
+
+  it('400 stops the batch: no retry, the grant is closed, and the next call sends nothing', async () => {
+    const t = await client([status(400, 'invalid_request_error'), ok()]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: 400, stopsBatch: true });
+    expect(t.calls).toHaveLength(1);
+    expect(rows(t.store, 'close')).toHaveLength(1);
+    await expect(t.c.send(user(), PARAMS)).rejects.toThrow(/closed|stopped/);
+    expect(t.calls).toHaveLength(1);
+  });
+});
+
+describe('response checks', () => {
+  it('a refusal stops without retry, reports its category and leaves the history unchanged', async () => {
+    const t = await client([ok('', { stop: 'refusal', stop_details: { type: 'refusal', category: 'bio', explanation: 'x' } }), ok()]);
+    const history = user();
+    const r = await t.c.send(history, PARAMS);
+    expect(r.refusal).toEqual({ category: 'bio', explanation: 'x' });
+    expect(r.message.stop_reason).toBe('refusal');
+    expect(history).toEqual(user());
+    expect(t.calls).toHaveLength(1);
+    expect(rows(t.store, 'settle')).toHaveLength(1);
+  });
+
+  it('a response from another model is rejected, settled at its usage, and not appended', async () => {
+    const t = await client([ok('x', { model: 'claude-opus-5' })]);
+    const history = user();
+    await expect(t.c.send(history, PARAMS)).rejects.toMatchObject({ stopsBatch: true, message: expect.stringMatching(/claude-opus-5\b.*claude-opus-5-5|model/) });
+    expect(history).toEqual(user());
+    expect(rows(t.store, 'settle').map((x) => x.cost_usd)).toEqual([(100 * 4 + 20 * 20) / 1e6]);
+  });
+});
+
+describe('partial streams', () => {
+  it('a partial stream is discarded from the history; only the retried answer is appended', async () => {
+    const t = await client([partial('eof'), ok('whole')]);
+    const history = user();
+    await t.c.send(history, PARAMS);
+    expect(history).toEqual([...user(), { role: 'assistant', content: [{ type: 'text', text: 'whole' }] }]);
+    expect(JSON.stringify(history)).not.toContain('PARTIAL');
+  });
+
+  it.each([['eof'], ['error']] as const)('a dropped stream (%s) settles a row at the worst case', async (how) => {
+    const t = await client([partial(how), ok()]);
+    await t.c.send(user(), PARAMS);
+    const [reserve] = rows(t.store, 'reserve');
+    const [first] = rows(t.store, 'settle');
+    expect(first?.call_id).toBe(reserve?.call_id);
+    expect(first?.cost_usd).toBe(reserve?.cost_usd);
+    expect(first?.usage).toBeNull();
+  });
+
+  it('a 529 error event after a partial stream settles a row at the worst case and retries', async () => {
+    const t = await client([partial('overloaded'), ok()]);
+    const r = await t.c.send(user(), PARAMS);
+    expect(r.attempts).toBe(2);
+    const [reserve] = rows(t.store, 'reserve');
+    expect(rows(t.store, 'settle')[0]).toMatchObject({ call_id: reserve?.call_id, cost_usd: reserve?.cost_usd, usage: null });
+  });
+});
+
+describe('request rules', () => {
+  it('sends the version and browser headers, the pinned model and stream, and none of the banned params', async () => {
+    const t = await client([ok()]);
+    await t.c.send(user(), { ...PARAMS, cache_control: { type: 'ephemeral' }, tool_choice: { type: 'auto' } });
+    const [call] = t.calls;
+    expect(call?.url).toBe(MESSAGES_URL);
+    expect(call?.init.headers).toMatchObject({ 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true' });
+    const sent = JSON.parse(call?.init.body as string) as Record<string, unknown>;
+    expect(sent).toMatchObject({ model: 'claude-opus-5-5', stream: true });
+    for (const k of ['temperature', 'top_p', 'top_k', 'fallbacks']) expect(sent).not.toHaveProperty(k);
+  });
+
+  it.each([
+    ['temperature', { temperature: 1 }],
+    ['top_p', { top_p: 0.9 }],
+    ['top_k', { top_k: 5 }],
+    ['fallbacks', { fallbacks: 'default' }],
+    ['forced tool_choice any', { tool_choice: { type: 'any' } }],
+    ['forced tool_choice tool', { tool_choice: { type: 'tool', name: 'x' } }],
+    ['another model', { model: 'claude-opus-5' }],
+  ])('rejects %s before any reserve or fetch', async (_name, extra) => {
+    const t = await client([ok()]);
+    await expect(t.c.send(user(), { ...PARAMS, ...extra } as typeof PARAMS)).rejects.toThrow();
+    expect(t.calls).toHaveLength(0);
+    expect(rows(t.store, 'reserve')).toHaveLength(0);
+  });
+
+  it('rejects a prefill (history ending in an assistant turn) with 0 fetch calls', async () => {
+    const t = await client([ok()]);
+    await expect(t.c.send([...user(), { role: 'assistant', content: 'Sure' }], PARAMS)).rejects.toThrow(/prefill/);
+    expect(t.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ['top-level', { cache_control: { type: 'ephemeral', ttl: '1h' } }],
+    ['in system', { system: [{ type: 'text', text: 's', cache_control: { type: 'ephemeral', ttl: '1h' } }] }],
+  ])('a 1h cache ttl (%s) makes 0 fetch calls', async (_where, extra) => {
+    const t = await client([ok()]);
+    await expect(t.c.send(user(), { ...PARAMS, ...extra } as typeof PARAMS)).rejects.toThrow(/1h|ttl/);
+    expect(t.calls).toHaveLength(0);
+    expect(rows(t.store, 'reserve')).toHaveLength(0);
+  });
+
+  it('a 1h cache ttl inside a message makes 0 fetch calls', async () => {
+    const t = await client([ok()]);
+    const history: MessageParam[] = [{ role: 'user', content: [{ type: 'text', text: 'x', cache_control: { type: 'ephemeral', ttl: '1h' } }] }];
+    await expect(t.c.send(history, PARAMS)).rejects.toThrow(/ttl/);
+    expect(t.calls).toHaveLength(0);
+  });
+});
+
+describe('spend caps', () => {
+  it('with the ledger at $499.90, a reservation that would cross $500 makes 0 fetch calls', async () => {
+    const s = setup();
+    const t = await client([ok()], { setupLedger: s });
+    // Spend another process settled after this batch started.
+    s.store.rows.push({ ts: 't', call_id: 'other', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: 499.9 });
+    // max_tokens 8192 reserves about $0.20 (8192 x $20/MTok plus the input bound), which crosses $500.
+    await expect(t.c.send(user(), { ...PARAMS, max_tokens: 8192 })).rejects.toBeInstanceOf(SpendRefused);
+    expect(t.calls).toHaveLength(0);
+    expect(rows(t.store, 'reserve')).toHaveLength(0);
+  });
+});
+
+describe('the constructor checks its grant before any fetch', () => {
+  const build = (grant: unknown, ledger: Ledger, f: typeof fetch) => new MessagesClient({ grant: grant as BatchGrant, ledger, apiKey: fakeKey(), fetch: f });
+
+  it('a cast {} throws', () => {
+    const { ledger } = setup();
+    const m = mockFetch([ok()]);
+    expect(() => build({} as BatchGrant, ledger, m.fetch)).toThrow(/grant/);
+    expect(m.calls).toHaveLength(0);
+  });
+
+  it('a structural copy of a real grant throws', async () => {
+    const { ledger } = setup();
+    const real = await ledger.batchStart(1);
+    const m = mockFetch([ok()]);
+    expect(() => build({ ...real }, ledger, m.fetch)).toThrow(/grant/);
+    expect(() => build(Object.create(real), ledger, m.fetch)).toThrow(/grant/);
+    expect(m.calls).toHaveLength(0);
+  });
+
+  it('a closed grant throws', async () => {
+    const { ledger } = setup();
+    const grant = await ledger.batchStart(1);
+    await grant.close();
+    const m = mockFetch([ok()]);
+    expect(() => build(grant, ledger, m.fetch)).toThrow(/closed/);
+    expect(m.calls).toHaveLength(0);
+  });
+});
+
+describe('pnpm live:node refuses before any call', () => {
+  const run = async (env: Record<string, string>) => {
+    const m = mockFetch([ok()]);
+    const out: string[] = [];
+    const code = await liveNode([], { env: { ANTHROPIC_API_KEY: fakeKey(), ...env }, fetch: m.fetch, out: (l) => out.push(l) });
+    return { code, calls: m.calls, out: out.join('\n') };
+  };
+
+  it('own-run mode with SPEND_LEDGER=/tmp/x makes 0 calls and errors', async () => {
+    const dir = tempDir('p2-own-run');
+    write(dir, 'spend.jsonl', '');
+    const r = await run({ CHARTR_CANONICAL_LEDGER: `${dir}/spend.jsonl`, SPEND_LEDGER: '/tmp/x' });
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/SPEND_LEDGER/);
+    expect(r.calls).toHaveLength(0);
+  });
+
+  it('ledger + projection = $450.01 makes 0 calls', async () => {
+    const dir = tempDir('p2-cap');
+    const settled = 450.01 - liveNodeProjection();
+    const row: LedgerRow = { ts: 't', call_id: 'prior', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: settled };
+    write(dir, 'spend.jsonl', JSON.stringify(row) + '\n');
+    const r = await run({ SPEND_LEDGER: `${dir}/spend.jsonl` });
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/projected cap.*\$450\.01 > \$450/);
+    expect(r.calls).toHaveLength(0);
+  });
+
+  it('--dry-run prints the projection and makes 0 calls without a key', async () => {
+    const m = mockFetch([]);
+    const out: string[] = [];
+    const code = await liveNode(['--dry-run'], { env: {}, fetch: m.fetch, out: (l) => out.push(l) });
+    expect(code).toBe(0);
+    expect(out.join('\n')).toContain(`LIVE_PROJECTION_USD=${liveNodeProjection().toFixed(6)}`);
+    expect(m.calls).toHaveLength(0);
+  });
+});
