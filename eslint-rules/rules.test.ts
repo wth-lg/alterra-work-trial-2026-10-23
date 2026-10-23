@@ -83,6 +83,72 @@ describe('determinism scope', () => {
   });
 });
 
+describe('determinism catches non-literal forms', () => {
+  it.each([
+    'export const s = Date();',
+    "export const t = Date['now']();",
+    'export const t = Date[`now`]();',
+    "export const r = Math['random']();",
+    'export const t = globalThis.Date.now();',
+    'export const d = new globalThis.Date();',
+    'export const t = window.Date.now();',
+    'export const r = self.Math.random();',
+    "export const t = globalThis['Date']['now']();",
+    'const now = Date.now; export const t = now();',
+    'const { random } = Math; export const r = random();',
+    'const { now: clock } = Date; export const t = clock();',
+    'const D = Date; export const d = new D();',
+    'const M = Math; export const r = M.random();',
+    'export const t = (Date as DateConstructor).now();',
+    'export const t = performance.now();',
+    'export const b = crypto.getRandomValues(new Uint8Array(4));',
+    'export const u = crypto.randomUUID();',
+    'export const u = globalThis.crypto.randomUUID();',
+  ])('flags %s', async (code) => {
+    expect(await ruleIds(code, 'packages/env/a.ts')).toContain(DET);
+  });
+  it.each([
+    'export const d = new Date(0);',
+    'export const t = Date.UTC(2026, 0, 1);',
+    "export const t = Date.parse('2026-01-01');",
+    'export const f = Math.floor(1.5);',
+    'const { floor } = Math; export const f = floor(1.5);',
+    'export const isDate = (x: unknown) => x instanceof Date;',
+    'export type Clock = { now: () => number; at: Date };',
+    'export function f(Date: { now(): number }) { return Date.now(); }',
+  ])('allows %s', async (code) => {
+    expect(await ruleIds(code, 'packages/env/a.ts')).not.toContain(DET);
+  });
+});
+
+describe('isomorphic-imports catches global-object access and more node modules', () => {
+  it.each([
+    'export const e = globalThis.process.env;',
+    "export const e = globalThis['process'].env;",
+    'export const t = globalThis.document.title;',
+    'export const w = globalThis.window;',
+    'export const t = self.document.title;',
+    'export const t = window.document.title;',
+    'const { process: p } = globalThis; export const e = p.env;',
+    'export const g = global.process;',
+  ])('flags %s', async (code) => {
+    expect(await ruleIds(code, 'packages/core/a.ts')).toContain(ISO);
+  });
+  it.each(['child_process', 'os', 'module', 'path', 'url', 'worker_threads', 'path/posix'])(
+    'flags imports of %s in bare and node: forms',
+    async (name) => {
+      expect(await ruleIds(`import * as m from '${name}'; export { m };`, 'tasks/t1/a.ts')).toContain(ISO);
+      expect(await ruleIds(`import * as m from 'node:${name}'; export { m };`, 'tasks/t1/a.ts')).toContain(ISO);
+    },
+  );
+  it.each(['export const s = self.postMessage;', 'export const c = globalThis.crypto.subtle;'])(
+    'allows %s, which works in a Worker and in Node',
+    async (code) => {
+      expect(await ruleIds(code, 'packages/core/a.ts')).not.toContain(ISO);
+    },
+  );
+});
+
 describe('clean fixture', () => {
   it('passes every rule in every scoped directory', async () => {
     for (const path of ['packages/env/a.ts', 'packages/core/loop.ts', 'packages/grader/a.ts', 'tasks/t1/a.ts']) {
