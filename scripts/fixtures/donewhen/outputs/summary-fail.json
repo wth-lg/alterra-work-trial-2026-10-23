@@ -1,0 +1,1 @@
+{"exit": 1, "stdout": {"tasks": {"t1": {"passes": 9, "trials": 10}, "t2": {"passes": 7, "trials": 10}, "t3": {"passes": 4, "trials": 10}, "t4": {"passes": 5, "trials": 10}, "t5": {"passes": 3, "trials": 8}}, "initial_state_hashes": ["9f2c", "a01b"]}}
