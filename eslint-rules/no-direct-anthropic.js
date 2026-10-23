@@ -3,7 +3,8 @@
 // header or body builder, so code elsewhere that wants to reach the API has to name the host
 // itself, and anywhere else a string naming the API host (so any fetch to it) is an error,
 // whether written as one literal, a template or a concatenation of literals. The CSP metas in
-// apps/web/*.html list the host too; ESLint does not lint .html. A host built at
+// apps/web/*.html list the host too; ESLint does not lint .html. One exemption: the exact design
+// CSP string, as one literal, in apps/web/e2e/smoke.spec.ts, which pins it. A host built at
 // runtime is past what a static rule can see; the egress guard (packages/core/egress.ts)
 // refuses it where it resolves.
 
@@ -15,6 +16,8 @@ export const files = ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'];
 // Built, not written, so this file holds no literal the rule would flag.
 const HOST = ['api', 'anthropic', 'com'].join('.');
 const CLIENT = 'packages/core/anthropic.ts';
+const CSP_PIN = 'apps/web/e2e/smoke.spec.ts';
+const CSP = `default-src 'self'; connect-src 'self' https://${HOST}; script-src 'self'; worker-src 'self'`;
 
 const posix = (p) => p.split(sep).join('/');
 
@@ -44,6 +47,7 @@ export default {
     if (file === CLIENT) return {};
     const checkText = (node, text) => {
       if (text === undefined || !text.toLowerCase().includes(HOST)) return;
+      if (file === CSP_PIN && node.type === 'Literal' && node.value === CSP) return;
       context.report({ node, messageId: 'host', data: { text: text.length > 60 ? `${text.slice(0, 57)}...` : text } });
     };
     const quasis = (node) => node.quasis.map((q) => q.value.cooked ?? q.value.raw).join('');
