@@ -18,7 +18,8 @@
 // the date string, a month ends on its last day rather than day 31, token search does not
 // match display text, and eq (or no prefix) means the resource range lies within the query
 // range (qlo <= lo and hi <= qhi) rather than overlapping it. Resources without a date sort
-// last on both date and -date.
+// last on both date and -date. One extension: a DiagnosticReport without an effective time is
+// dated by `issued`, as search_notes dates its rows; R4 reads effective only.
 import type { Resource } from '@medplum/fhirtypes';
 
 export class SearchError extends Error {
@@ -35,7 +36,8 @@ export interface SearchResult<T extends Resource = Resource> {
 
 type ParamDef =
   | { kind: 'token'; paths: readonly string[] }
-  | { kind: 'date'; paths: readonly string[] }
+  // fallback: read when the paths hold no value.
+  | { kind: 'date'; paths: readonly string[]; fallback?: readonly string[] }
   // patientOnly: the R4 expression ends in .where(resolve() is Patient).
   // bareId: the parameter has one target type, so a bare id names it.
   | { kind: 'reference'; paths: readonly string[]; patientOnly: boolean; bareId: boolean };
@@ -68,7 +70,7 @@ const PARAMS: Readonly<Record<string, Readonly<Record<string, ParamDef>>>> = {
   DiagnosticReport: {
     code: token('code'),
     category: token('category'),
-    date: date('effectiveDateTime', 'effectivePeriod'),
+    date: { kind: 'date', paths: ['effectiveDateTime', 'effectivePeriod'], fallback: ['issued'] },
     patient: patient('subject'),
     status: token('status'),
     subject: subject('subject'),
@@ -112,6 +114,13 @@ function valuesAt(resource: Json, path: string): unknown[] {
     nodes = next;
   }
   return nodes;
+}
+
+// The values a parameter reads from a resource: its paths, or a date's fallback paths when
+// those hold nothing.
+function paramValues(resource: Json, def: ParamDef): unknown[] {
+  const values = def.paths.flatMap((p) => valuesAt(resource, p));
+  return values.length === 0 && def.kind === 'date' && def.fallback ? def.fallback.flatMap((p) => valuesAt(resource, p)) : values;
 }
 
 // Splits a parameter value on commas not escaped with a backslash.
@@ -260,7 +269,7 @@ export function checkDates(resource: Resource): void {
   const params = Object.hasOwn(PARAMS, resource.resourceType) ? PARAMS[resource.resourceType]! : {};
   for (const def of Object.values(params)) {
     if (def.kind !== 'date') continue;
-    for (const path of def.paths) {
+    for (const path of [...def.paths, ...(def.fallback ?? [])]) {
       for (const v of valuesAt(resource as unknown as Json, path)) {
         const parts = typeof v === 'string' ? [v] : v !== null && typeof v === 'object' ? [(v as { start?: unknown }).start, (v as { end?: unknown }).end] : [];
         for (const part of parts) {
@@ -270,6 +279,14 @@ export function checkDates(resource: Resource): void {
       }
     }
   }
+}
+
+// The instant a resource sorts by on _sort=date: the start of its first date value, or
+// undefined when it has none or its type has no date parameter.
+export function sortStart(resource: Readonly<Resource>): number | undefined {
+  const params = Object.hasOwn(PARAMS, resource.resourceType) ? PARAMS[resource.resourceType]! : {};
+  const def = Object.hasOwn(params, 'date') ? params.date! : undefined;
+  return def ? rangesOf(paramValues(resource as unknown as Json, def))[0]?.[0] : undefined;
 }
 
 // ---- references ----
@@ -295,7 +312,7 @@ type Filter = (resource: Json) => boolean;
 
 function filterFor(resourceType: string, name: string, raws: string[], def: ParamDef): Filter {
   if (raws.length === 0 || raws.some((r) => r === '')) throw new SearchError(`${resourceType}?${name}: empty value`);
-  const values = (r: Json) => def.paths.flatMap((p) => valuesAt(r, p));
+  const values = (r: Json) => paramValues(r, def);
   switch (def.kind) {
     case 'token': {
       const ms = raws.map((raw) => tokenMatcher(name, raw));
@@ -355,7 +372,7 @@ export function search<T extends Resource>(resources: Iterable<Readonly<T>>, res
 
   if (sort) {
     const { def, descending } = sort;
-    const keyed = matches.map((r) => ({ r, key: rangesOf(def.paths.flatMap((p) => valuesAt(r as Json, p)))[0] }));
+    const keyed = matches.map((r) => ({ r, key: rangesOf(paramValues(r as Json, def))[0] }));
     const sign = descending ? -1 : 1;
     // Resources without a date go last whichever way the dated ones run.
     // Not a subtraction: open period bounds are infinite, and -Infinity - -Infinity is NaN.

@@ -242,7 +242,7 @@ describe('package tests run under Node', () => {
   const NODE_ONLY = "import { readFileSync } from 'node:fs';\nexport const t = Date.now() + readFileSync('x').length;\nexport const a = [1, , 3];";
 
   it('lets a package test use Node builtins, the clock and sparse arrays', async () => {
-    for (const path of ['packages/env/test/x.test.ts', 'packages/core/test/x.test.ts']) {
+    for (const path of ['packages/env/test/x.test.ts', 'packages/core/test/x.test.ts', 'packages/env/tools/test/x.test.ts']) {
       expect(await ruleIds(NODE_ONLY, path)).toEqual([]);
     }
   });

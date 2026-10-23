@@ -49,7 +49,7 @@ export default tseslint.config(
   // Package tests run only under Node (vitest), so they may use Node builtins and the clock,
   // and they build sparse arrays on purpose to check that holes are rejected.
   {
-    files: ['packages/*/test/**'],
+    files: ['packages/**/test/**'],
     rules: { 'local/isomorphic-imports': 'off', 'local/determinism': 'off', 'no-sparse-arrays': 'off' },
   },
   // eval and the Function constructor run code neither local rule can see, so shared code
