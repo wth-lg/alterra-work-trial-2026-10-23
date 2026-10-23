@@ -108,6 +108,9 @@ describe('RFC 8785 vectors', () => {
     expect(() => canonicalJson({ a: '\udc00x' })).toThrow(/surrogate/i);
     expect(() => canonicalJson([Number.NaN])).toThrow();
     expect(() => canonicalJson({ a: [undefined] })).toThrow();
+    // A hole is not JSON: [1,,3] would otherwise come out as the text '[1,,3]'.
+    // eslint-disable-next-line no-sparse-arrays
+    expect(() => canonicalJson({ a: [1, , 3] })).toThrow(/sparse/);
     expect(() => canonicalJson({ a: new Date(0) })).toThrow();
     expect(() => canonicalJson({ a: 1n })).toThrow();
     // Undefined object members are dropped, as JSON.stringify and canonicalize drop them.

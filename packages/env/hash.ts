@@ -19,7 +19,8 @@ function str(s: string): string {
 }
 
 // RFC 8785 canonical JSON. Refuses anything without one exact JSON form (NaN, Infinity,
-// bigint, undefined in an array, class instances) instead of coercing it. Object members whose
+// bigint, undefined in an array, a hole in a sparse array, class instances) instead of
+// coercing it. Object members whose
 // value is undefined are dropped, as JSON.stringify drops them.
 export function canonicalJson(value: unknown): string {
   switch (typeof value) {
@@ -32,7 +33,15 @@ export function canonicalJson(value: unknown): string {
       return value ? 'true' : 'false';
     case 'object': {
       if (value === null) return 'null';
-      if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+      if (Array.isArray(value)) {
+        // map() skips holes, which would leave '[1,,3]'.
+        const items: string[] = [];
+        for (let i = 0; i < value.length; i++) {
+          if (!(i in value)) throw new Error(`canonical JSON: sparse array, no element at index ${i}`);
+          items.push(canonicalJson(value[i]));
+        }
+        return `[${items.join(',')}]`;
+      }
       const proto = Object.getPrototypeOf(value);
       if (proto !== Object.prototype && proto !== null) throw new Error('canonical JSON: not a plain object');
       const obj = value as Record<string, unknown>;
