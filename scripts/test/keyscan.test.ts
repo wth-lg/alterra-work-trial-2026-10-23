@@ -1,5 +1,6 @@
 import { symlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { commitFile, fakeKey, git, runScript, tempDir, tempRepo, write } from './helpers.ts';
 
@@ -63,6 +64,36 @@ describe('keyscan working tree and build output', () => {
     const repo = tempRepo();
     write(repo, 'env.txt', Buffer.from(`\ufeffKEY=${fakeKey('I')}\n`, 'utf16le'));
     expectHit(keyscan(repo), 'env.txt:1', fakeKey('I'));
+  });
+
+  it('flags a key inside a gzip file, by its decompressed line', () => {
+    const repo = tempRepo();
+    commitFile(repo, 'fixtures/world.ndjson.gz', gzipSync(`{"resourceType":"Patient","id":"pt-1"}\n{"note":"${fakeKey('M')}"}\n`));
+    expectHit(keyscan(repo), 'fixtures/world.ndjson.gz(gunzip):2', fakeKey('M'));
+  });
+
+  it('flags a key inside a gzip file in build output', () => {
+    const repo = tempRepo();
+    write(repo, 'apps/web/dist/data/world.ndjson.gz', gzipSync(`${fakeKey('N')}\n`));
+    expectHit(keyscan(repo), 'apps/web/dist/data/world.ndjson.gz(gunzip):1', fakeKey('N'));
+  });
+
+  it('flags a key inside a base64 attachment data field, plain or gzipped', () => {
+    const repo = tempRepo();
+    const data = Buffer.from(`Note for the chart. ${fakeKey('O')}`).toString('base64');
+    const line = `{"resourceType":"DocumentReference","id":"doc-1","content":[{"attachment":{"contentType":"text/plain","data":"${data}"}}]}\n`;
+    write(repo, 'tasks/x/notes.ndjson', `{}\n${line}`);
+    expectHit(keyscan(repo), 'tasks/x/notes.ndjson:2(base64)', fakeKey('O'));
+    const gz = tempRepo();
+    write(gz, 'apps/web/dist/data/world.ndjson.gz', gzipSync(line));
+    expectHit(keyscan(gz), 'apps/web/dist/data/world.ndjson.gz(gunzip):1(base64)', fakeKey('O'));
+  });
+
+  it('passes a gzip file and base64 data that hold no key', () => {
+    const repo = tempRepo();
+    const data = Buffer.from('nothing secret here at all').toString('base64');
+    write(repo, 'apps/web/dist/data/world.ndjson.gz', gzipSync(`{"attachment":{"data":"${data}"}}\n`));
+    expect(keyscan(repo).status).toBe(0);
   });
 
   it('fails on a symlink in dist that points outside dist, since the Pages upload dereferences it', () => {

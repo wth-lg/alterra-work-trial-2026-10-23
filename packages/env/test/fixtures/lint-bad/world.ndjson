@@ -1,0 +1,2 @@
+{"resourceType":"Patient","id":"pt-t1-bad","gender":"male","birthDate":"1944-03-11"}
+{"resourceType":"Observation","id":"obs-t1-scr-bad","status":"final","code":{"coding":[{"system":"http://loinc.org","code":"2160-0","display":"Creatinine [Mass/volume] in Serum or Plasma"}]},"subject":{"reference":"Patient/pt-t1-bad"},"effectiveDateTime":"2026-10-20T09:15:00-04:00","valueQuantity":{"value":1.42,"unit":"mg/dL","system":"http://unitsofmeasure.org","code":"mg/dL"}}
