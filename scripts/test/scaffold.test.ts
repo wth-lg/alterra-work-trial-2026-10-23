@@ -15,7 +15,6 @@ describe('package.json scripts', () => {
 
   // Script names later phases' gates run, declared now so only their bodies change later.
   it.each([
-    ['fixtures:lint', 'P4'],
     ['live:node', 'P2'],
   ])('declares %s as a placeholder that names %s and exits 1', (name, phase) => {
     expect(Object.keys(scripts)).toContain(name);
