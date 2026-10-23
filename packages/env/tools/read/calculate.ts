@@ -36,7 +36,10 @@ const finite = (x: number, what: string) => {
 function round(x: number, digits: number): number {
   if (!Number.isInteger(digits) || digits < 0 || digits > 12) throw fail('round digits must be an integer from 0 to 12');
   const f = 10 ** digits;
-  return (Math.sign(x) * Math.round(Number((Math.abs(x) * f).toPrecision(15)))) / f;
+  const scaled = Math.abs(x) * f;
+  // Past the scale where scaling overflows, x has no fraction digits left to round.
+  if (!Number.isFinite(scaled)) return x;
+  return (Math.sign(x) * Math.round(Number(scaled.toPrecision(15)))) / f;
 }
 
 const FUNCTIONS: Record<string, { min: number; max: number; f: (...a: number[]) => number }> = {
