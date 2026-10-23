@@ -567,7 +567,7 @@ describe('server tools and server-billed features are rejected before reserve or
   });
 });
 
-// P2 final fix round (pr-review-P2-9 defect 1): each test below fails at 9b3d4b9.
+// P2 final fix round (pr-review-P2-9 defects 1 and 2): each test below fails at 9b3d4b9.
 describe('the claim and the guard read a Request from its internal slots', () => {
   it('claimOutbound refuses a client Request whose headers were edited behind an own headers property', async () => {
     const claims: boolean[] = [];
@@ -582,5 +582,11 @@ describe('the claim and the guard read a Request from its internal slots', () =>
     expect(claims).toEqual([false]);
   });
 
+  it('the client Request is sent with redirect: error, so a redirect cannot move it to another host', async () => {
+    const redirects: string[] = [];
+    const t = await client([], { fetch: (async (req: Request) => (redirects.push(req.redirect), ok()())) as Transport });
+    await t.c.send(user(), PARAMS);
+    expect(redirects).toEqual(['error']);
+  });
 });
 

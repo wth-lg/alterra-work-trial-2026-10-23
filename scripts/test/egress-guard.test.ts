@@ -113,6 +113,13 @@ export async function go(apiKey) {
   await grant.close();
   throw new TypeError(errors.join(' | '));
 }`,
+  // pr-review-P2-9 defect 2: a dispatcher in init would pick the host below the guard.
+  'v-dispatcher-init': `const dispatcher = { dispatch: () => { throw new Error('dispatcher used'); } };
+export async function go() {
+  await fetch('https://example.test/v1/messages', { ...${POST}, dispatcher });
+  await fetch(new Request('https://example.test/v1/messages', ${POST}), { dispatcher });
+  await fetch('https://example.test/v1/messages', Object.create({ dispatcher }));
+}`,
 };
 
 const RUNNER = `
@@ -190,7 +197,7 @@ describe('the egress guard refuses every send to the API host that MessagesClien
     expect(out.plants['l-to-string-swap']).toEqual({ sends: [{ api: 'fetch', host: 'example.org' }], error: null });
   });
 
-  const MIXED = ['o-hook-multisend', 'l-to-string-swap', 'u-transport-copies'];
+  const MIXED = ['o-hook-multisend', 'l-to-string-swap', 'u-transport-copies', 'v-dispatcher-init'];
   it.each(names.filter((n) => !MIXED.includes(n)))('%s: refused, 0 sends', (name) => {
     const p = out.plants[name];
     expect(p?.sends).toEqual([]);
@@ -211,6 +218,10 @@ describe('the egress guard refuses every send to the API host that MessagesClien
     for (const e of p?.error?.split(' | ') ?? []) expect(e).toMatch(/egress guard/);
   });
 
+  it('v-dispatcher-init: a dispatcher key in init, own or inherited, is dropped, so the checked host is the one contacted', () => {
+    const sent = { api: 'fetch', host: 'example.test' };
+    expect(out.plants['v-dispatcher-init']).toEqual({ sends: [sent, sent, sent], error: null });
+  });
 
   it('a MessagesClient call through the guarded global fetch still passes, once', () => {
     expect(out.client).toEqual({ status: 200, sends: [{ api: 'fetch', host: HOST }] });
@@ -245,5 +256,40 @@ describe('entry points install the guard before anything else runs', () => {
     expect(r.stdout).toContain('status 200');
     expect(/SENDS (.*)/.exec(r.stderr)?.[1]).toBe(`${JSON.stringify([{ api: 'fetch', host: HOST }])} WRAPPED true`);
     expect(r.status).toBe(1); // the stubbed reply has no tool_use
+  });
+});
+
+describe('Node fetch never sees a dispatcher the caller passed', () => {
+  // Real fetch against a local server: a dispatcher in init would route the request below the
+  // guard. Guard off is the control: the same call reaches the dispatcher.
+  const CHILD = `
+import { createServer } from 'node:http';
+const hits = [];
+const srv = createServer((req, res) => { hits.push(req.url); res.end('ok'); });
+await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+const used = [];
+const dispatcher = { dispatch: () => { used.push('dispatch'); throw new Error('dispatcher used'); } };
+if (process.env.GUARD === '1') (await import(process.env.EGRESS_MODULE)).installEgressGuard(globalThis);
+let error = null;
+try { await (await fetch('http://127.0.0.1:' + srv.address().port + '/x', { dispatcher })).text(); } catch (e) { error = e.message; }
+srv.close();
+process.stdout.write(JSON.stringify({ hits, used, error }));
+`;
+  const runChild = (guard: boolean) => {
+    const dir = tempDir('egress-dispatcher');
+    write(dir, 'child.mjs', CHILD);
+    const r = spawnSync(process.execPath, [join(dir, 'child.mjs')], {
+      encoding: 'utf8', env: { PATH: process.env.PATH ?? '', GUARD: guard ? '1' : '0', EGRESS_MODULE: repo('packages/core/egress.ts') },
+    });
+    if (r.status !== 0) throw new Error(`child exited ${r.status}: ${r.stderr}`);
+    return JSON.parse(r.stdout) as { hits: string[]; used: string[]; error: string | null };
+  };
+
+  it('guard on: the request goes through the global dispatcher to the host fetch was given', () => {
+    expect(runChild(true)).toEqual({ hits: ['/x'], used: [], error: null });
+  });
+
+  it('control, guard off: the passed dispatcher is used', () => {
+    expect(runChild(false).used).toEqual(['dispatch']);
   });
 });

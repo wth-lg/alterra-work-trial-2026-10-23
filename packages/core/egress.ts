@@ -3,7 +3,8 @@
 // request whose WHATWG-parsed host is an API host (isApiHost in anthropic.ts: %2E, IDNA dots,
 // case, templates and joins all resolve to it) unless it is the Request MessagesClient registered
 // for the call in flight, sent once, unchanged and with no init (claimOutbound). A Request's URL
-// and headers are read from its internal slots (requestUrl). XMLHttpRequest,
+// and headers are read from its internal slots (requestUrl), and a dispatcher is dropped from
+// any init it forwards. XMLHttpRequest,
 // WebSocket, EventSource and navigator.sendBeacon, where present, are refused for those hosts
 // outright: the client never uses them. A URL is resolved once and the resolved string is what
 // gets sent, so an object whose toString answers differently the second time sends nothing new.
@@ -52,6 +53,15 @@ function checked(api: string, input: unknown): string {
   return url.href;
 }
 
+// The init to forward: a copy of its own properties without dispatcher, which in Node would pick
+// the connection below the guard. An inherited dispatcher is not copied either.
+function forwardInit(init: RequestInit | undefined): RequestInit | undefined {
+  if (typeof init !== 'object' || init === null) return init;
+  const copy: Record<string, unknown> = { ...init };
+  delete copy.dispatcher;
+  return copy;
+}
+
 function lock(target: object, key: string, value: unknown): void {
   Object.defineProperty(target, key, { value, writable: false, configurable: false, enumerable: false });
 }
@@ -73,9 +83,9 @@ export function installEgressGuard(scope: object): void {
         if (href !== null) {
           const url = resolveUrl(href);
           if (url !== null && isApiHost(url.hostname) && !claimOutbound(input, init)) throw refused('fetch', url);
-          return raw.call(scope, input, init);
+          return raw.call(scope, input, forwardInit(init));
         }
-        return raw.call(scope, checked('fetch', input), init);
+        return raw.call(scope, checked('fetch', input), forwardInit(init));
       } catch (e) {
         return Promise.reject(e);
       }

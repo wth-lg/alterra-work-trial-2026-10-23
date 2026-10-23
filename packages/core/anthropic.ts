@@ -25,10 +25,15 @@
 // residual: a transport written to fabricate a response (say, a 200 with zero usage) after its
 // one real send; the client settles what the response reports. The guard and the claim read a
 // Request from its internal slots (requestUrl, headerSig), never from properties a caller can
-// shadow. Also out of scope: Node's
-// http, https, http2, net and tls modules, which the guard does not wrap (lint still flags a
-// literal API host passed to them), and a request that reaches the API under another name (an
-// IP address, a DNS alias, a proxy or a redirect), since the guard matches the URL's host.
+// shadow, and the guard drops a dispatcher from any init it forwards. Also out of scope,
+// documented residuals the guard does not see:
+//   - Node's http, https, http2, net and tls modules, including through
+//     process.getBuiltinModule('node:https') (lint still flags a literal API host passed to them)
+//   - a swapped global undici dispatcher (the globalDispatcher symbol), under every fetch
+//   - other realms with their own fetch: node:worker_threads, browser Workers and iframes
+//   - a fetch reference a module captured before its entry point ran installEgressGuard
+//   - a request that reaches the API under another name: an IP-literal host, a DNS alias, a
+//     proxy, or a redirect from another host (the client's own Request sets redirect: 'error')
 import type { Usage } from './cost.ts';
 import { assertClientGrant, type BatchGrant, type Ledger, type ReserveRequest } from './ledger.ts';
 import { redactText } from './redact.ts';
@@ -363,7 +368,8 @@ async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
 // as thrown for a network failure. MessagesClient.send is its only caller. The transport gets
 // the registered Request and nothing else, and the registration ends when it returns.
 async function sendOnce(f: Transport, apiKey: string, body: string, signal?: AbortSignal): Promise<{ status: number; message: Message }> {
-  const request = new Request(MESSAGES_URL, { method: 'POST', headers: requestHeaders(apiKey), body, ...(signal ? { signal } : {}) });
+  // redirect: 'error', so the host the guard checked is the only host the request reaches.
+  const request = new Request(MESSAGES_URL, { method: 'POST', headers: requestHeaders(apiKey), body, redirect: 'error', ...(signal ? { signal } : {}) });
   outbound.set(request, headerSig(request));
   let res: Response;
   try {
