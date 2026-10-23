@@ -6,7 +6,8 @@
 // stop reason and the parsed tool_use. Exit 0 only on status 200 with that tool_use.
 import { pathToFileURL } from 'node:url';
 import { money, usageCostUsd, worstCaseUsd } from '../packages/core/cost.ts';
-import { MessagesClient } from '../packages/core/anthropic.ts';
+import { MessagesClient, type Transport } from '../packages/core/anthropic.ts';
+import { installEgressGuard } from '../packages/core/egress.ts';
 import { redactText } from '../packages/core/redact.ts';
 import { openNodeLedger } from '../cli/adapters/ledger-node.ts';
 import { PROBE_PARAMS, PROBE_TOOL, probeHistory, probeReserveRequest } from '../apps/web/src/probe/request.ts';
@@ -19,11 +20,11 @@ export function projection(): number {
 
 export interface Deps {
   env: Record<string, string | undefined>;
-  fetch: typeof fetch;
+  fetch: Transport;
   out: (line: string) => void;
 }
 
-const defaults: Deps = { env: process.env, fetch: (input, init) => fetch(input, init), out: (l) => process.stdout.write(`${l}\n`) };
+const defaults: Deps = { env: process.env, fetch: (request) => fetch(request), out: (l) => process.stdout.write(`${l}\n`) };
 
 export async function main(args: string[], deps: Deps = defaults): Promise<number> {
   const unknown = args.filter((a) => a !== '--dry-run');
@@ -66,6 +67,9 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   }
 }
 
+// Run as a script, it installs the egress guard before anything else; imported (by tests), it
+// leaves the importer's globals alone.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  installEgressGuard(globalThis);
   process.exitCode = await main(process.argv.slice(2));
 }

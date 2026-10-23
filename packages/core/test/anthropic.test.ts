@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeKey, tempDir, write } from '../../../scripts/test/helpers.ts';
 import { main as liveNode, projection as liveNodeProjection } from '../../../scripts/live-node.ts';
 import * as anthropic from '../anthropic.ts';
-import { ApiError, MessagesClient, type MessageParam } from '../anthropic.ts';
+import { ApiError, MessagesClient, type MessageParam, type Transport } from '../anthropic.ts';
 import { admitStore, createLedger, SpendRefused, type BatchGrant, type Ledger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 
 class MemoryStore implements LedgerStore {
@@ -32,10 +32,13 @@ function setup() {
 
 type Step = () => Response | Promise<Response>;
 
+// The client hands its transport one Request; the mock records what that Request would send.
 function mockFetch(steps: Step[]) {
-  const calls: Array<{ url: string; init: RequestInit }> = [];
-  const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(url), init: init ?? {} });
+  const calls: Array<{ url: string; init: { headers: Record<string, string>; body: string }; args: number; request: boolean }> = [];
+  const fetch = (async (...args: unknown[]) => {
+    const [input, init] = args as [string | URL | Request, RequestInit | undefined];
+    const req = input instanceof Request ? input : new Request(input, init);
+    calls.push({ url: req.url, init: { headers: Object.fromEntries(req.headers), body: await req.text() }, args: args.length, request: input instanceof Request });
     const step = steps.shift();
     if (step === undefined) throw new Error('unexpected fetch');
     return step();
@@ -89,7 +92,7 @@ const partial = (how: 'eof' | 'error' | 'overloaded'): Step => () => {
 const PARAMS = { max_tokens: 1024, output_config: { effort: 'low' } };
 const user = (): MessageParam[] => [{ role: 'user', content: 'hello' }];
 
-async function client(steps: Step[], opts: { setupLedger?: ReturnType<typeof setup>; projection?: number; fetch?: typeof fetch; maxAttempts?: number } = {}) {
+async function client(steps: Step[], opts: { setupLedger?: ReturnType<typeof setup>; projection?: number; fetch?: Transport; maxAttempts?: number } = {}) {
   const s = opts.setupLedger ?? setup();
   const grant = await s.ledger.batchStart(opts.projection ?? 1);
   const m = mockFetch(steps);
@@ -319,7 +322,7 @@ describe('pnpm live:node refuses before any call', () => {
 // P2 fix round (findings p2-findings-1): each test below failed at 63259f5.
 describe('MessagesClient is the only way to send', () => {
   it('exports only the metered client, its error and pure helpers', () => {
-    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'reserveRequest']);
+    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'isApiHost', 'reserveRequest']);
   });
 
   it('no exported function sends without a grant', async () => {
@@ -478,3 +481,43 @@ describe('the probe page transport', () => {
     expect(new URL(seen.url ?? '').pathname).toBe('/v1/messages');
   });
 });
+
+// P2 second fix round (pr-review-P2-7 defect 2): each test below fails at 6e517a9.
+describe('the transport gets one single-use Request', () => {
+  it('is called with exactly one argument, a Request that carries the URL, headers and body', async () => {
+    const t = await client([ok()]);
+    await t.c.send(user(), PARAMS);
+    expect(t.calls.map((c) => [c.args, c.request])).toEqual([[1, true]]);
+  });
+
+  it('claimOutbound admits a client Request once, and never a copy, a clone, a mutated one, one with an init or one kept past its call', async () => {
+    const claims: boolean[][] = [];
+    const plans: Array<(req: Request) => boolean[]> = [
+      (req) => [anthropic.claimOutbound(req.clone()), anthropic.claimOutbound(req), anthropic.claimOutbound(req)],
+      // a copy takes the body, so the original cannot be claimed after it either
+      (req) => [anthropic.claimOutbound(new Request(req)), anthropic.claimOutbound(req)],
+      (req) => [anthropic.claimOutbound(req, { body: '{}' }), anthropic.claimOutbound(req)],
+      (req) => (req.headers.set('anthropic-beta', 'x'), [anthropic.claimOutbound(req)]),
+      () => [],
+    ];
+    let kept: Request | undefined;
+    const t = await client([], { fetch: (async (req: Request) => (kept = req, claims.push(plans[claims.length]?.(req) ?? []), ok()())) as Transport });
+    for (let i = 0; i < plans.length; i++) await t.c.send(user(), PARAMS);
+    expect(claims).toEqual([[false, true, false], [false, false], [false, false], [false], []]);
+    expect(anthropic.claimOutbound(kept)).toBe(false);
+  });
+
+  it('isApiHost matches the API host however the URL spells it', () => {
+    for (const u of ['https://api%2Eanthropic%2Ecom/v1', 'https://API%2EANTHROPIC.COM./v1', 'https://api\u3002anthropic\u3002com/']) expect(anthropic.isApiHost(new URL(u).hostname)).toBe(true);
+    for (const u of ['https://example.org/', 'https://anthropic.com.example.org/']) expect(anthropic.isApiHost(new URL(u).hostname)).toBe(false);
+  });
+
+  it('the probe relay refuses a Request the client did not make', async () => {
+    const { relayFetch } = await import('../../../apps/web/src/probe/transport.ts');
+    let sent = 0;
+    const f = relayFetch(async () => (sent++, { status: 200, headers: {}, body: '' }));
+    await expect(f(new Request('https://example.org/v1/messages', { method: 'POST', body: '{}' }))).rejects.toThrow(/MessagesClient/);
+    expect(sent).toBe(0);
+  });
+});
+

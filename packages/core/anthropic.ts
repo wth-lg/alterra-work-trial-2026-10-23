@@ -1,7 +1,10 @@
 // The one raw Messages client, for the browser and Node: fetch, SSE streaming, retries,
 // refusal and model checks. It is the only file that names the API host (lint:
 // no-direct-anthropic), and MessagesClient is the only way to send: the URL, headers and body
-// builders stay private to this module. A client is built only from a live BatchGrant
+// builders stay private to this module. Each attempt is one Request, registered here just
+// before the client hands it to its transport and unregistered when the transport returns;
+// the egress guard (egress.ts) refuses any request to the API host but a registered one, once,
+// unchanged. A client is built only from a live BatchGrant
 // (assertClientGrant), and every attempt reserves its worst case under the ledger lock before
 // fetch and settles after:
 //   HTTP error status        settled at $0: the API bills no error response
@@ -14,6 +17,16 @@
 // closes the grant, which stops every client of the batch; any other 4xx fails the call
 // only. Headers are never logged, and the key is redacted from every log line and error
 // message.
+//
+// Threat model: these checks guard against accidental unmetered or under-metered calls by code
+// in this repo: a send that skips MessagesClient (refused by the egress guard where an entry
+// point installed it), a transport that resends or edits the client's Request (refused), a
+// request the cost model cannot bound (rejected before reserve). Out of scope, as a documented
+// residual: a transport written to fabricate a response (say, a 200 with zero usage) after its
+// one real send; the client settles what the response reports. Also out of scope: Node's
+// http, https, http2, net and tls modules, which the guard does not wrap (lint still flags a
+// literal API host passed to them), and a request that reaches the API under another name (an
+// IP address, a DNS alias, a proxy or a redirect), since the guard matches the URL's host.
 import type { Usage } from './cost.ts';
 import { assertClientGrant, type BatchGrant, type Ledger, type ReserveRequest } from './ledger.ts';
 import { redactText } from './redact.ts';
@@ -25,6 +38,34 @@ export const MAX_ATTEMPTS = 4;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 const RETRY_AFTER_MAX_MS = 60_000;
+
+const API_HOST = new URL(MESSAGES_URL).hostname;
+const API_DOMAIN = API_HOST.slice(API_HOST.indexOf('.') + 1);
+
+// Whether a WHATWG-parsed hostname is the API host or any other host of its domain. Parsing
+// has already decoded %2E, mapped IDNA dots and lower-cased it; a trailing dot names the same
+// DNS host.
+export function isApiHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/\.+$/, '');
+  return h === API_DOMAIN || h.endsWith(`.${API_DOMAIN}`);
+}
+
+// Requests the client has handed to its transport and not yet seen return, each with the
+// header set it was built with. Only sendOnce adds to it.
+const outbound = new WeakMap<Request, string>();
+const headerSig = (h: Headers) => JSON.stringify([...h]);
+
+// For the egress guard and the probe relay: true once for a Request the client registered, if
+// it comes with no init (which could swap its body or headers), its headers are the ones it was
+// built with and its body is unread. Any claim ends the registration, so a second fetch of the
+// same Request, a copy or a clone is refused.
+export function claimOutbound(request: unknown, init?: unknown): boolean {
+  if (!(request instanceof Request)) return false;
+  const sig = outbound.get(request);
+  if (sig === undefined) return false;
+  outbound.delete(request);
+  return init === undefined && !request.bodyUsed && headerSig(request.headers) === sig;
+}
 
 export interface ContentBlock {
   type: string;
@@ -275,19 +316,31 @@ async function readStream(body: ReadableStream<Uint8Array>): Promise<Message> {
 }
 
 // One request, no ledger: an ApiError for an HTTP error or a broken stream, the fetch error
-// as thrown for a network failure. MessagesClient.send is its only caller.
-async function sendOnce(f: typeof fetch, apiKey: string, body: string, signal?: AbortSignal): Promise<{ status: number; message: Message }> {
-  const res = await f(MESSAGES_URL, { method: 'POST', headers: requestHeaders(apiKey), body, ...(signal ? { signal } : {}) });
+// as thrown for a network failure. MessagesClient.send is its only caller. The transport gets
+// the registered Request and nothing else, and the registration ends when it returns.
+async function sendOnce(f: Transport, apiKey: string, body: string, signal?: AbortSignal): Promise<{ status: number; message: Message }> {
+  const request = new Request(MESSAGES_URL, { method: 'POST', headers: requestHeaders(apiKey), body, ...(signal ? { signal } : {}) });
+  outbound.set(request, headerSig(request.headers));
+  let res: Response;
+  try {
+    res = await f(request);
+  } finally {
+    outbound.delete(request);
+  }
   if (res.status !== 200) throw await errorStatus(res);
   if (!res.body) throw broken('HTTP 200 without a body');
   return { status: res.status, message: await readStream(res.body) };
 }
 
+// What the client sends through: the global fetch by default. A transport receives one Request
+// per attempt and may send it once (the egress guard refuses a second send, a copy or an edit).
+export type Transport = (request: Request) => Promise<Response>;
+
 export interface ClientOptions {
   grant: BatchGrant;
   ledger: Ledger;
   apiKey: string;
-  fetch?: typeof fetch;
+  fetch?: Transport;
   sleep?: (ms: number) => Promise<void>;
   // One line per attempt and outcome; never headers, never the key.
   log?: (line: string) => void;
@@ -306,7 +359,7 @@ export interface CallResult {
 export class MessagesClient {
   readonly #grant: BatchGrant;
   readonly #apiKey: string;
-  readonly #fetch: typeof fetch;
+  readonly #fetch: Transport;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #log: (line: string) => void;
   readonly #trial: string | undefined;
@@ -322,7 +375,7 @@ export class MessagesClient {
     }
     this.#grant = opts.grant;
     this.#apiKey = opts.apiKey;
-    this.#fetch = opts.fetch ?? ((input, init) => fetch(input, init));
+    this.#fetch = opts.fetch ?? ((request) => fetch(request));
     this.#sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.#log = (line) => opts.log?.(redactText(line, [opts.apiKey]));
     this.#trial = opts.trial;

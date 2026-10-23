@@ -5,6 +5,10 @@
 import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { installEgressGuard } from '../packages/core/egress.ts';
+
+// Before any command loads: a command can only reach the API through MessagesClient.
+installEgressGuard(globalThis);
 
 type Command = (args: string[]) => number | void | Promise<number | void>;
 
