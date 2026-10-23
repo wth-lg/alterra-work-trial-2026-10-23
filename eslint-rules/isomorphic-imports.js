@@ -64,10 +64,9 @@ export default {
           const parent = node.parent;
           if (parent.type === 'MemberExpression' && parent.object === node && propertyName(parent) !== undefined) continue;
           const keys = destructuredKeys(node);
-          const hit = keys?.find((k) => k === undefined || BANNED_GLOBALS.has(k));
-          if (keys && hit === undefined && !keys.includes(undefined)) continue;
+          const hit = keys?.find((k) => k !== undefined && BANNED_GLOBALS.has(k));
           if (hit) report(identifier, hit);
-          else context.report({ node, messageId: 'globalObject', data: { name } });
+          else if (!keys || keys.includes(undefined)) context.report({ node, messageId: 'globalObject', data: { name } });
         }
       },
     };

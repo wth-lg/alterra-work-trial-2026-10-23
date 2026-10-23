@@ -90,7 +90,7 @@ jobs:
       'pages: write in a job that does not deploy',
       PAGES.replace('  build:\n    runs-on: ubuntu-latest\n', '  build:\n    runs-on: ubuntu-latest\n    permissions:\n      pages: write\n'),
     ],
-    ['write-all', PAGES.replace('  contents: read\n', '  contents: read\n').replace('permissions:\n  contents: read', 'permissions: write-all')],
+    ['write-all', PAGES.replace('permissions:\n  contents: read', 'permissions: write-all')],
   ])('fails on %s', (_name, workflow) => {
     const r = guard(workflow);
     expect(r.status).toBe(1);
