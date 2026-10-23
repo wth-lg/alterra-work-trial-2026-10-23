@@ -1,0 +1,8 @@
+{
+  "name": "@riverbend/core",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "smol-toml": "1.9.1"
+  }
+}
