@@ -43,6 +43,11 @@ function seed(path: string, rows: LedgerRow[]): void {
   writeFileSync(path, rows.map((r) => JSON.stringify(r) + '\n').join(''));
 }
 
+// A ledger with a long history: 10,000 settled rows that sum to `usd`.
+function history(usd: number): LedgerRow[] {
+  return Array.from({ length: 10_000 }, (_, i) => settleRow(usd / 10_000, `seed-${i}`));
+}
+
 // One batch with one completed call, as a live entrypoint makes it.
 const ONE_CALL = `
 const { ledger } = L.openNodeLedger({ transport: 'live' });
@@ -120,35 +125,28 @@ describe('cross-process caps', () => {
   it('4 concurrent processes near $500 never take settled + reserved past $500 (case 6)', async () => {
     const root = tempDir('ledger-c6');
     const path = join(root, 'spend.jsonl');
-    seed(path, [settleRow(499, 'seed')]);
+    seed(path, history(499.98));
+    // All four reserve $0.01 in the same millisecond and 2 fit. Each reads a long ledger
+    // before it appends, so without the lock all four see room and all four append.
     const start = Date.now() + 1500;
-    // Each child tries 50 reservations of $0.01; only 100 fit under the cap.
     const code = `
 const { ledger } = L.openNodeLedger({ transport: 'live' });
 while (Date.now() < ${start}) {}
-let ok = 0, refused = 0;
-for (let i = 0; i < 50; i++) {
-  try { await ledger.reserve({ bodyBytes: 0, maxTokens: 500 }); ok++; }
-  catch (e) { if (e.name !== 'SpendRefused') throw e; refused++; }
-}
-console.log(JSON.stringify({ ok, refused }));
+try { await ledger.reserve({ bodyBytes: 0, maxTokens: 500 }); console.log('ok'); }
+catch (e) { if (e.name !== 'SpendRefused') throw e; console.log('refused'); }
 `;
     const env = envFor(join(root, 'home'), { SPEND_LEDGER: path });
     const results = await Promise.all([0, 1, 2, 3].map(() => child(code, env, root)));
-    const counts = results.map((r) => {
-      expect(r.err).toBe('');
-      return JSON.parse(r.out) as { ok: number; refused: number };
-    });
+    for (const r of results) expect(r.err).toBe('');
     const t = totals(readRows(path));
     expect(t.settled + t.reserved).toBeLessThanOrEqual(500 + 1e-9);
-    expect(counts.reduce((s, c) => s + c.ok, 0)).toBe(100);
-    expect(counts.reduce((s, c) => s + c.refused, 0)).toBe(100);
+    expect(results.map((r) => r.out.trim()).sort()).toEqual(['ok', 'ok', 'refused', 'refused']);
   });
 
   it('exactly one of two concurrent batchStart(300) gets a grant; a killed batch counts until spend --close (case 12)', async () => {
     const root = tempDir('ledger-c12');
     const path = join(root, 'spend.jsonl');
-    seed(path, [settleRow(100, 'seed')]);
+    seed(path, history(100));
     const start = Date.now() + 1500;
     const code = `
 const { ledger } = L.openNodeLedger({ transport: 'live' });
