@@ -27,18 +27,20 @@
 // residual: a transport written to fabricate a response (say, a 200 with zero usage) after its
 // one real send; the client settles what the response reports. The guard and the claim read a
 // Request from its internal slots (requestUrl, headerSig), never from properties a caller can
-// shadow, and the guard drops a dispatcher from any init it forwards. Lint
-// (no-direct-dispatcher) keeps every file but egress.ts from reaching undici's global
-// dispatcher (the undici.globalDispatcher symbols, by Symbol.for or by listing global symbols),
-// from importing or requiring undici and from calling process.getBuiltinModule. Also out of
-// scope, documented residuals neither the guard nor lint sees:
+// shadow, and the guard replaces a dispatcher in any init it forwards with its own. In Node the
+// guard also holds undici's global dispatcher slots: a locked dispatcher there refuses the API
+// host by every method, however the code reached the slot, so a swap of the slot, a redirect
+// hop to the API host and a fetch with no dispatcher of its own all meet it. Lint
+// (no-direct-dispatcher) is a second layer: it keeps every file but egress.ts from reaching
+// those slots, from importing or requiring undici and from calling process.getBuiltinModule.
+// Also out of scope, documented residuals neither the guard nor lint sees:
 //   - other realms with their own fetch: node:worker_threads, browser Workers and iframes
-//   - a fetch reference a module captured before its entry point ran installEgressGuard
-//   - a request that reaches the API under another name: an IP-literal host, a DNS alias, a
-//     proxy, or a redirect from another host (the client's own Request sets redirect: 'error')
-//   - a global dispatcher swapped or called at runtime by code lint cannot read: a name built
-//     at runtime on an alias of globalThis, eval, new Function, node:vm, a --import preload
-//   - Node's http, https, http2, net and tls modules imported by name (lint still flags a
+//   - a fetch or dispatcher reference a module captured before its entry point ran
+//     installEgressGuard (in Node a captured fetch still meets the guarded dispatcher unless
+//     it is handed a dispatcher captured then)
+//   - a request that reaches the API under another name: an IP-literal host, a DNS alias or a
+//     proxy
+//   - Node's http, https, http2, net and tls modules with a host built at runtime (lint flags a
 //     literal API host passed to them)
 import type { Usage } from './cost.ts';
 import { assertClientGrant, type BatchGrant, type Ledger, type ReserveRequest } from './ledger.ts';
