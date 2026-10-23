@@ -202,6 +202,42 @@ describe('isomorphic-imports bans every Node builtin', () => {
   });
 });
 
+describe('determinism catches Intl clock reads', () => {
+  it.each([
+    "export const s = new Intl.DateTimeFormat('en-US').format();",
+    'export const s = Intl.DateTimeFormat().format();',
+    "export const p = new Intl.DateTimeFormat('en-US').formatToParts();",
+    'export const s = Intl.DateTimeFormat().format(undefined);',
+    "export const s = globalThis.Intl.DateTimeFormat('en-US').format();",
+    "const f = new Intl.DateTimeFormat('en-US'); export const s = f.format();",
+    "const f = Intl.DateTimeFormat('en-US'); export const p = f.formatToParts();",
+    'export const d = new Date(...([] as []));',
+  ])('flags %s', async (code) => {
+    expect(await ruleIds(code, 'packages/env/a.ts')).toContain(DET);
+  });
+  it.each([
+    "export const s = new Intl.DateTimeFormat('en-US').format(0);",
+    "const f = new Intl.DateTimeFormat('en-US'); export const s = f.formatToParts(new Date(0));",
+    "export const n = new Intl.NumberFormat('en-US').format(1);",
+    "export const l = Intl.DateTimeFormat.supportedLocalesOf(['en-US']);",
+  ])('allows %s', async (code) => {
+    expect(await ruleIds(code, 'packages/env/a.ts')).not.toContain(DET);
+  });
+});
+
+describe('string evaluation is banned in shared code', () => {
+  it.each([
+    ["export const t = eval('Date.now()');", 'no-eval'],
+    ["export const t = Function('return Date.now()')();", 'no-new-func'],
+    ["export const f = new Function('return 1');", 'no-new-func'],
+    ["setTimeout('Date.now()', 0);", 'no-implied-eval'],
+  ])('flags %s with %s', async (code, rule) => {
+    for (const path of ['packages/env/a.ts', 'packages/core/a.ts', 'packages/grader/a.ts', 'tasks/t1/a.ts']) {
+      expect(await ruleIds(code, path)).toContain(rule);
+    }
+  });
+});
+
 describe('clean fixture', () => {
   it('passes every rule in every scoped directory', async () => {
     for (const path of ['packages/env/a.ts', 'packages/core/loop.ts', 'packages/grader/a.ts', 'tasks/t1/a.ts']) {

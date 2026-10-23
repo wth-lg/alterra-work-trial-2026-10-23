@@ -1,7 +1,7 @@
 // Determinism rule (design section 2): the environment, the loop and the grader read time
 // only from the pinned clock and never draw randomness, so a trial replays byte for byte.
 
-import { destructuredKeys, globalUses, inType, propertyName } from './lib/globals.js';
+import { destructuredKeys, globalUses, inType, outer, propertyName } from './lib/globals.js';
 
 export const files = ['packages/env/**', 'packages/core/loop.ts', 'packages/grader/**', 'tasks/**'];
 
@@ -20,7 +20,10 @@ export default {
     schema: [],
     messages: {
       dateNow: 'Date.now() reads the wall clock. Read time from the pinned clock passed in.',
-      newDate: 'new Date() with no argument reads the wall clock. Pass an explicit instant from the pinned clock.',
+      newDate:
+        'new Date() with no argument, or a spread one, reads the wall clock. Pass an explicit instant from the pinned clock.',
+      intlNow:
+        'Intl.DateTimeFormat {{method}}() with no date formats the wall-clock time. Pass an explicit instant from the pinned clock.',
       dateCall: 'Date() called as a function returns the wall-clock time. Read time from the pinned clock passed in.',
       random: 'Math.random() is not replayable. Derive values from the task seed or the tool-call log.',
       performanceNow: 'performance.now() reads a clock. Read time from the pinned clock passed in.',
@@ -31,10 +34,68 @@ export default {
     },
   },
   create(context) {
+    const report = (node, messageId, data) => context.report({ node, messageId, data });
+
+    // format() and formatToParts() with no date format Date.now(). Every other use of a
+    // formatter is a static method call or hands it on, which hides that call from this rule.
+    function checkFormatUse(member) {
+      const method = propertyName(member);
+      if (method === undefined) return report(member, 'computed', { name: 'Intl.DateTimeFormat' });
+      if (method !== 'format' && method !== 'formatToParts') return;
+      const callee = outer(member);
+      const call = callee.parent;
+      if (call.type !== 'CallExpression' || call.callee !== callee) {
+        return report(member, 'alias', { name: `Intl.DateTimeFormat ${method}` });
+      }
+      const [date] = call.arguments;
+      if (!date || date.type === 'SpreadElement' || (date.type === 'Identifier' && date.name === 'undefined')) {
+        report(call, 'intlNow', { method });
+      }
+    }
+
+    // formatter is a `new Intl.DateTimeFormat(...)` or `Intl.DateTimeFormat(...)` expression.
+    function checkFormatter(formatter) {
+      const parent = formatter.parent;
+      if (parent.type === 'MemberExpression' && parent.object === formatter) return checkFormatUse(parent);
+      if (parent.type === 'VariableDeclarator' && parent.init === formatter && parent.id.type === 'Identifier') {
+        for (const ref of context.sourceCode.getDeclaredVariables(parent)[0].references) {
+          if (ref.init) continue;
+          const use = outer(ref.identifier);
+          if (use.parent.type === 'MemberExpression' && use.parent.object === use) checkFormatUse(use.parent);
+          else report(use, 'alias', { name: 'An Intl.DateTimeFormat' });
+        }
+        return;
+      }
+      report(formatter, 'alias', { name: 'An Intl.DateTimeFormat' });
+    }
+
+    // node is the expression for the Intl global.
+    function checkIntl(node) {
+      const parent = node.parent;
+      if (parent.type !== 'MemberExpression' || parent.object !== node) {
+        const keys = destructuredKeys(node);
+        if (!keys || keys.some((k) => k === undefined || k === 'DateTimeFormat')) report(node, 'alias', { name: 'Intl' });
+        return;
+      }
+      const member = propertyName(parent);
+      if (member === undefined) return report(parent, 'computed', { name: 'Intl' });
+      if (member !== 'DateTimeFormat') return;
+      const ctor = outer(parent);
+      const use = ctor.parent;
+      if ((use.type === 'NewExpression' || use.type === 'CallExpression') && use.callee === ctor) return checkFormatter(outer(use));
+      // Static methods such as supportedLocalesOf read no clock; the prototype reaches format.
+      if (use.type === 'MemberExpression' && use.object === ctor && !['prototype', undefined].includes(propertyName(use))) return;
+      report(ctor, 'alias', { name: 'Intl.DateTimeFormat' });
+    }
+
     return {
       'Program:exit'(program) {
         for (const { names, node } of globalUses(context, program)) {
           const name = names.at(-1);
+          if (name === 'Intl') {
+            if (!inType(node)) checkIntl(node);
+            continue;
+          }
           const banned = Object.hasOwn(BANNED, name) ? BANNED[name] : undefined;
           if (!banned || inType(node)) continue;
           const parent = node.parent;
@@ -45,7 +106,8 @@ export default {
             continue;
           }
           if (name === 'Date' && parent.type === 'NewExpression' && parent.callee === node) {
-            if (parent.arguments.length === 0) context.report({ node: parent, messageId: 'newDate' });
+            const [first] = parent.arguments;
+            if (!first || first.type === 'SpreadElement') context.report({ node: parent, messageId: 'newDate' });
             continue;
           }
           if (name === 'Date' && parent.type === 'CallExpression' && parent.callee === node) {

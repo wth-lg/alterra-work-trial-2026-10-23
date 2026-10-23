@@ -42,4 +42,12 @@ export default tseslint.config(
   },
   { plugins: { local } },
   ...localRules.map((r) => ({ files: r.files, rules: { [`local/${r.name}`]: 'error' } })),
+  // eval and the Function constructor run code neither local rule can see, so shared code
+  // may not evaluate strings at all. no-implied-eval checks setTimeout and setInterval only
+  // when they are declared globals, and the TypeScript scope declares the ES lib alone.
+  {
+    files: localRules.find((r) => r.name === 'isomorphic-imports').files,
+    languageOptions: { globals: { setTimeout: 'readonly', setInterval: 'readonly' } },
+    rules: { 'no-eval': 'error', 'no-new-func': 'error', 'no-implied-eval': 'error' },
+  },
 );

@@ -8,7 +8,7 @@ export const GLOBAL_OBJECTS = new Set(['globalThis', 'window', 'self', 'global']
 const WRAPPERS = new Set(['TSAsExpression', 'TSNonNullExpression', 'TSSatisfiesExpression', 'TSTypeAssertion', 'ChainExpression']);
 
 // The outermost node that still evaluates to the same value as node.
-function outer(node) {
+export function outer(node) {
   while (node.parent && WRAPPERS.has(node.parent.type) && node.parent.expression === node) node = node.parent;
   return node;
 }
