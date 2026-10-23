@@ -1,3 +1,5 @@
+import { symlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { commitFile, fakeKey, git, runScript, tempDir, tempRepo, write } from './helpers.ts';
 
@@ -50,6 +52,36 @@ describe('keyscan working tree and build output', () => {
     expectHit(keyscan(repo, [], { ANTHROPIC_API_KEY: sentinel }), 'tmp.txt:1', sentinel);
     expect(keyscan(repo).status).toBe(0);
   });
+
+  it('flags a key in a file that holds a NUL byte', () => {
+    const repo = tempRepo();
+    write(repo, 'blob.bin', Buffer.concat([Buffer.from([0, 1, 2, 10]), Buffer.from(`${fakeKey('H')}\n`)]));
+    expectHit(keyscan(repo), 'blob.bin:2', fakeKey('H'));
+  });
+
+  it('flags a key in a UTF-16 file', () => {
+    const repo = tempRepo();
+    write(repo, 'env.txt', Buffer.from(`\ufeffKEY=${fakeKey('I')}\n`, 'utf16le'));
+    expectHit(keyscan(repo), 'env.txt:1', fakeKey('I'));
+  });
+
+  it('fails on a symlink in dist that points outside dist, since the Pages upload dereferences it', () => {
+    const repo = tempRepo();
+    const outside = tempDir('keyscan-outside');
+    write(outside, 'clean.txt', 'nothing here\n');
+    write(repo, 'apps/web/dist/index.html', '<!doctype html>\n');
+    symlinkSync(join(outside, 'clean.txt'), join(repo, 'apps/web/dist/data.txt'));
+    const r = keyscan(repo);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('apps/web/dist/data.txt');
+  });
+
+  it('allows a symlink in dist that points inside dist', () => {
+    const repo = tempRepo();
+    write(repo, 'apps/web/dist/index.html', '<!doctype html>\n');
+    symlinkSync('index.html', join(repo, 'apps/web/dist/alias.html'));
+    expect(keyscan(repo).status).toBe(0);
+  });
 });
 
 describe('keyscan history', () => {
@@ -83,6 +115,54 @@ describe('keyscan history', () => {
     expect(keyscan(repo, ['--range', `${leak}..${head}`]).status).toBe(0);
     // A bare revision scans everything reachable from it (used by the hook for a new branch).
     expect(keyscan(repo, ['--range', head]).status).toBe(1);
+  });
+
+  // Each case adds a key and deletes it in a later commit, so only the history scan can see it.
+  function expectHistoryHit(repo: string, base: string, location: string, secret: string) {
+    expectHit(keyscan(repo, ['--history']), location, secret);
+    expectHit(keyscan(repo, ['--range', `${base}..HEAD`]), location, secret);
+  }
+
+  it('finds a key that only a merge resolution added', () => {
+    const repo = tempRepo();
+    const base = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'checkout', '-q', '-b', 'side');
+    commitFile(repo, 'side.txt', 'side\n');
+    git(repo, 'checkout', '-q', 'main');
+    commitFile(repo, 'main.txt', 'main\n');
+    git(repo, 'merge', '-q', '--no-ff', '--no-commit', 'side');
+    write(repo, 'leak.txt', `${fakeKey('J')}\n`);
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'merge side');
+    const merge = git(repo, 'rev-parse', 'HEAD');
+    commitFile(repo, 'leak.txt', 'gone\n');
+    expectHistoryHit(repo, base, `${merge.slice(0, 12)}:leak.txt:1`, fakeKey('J'));
+  });
+
+  it('finds a key in a path that .gitattributes marks -diff', () => {
+    const repo = tempRepo();
+    const base = git(repo, 'rev-parse', 'HEAD');
+    commitFile(repo, '.gitattributes', '*.json -diff\n');
+    const added = commitFile(repo, 'trace.json', `{\n"k": "${fakeKey('K')}"\n}\n`);
+    commitFile(repo, 'trace.json', '{}\n');
+    expectHistoryHit(repo, base, `${added.slice(0, 12)}:trace.json:2`, fakeKey('K'));
+  });
+
+  it('finds a key in a committed file that holds a NUL byte', () => {
+    const repo = tempRepo();
+    const base = git(repo, 'rev-parse', 'HEAD');
+    const added = commitFile(repo, 'blob.bin', Buffer.concat([Buffer.from([0, 10]), Buffer.from(`${fakeKey('L')}\n`)]));
+    commitFile(repo, 'blob.bin', 'gone\n');
+    expectHistoryHit(repo, base, `${added.slice(0, 12)}:blob.bin:2`, fakeKey('L'));
+  });
+
+  it('keeps reading a commit message past a 0x02 byte', () => {
+    const repo = tempRepo();
+    commitFile(repo, 'a.txt', 'a\n', `subject\n\nnote \x02\n${fakeKey('M')}`);
+    const r = keyscan(repo, ['--history']);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('(commit message):4');
+    expect(r.stdout).not.toContain(fakeKey('M'));
   });
 
   it('exits 2 on a range git cannot resolve', () => {

@@ -15,7 +15,7 @@ export function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `${prefix}-`));
 }
 
-export function write(root: string, rel: string, content: string): void {
+export function write(root: string, rel: string, content: string | Uint8Array): void {
   const path = join(root, rel);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
@@ -40,7 +40,7 @@ export function tempRepo(): string {
   return dir;
 }
 
-export function commitFile(repo: string, rel: string, content: string, message = `edit ${rel}`): string {
+export function commitFile(repo: string, rel: string, content: string | Uint8Array, message = `edit ${rel}`): string {
   write(repo, rel, content);
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '-m', message);

@@ -5,10 +5,13 @@
 //   pnpm keyscan --range A..B [paths...] the commits in A..B (a bare revision means all its history)
 //
 // A hit is an sk-ant-shaped string or, when ANTHROPIC_API_KEY is set, its exact value.
+// Every file is scanned byte for byte, binary or not. A symlink in a build directory that
+// resolves outside it is a finding too: the Pages upload dereferences symlinks.
 // Exit codes: 0 clean, 1 hit, 2 usage or git error.
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const KEY_SHAPE = /sk-ant-[A-Za-z0-9_-]{20,}/;
 // Build and test output that .gitignore hides from `git ls-files` but that can still ship or be uploaded.
@@ -53,7 +56,9 @@ function makeMatcher(): (line: string) => boolean {
     process.stderr.write(`keyscan: ANTHROPIC_API_KEY is shorter than ${MIN_ENV_KEY_LENGTH} characters; not matching its value\n`);
   }
   const exact = envKey && envKey.length >= MIN_ENV_KEY_LENGTH ? envKey : undefined;
-  return (line) => KEY_SHAPE.test(line) || (exact !== undefined && line.includes(exact));
+  const test = (text: string) => KEY_SHAPE.test(text) || (exact !== undefined && text.includes(exact));
+  // Dropping NUL bytes turns UTF-16 text back into the ASCII a key is made of.
+  return (line) => test(line) || (line.includes('\0') && test(line.replaceAll('\0', '')));
 }
 
 function walk(dir: string, out: string[]): void {
@@ -61,19 +66,38 @@ function walk(dir: string, out: string[]): void {
     if (SKIP_DIRS.has(entry.name)) continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) walk(path, out);
-    else if (entry.isFile()) out.push(path);
+    else if (entry.isFile() || entry.isSymbolicLink()) out.push(path);
   }
 }
 
-function scanFile(path: string, label: string, matches: (line: string) => boolean, hits: string[]): void {
-  const stat = lstatSync(path, { throwIfNoEntry: false });
-  if (!stat?.isFile()) return;
-  const buf = readFileSync(path);
-  if (buf.subarray(0, 8000).includes(0)) return; // binary
-  const lines = buf.toString('utf8').split('\n');
-  lines.forEach((line, i) => {
+function scanText(text: string, label: string, matches: (line: string) => boolean, hits: string[]): void {
+  text.split('\n').forEach((line, i) => {
     if (matches(line)) hits.push(`${label}:${i + 1}`);
   });
+}
+
+// A key is ASCII, so latin1 (one char per byte) finds it in any file, text or binary.
+function scanFile(root: string, path: string, label: string, matches: (line: string) => boolean, hits: string[]): void {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat?.isSymbolicLink()) {
+    const buildDir = BUILD_DIRS.map((d) => join(root, d)).find((d) => path === d || path.startsWith(d + sep));
+    if (buildDir && !resolvesInside(path, buildDir)) {
+      hits.push(`${label}: symlink that resolves outside ${relative(root, buildDir)}`);
+    }
+    // Git stores a symlink as its target path, so that text is what a commit would publish.
+    scanText(readlinkSync(path, 'latin1'), label, matches, hits);
+    return;
+  }
+  if (!stat?.isFile()) return;
+  scanText(readFileSync(path).toString('latin1'), label, matches, hits);
+}
+
+function resolvesInside(link: string, dir: string): boolean {
+  try {
+    return realpathSync(link).startsWith(realpathSync(dir) + sep);
+  } catch {
+    return false; // dangling link
+  }
 }
 
 function scanPaths(root: string, paths: string[], matches: (line: string) => boolean, hits: string[]): number {
@@ -89,7 +113,7 @@ function scanPaths(root: string, paths: string[], matches: (line: string) => boo
       files.set(f, rel.startsWith('..') || isAbsolute(rel) ? f : rel);
     }
   }
-  for (const [abs, label] of files) scanFile(abs, label, matches, hits);
+  for (const [abs, label] of files) scanFile(root, abs, label, matches, hits);
   return files.size;
 }
 
@@ -103,13 +127,31 @@ function workingTreePaths(root: string): string[] {
   return [...listed, ...build];
 }
 
-const COMMIT_START = '\x01';
-const MESSAGE_END = '\x02';
-
 // Reads `git log -p` and checks every commit message line and every added line.
 // Removed lines need no check: each was an added line in some earlier commit.
+// --text and --no-textconv print the real bytes of binary and `-diff` paths; first-parent
+// merge diffs show what a merge resolution added. The markers carry a per-run nonce so no
+// commit message or file content can forge or end them.
 function scanHistory(root: string, revs: string[], matches: (line: string) => boolean, hits: string[]): number {
-  const out = git(['log', '-p', '--no-color', '--no-ext-diff', '--no-renames', `--format=${COMMIT_START}%H%n%B${MESSAGE_END}`, ...revs, '--'], root);
+  const nonce = randomBytes(16).toString('hex');
+  const COMMIT_START = `keyscan-commit-${nonce} `;
+  const MESSAGE_END = `keyscan-message-end-${nonce}`;
+  const out = git(
+    [
+      'log',
+      '-p',
+      '--text',
+      '--no-textconv',
+      '--no-ext-diff',
+      '--diff-merges=first-parent',
+      '--no-color',
+      '--no-renames',
+      `--format=${COMMIT_START}%H%n%B${MESSAGE_END}`,
+      ...revs,
+      '--',
+    ],
+    root,
+  );
   let commit = '';
   let commits = 0;
   let inMessage = false;
@@ -118,8 +160,8 @@ function scanHistory(root: string, revs: string[], matches: (line: string) => bo
   let inHunk = false;
   let newLine = 0;
   for (const line of out.split('\n')) {
-    if (line.startsWith(COMMIT_START)) {
-      commit = line.slice(1, 13);
+    if (!inMessage && line.startsWith(COMMIT_START)) {
+      commit = line.slice(COMMIT_START.length, COMMIT_START.length + 12);
       commits++;
       inMessage = true;
       messageLine = 0;
@@ -169,7 +211,7 @@ function main(): void {
   }
   for (const hit of hits) process.stdout.write(`${hit}\n`);
   if (hits.length) {
-    process.stderr.write(`keyscan: ${hits.length} key-shaped string(s) found in ${scanned}; locations above, values not printed\n`);
+    process.stderr.write(`keyscan: ${hits.length} finding(s) in ${scanned}; locations above, values not printed\n`);
     process.exit(1);
   }
   process.stderr.write(`keyscan: clean, ${scanned} scanned\n`);
