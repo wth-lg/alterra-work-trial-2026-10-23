@@ -17,9 +17,9 @@
     "donewhen": "node scripts/donewhen.ts",
     "keyscan": "node scripts/keyscan.ts",
     "ci:guard": "node scripts/ci-guard.ts",
-    "fixtures:build": "echo 'fixtures:build is not built yet (P5)' >&2 && exit 1",
-    "fixtures:verify": "echo 'fixtures:verify is not built yet (P5)' >&2 && exit 1",
-    "fixtures:lint": "echo 'fixtures:lint is not built yet (P4)' >&2 && exit 1",
+    "fixtures:build": "node scripts/fixtures-build.ts",
+    "fixtures:verify": "node scripts/fixtures-verify.ts",
+    "fixtures:lint": "node scripts/fixtures-lint.ts",
     "live:node": "echo 'live:node is not built yet (P2)' >&2 && exit 1",
     "docs:check": "echo 'docs:check is not built yet (writeup PR)' >&2 && exit 1"
   },
