@@ -8,7 +8,13 @@
 // FHIR we keep FHIR and keep the generator out of the gap (see apps/web/src/harness/generate.ts):
 //   - _sort compares JSON strings, not instants;
 //   - a month value is filled to day 31;
-//   - token search also matches display and text.
+//   - token search also matches display and text;
+//   - eq (and a bare date) means overlap, where FHIR means the resource range lies within the
+//     query range. The two agree when every resource range is inside the query range or
+//     disjoint from it, so eq queries use day or year precision (whole UTC units, never a
+//     month, see above) and only on types whose values are days or seconds, not periods;
+//   - _sort=-date puts resources without a date first, where we put them last, so every
+//     -date query also filters on date, which drops undated resources.
 // packages/env/test/store.test.ts covers our side of each gap.
 import { indexSearchParameterBundle, indexStructureDefinitionBundle, parseSearchRequest } from '@medplum/core';
 import { readJson } from '@medplum/definitions';
@@ -21,11 +27,18 @@ import { Store } from '../store.ts';
 const SEED = 20261023;
 const WORLD_SIZE = 1500;
 const QUERIES = 400;
+// Extra ge queries on exact range bounds, so a broken ge comparison fails many queries
+// rather than a handful (each planted ge mutation must fail at least MUTATION_MARGIN).
+const GE_QUERIES = 100;
 
 type Query = Array<[string, string]>;
 type Json = Record<string, unknown>;
 
 const PREFIXES = ['ge', 'le', 'gt', 'lt'] as const;
+// 'bare' counts date values with no prefix (FHIR's default, eq).
+const EQ_FORMS = ['eq', 'bare'] as const;
+// Types whose date values are periods: no eq queries there (see the header).
+const PERIOD_TYPES = new Set(['Encounter', 'EpisodeOfCare']);
 const PARAMS = ['patient', 'subject', 'code', 'category', 'status', 'date', '_sort', '_count', '_offset'] as const;
 
 // Which parameters each type supports, and where the generator puts the values (mirrors
@@ -75,12 +88,18 @@ function makeQueries(world: Resource[]): Query[] {
   for (const res of world) if (SUPPORTED[res.resourceType]) byType.set(res.resourceType, [...(byType.get(res.resourceType) ?? []), res]);
   const types = [...byType.keys()];
   const patients = world.filter((x) => x.resourceType === 'Patient').map((x) => x.id!);
+  const groups = world.filter((x) => x.resourceType === 'Group').map((x) => `Group/${x.id!}`);
   const shiftDays = (iso: string, days: number) => new Date(Date.parse(iso) + days * 86_400_000).toISOString();
   const caseFlip = (s: string) => (r.chance(0.2) ? s.toUpperCase() : s);
 
   const value: Record<string, (anchor: Json, paths: string[]) => string | undefined> = {
     patient(anchor, paths) {
-      const ref = paths.flatMap((p) => at(anchor, `${p}.reference`)).find((x) => String(x).startsWith('Patient/')) as string | undefined;
+      const refs = paths.flatMap((p) => at(anchor, `${p}.reference`)).map(String);
+      // A Group subject is not a patient (the R4 expression ends in .where(resolve() is
+      // Patient)), so patient= naming a Group, as a reference or a bare id, finds nothing.
+      const group = refs.find((x) => x.startsWith('Group/')) ?? (r.chance(0.04) ? r.pick(groups) : undefined);
+      if (group && r.chance(0.6)) return r.chance(0.5) ? group : group.slice(group.indexOf('/') + 1);
+      const ref = refs.find((x) => x.startsWith('Patient/'));
       if (!ref || r.chance(0.1)) return `Patient/${r.pick(patients)}`;
       return r.chance(0.5) ? ref : ref.slice('Patient/'.length);
     },
@@ -111,6 +130,14 @@ function makeQueries(world: Resource[]): Query[] {
     date(anchor, paths) {
       const v = paths.flatMap((p) => at(anchor, p))[0];
       const b = v === undefined ? undefined : bounds(v);
+      if (!PERIOD_TYPES.has(anchor.resourceType as string) && r.chance(0.25)) {
+        // eq or bare: the anchor's own day or year (it lies within it), or a day 1-30 days
+        // away, at whole UTC units only.
+        const prefix = r.chance(0.5) ? 'eq' : '';
+        if (!b) return `${prefix}${r.pick(['2023-01-15', '2025'])}`;
+        const t = r.pick([b[0].slice(0, 10), b[0].slice(0, 4), shiftDays(b[0], (1 + r.int(30)) * (r.chance(0.5) ? 1 : -1)).slice(0, 10)]);
+        return `${prefix}${t}`;
+      }
       const prefix = r.pick(PREFIXES);
       if (!b) return `${prefix}${r.pick(['2023-01-15', '2025-06-30T12:00:00Z'])}`;
       // Land on a bound (the equality case, 40% of the time, so an off-by-one in a comparison
@@ -141,10 +168,32 @@ function makeQueries(world: Resource[]): Query[] {
       // A second date bound makes a window.
       if (name === 'date' && v !== undefined && r.chance(0.3)) q.push(['date', value.date!(anchor, supported.date!)!]);
     }
-    if (supported.date && r.chance(0.35)) q.push(['_sort', r.chance(0.5) ? 'date' : '-date']);
+    if (supported.date && r.chance(0.35)) {
+      const descending = r.chance(0.5);
+      if (descending && !q.some(([k]) => k === 'date')) q.push(['date', value.date!(anchor, supported.date)!]);
+      q.push(['_sort', descending ? '-date' : 'date']);
+    }
     if (r.chance(0.2)) q.push(['_offset', String(r.int(4))]);
     if (r.chance(0.25)) q.push(['_count', String(1 + r.int(10))]);
     queries.push([['_type', type], ...q]);
+  }
+
+  // ge on the anchor's upper bound (it matches only if ge is inclusive and reads the
+  // resource's upper bound) or on the day holding it (a range, so the resource's upper bound
+  // must be compared with the query's lower bound). No paging, so nothing hides a change.
+  const dated = types.filter((t) => SUPPORTED[t]!.date);
+  for (let i = 0; i < GE_QUERIES; i++) {
+    const type = r.pick(dated);
+    const paths = SUPPORTED[type]!.date!;
+    const boundsOf = (x: unknown) => {
+      const v = paths.flatMap((p) => at(x, p))[0];
+      return v === undefined ? undefined : bounds(v);
+    };
+    const anchor = r.pick(byType.get(type)!.filter((x) => boundsOf(x) !== undefined)) as unknown as Json;
+    const hi = boundsOf(anchor)![1];
+    const q: Query = [['_type', type], ['date', `ge${r.chance(0.5) ? hi : hi.slice(0, 10)}`]];
+    if (r.chance(0.5)) q.push(['patient', value.patient!(anchor, SUPPORTED[type]!.patient!)!]);
+    queries.push(q);
   }
   return queries;
 }
@@ -167,10 +216,10 @@ describe('search matches Medplum MemoryRepository 5.2.7', () => {
     });
   });
 
-  it(`returns identical id lists on ${QUERIES} generated queries`, async () => {
+  it(`returns identical id lists on ${QUERIES + GE_QUERIES} generated queries`, async () => {
     const mismatches: string[] = [];
     let nonEmpty = 0;
-    const perParam = Object.fromEntries([...PARAMS, ...PREFIXES].map((k) => [k, 0])) as Record<string, number>;
+    const perParam = Object.fromEntries([...PARAMS, ...PREFIXES, ...EQ_FORMS, 'patient=Group'].map((k) => [k, 0])) as Record<string, number>;
     for (const q of queries) {
       const type = q[0]![1];
       const qs = queryString(q);
@@ -185,7 +234,8 @@ describe('search matches Medplum MemoryRepository 5.2.7', () => {
       if (theirIds.length > 0) nonEmpty++;
       for (const [k, v] of q.slice(1)) {
         perParam[k]!++;
-        if (k === 'date') perParam[v.slice(0, 2)]!++;
+        if (k === 'date') perParam[/^[a-z]{2}/.test(v) ? v.slice(0, 2) : 'bare']!++;
+        if (k === 'patient' && /^(Group\/)?grp-/.test(v)) perParam['patient=Group']!++;
       }
     }
     const pct = ((100 * nonEmpty) / queries.length).toFixed(1);
@@ -197,6 +247,6 @@ describe('search matches Medplum MemoryRepository 5.2.7', () => {
     expect(mismatches.slice(0, 5).join('\n')).toBe('');
     expect(queries.length).toBeGreaterThanOrEqual(200);
     expect(nonEmpty / queries.length).toBeGreaterThanOrEqual(0.7);
-    for (const k of [...PARAMS, ...PREFIXES]) expect(perParam[k], k).toBeGreaterThanOrEqual(1);
+    for (const k of [...PARAMS, ...PREFIXES, ...EQ_FORMS, 'patient=Group']) expect(perParam[k], k).toBeGreaterThanOrEqual(1);
   });
 });
