@@ -5,8 +5,11 @@ import type { Resource } from '../packages/env/store.ts';
 
 export const sha256 = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
 
-const byTypeThenId = (a: Resource, b: Resource): number =>
-  a.resourceType < b.resourceType ? -1 : a.resourceType > b.resourceType ? 1 : a.id! < b.id! ? -1 : a.id! > b.id! ? 1 : 0;
+// UTF-16 code unit order. localeCompare follows the host's LC_ALL/LANG (a Danish collation
+// sorts 'aa' after 'z'), so no fixtures script may sort with it.
+export const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+const byTypeThenId = (a: Resource, b: Resource): number => cmp(a.resourceType, b.resourceType) || cmp(a.id!, b.id!);
 
 // One resource per line, sorted by (resourceType, id), LF after every line.
 export function toNdjson(resources: Iterable<Resource>): string {

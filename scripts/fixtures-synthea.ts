@@ -2,6 +2,8 @@
 // world"). Run by fixtures/synthea/generate.sh, not by hand:
 //
 //   node scripts/fixtures-synthea.ts <synthea fhir dir> <out dir> --synthea <version> --jar-sha256 <hex> -- <synthea args...>
+//   node scripts/fixtures-synthea.ts --dates     prints Synthea's -r and -e (YYYYMMDD): NOW's
+//                                                date and the day after, from clock.ts
 //
 // Writes <out dir>/base.ndjson.gz and <out dir>/base.json (Synthea version, jar SHA-256, args,
 // NDJSON SHA-256 and counts) and prints the NDJSON SHA-256. The output depends only on the
@@ -26,13 +28,18 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Resource } from '../packages/env/store.ts';
-import { NOW_MS } from '../packages/env/clock.ts';
+import { eastern, NOW_MS } from '../packages/env/clock.ts';
 import { CLINIC, STAFF } from '../packages/env/world.ts';
-import { gzip, sha256, toNdjson } from './fixtures-lib.ts';
+import { cmp, gzip, sha256, toNdjson } from './fixtures-lib.ts';
 
 type Json = Record<string, unknown>;
 
-const CUTOFF_MS = Date.UTC(2020, 9, 23, 12); // NOW minus 6 years
+const DAY_MS = 86_400_000;
+const CUTOFF_MS = ((d) => d.setUTCFullYear(d.getUTCFullYear() - 6))(new Date(NOW_MS)); // NOW minus 6 years
+// Synthea's reference date (-r) is NOW's date. Its end date (-e) defaults to the wall clock
+// of the run, so it is pinned to the day after NOW: nothing after NOW survives the prune.
+const syntheaDate = (ms: number) => eastern(ms).slice(0, 10).replaceAll('-', '');
+const SYNTHEA_DATES = [syntheaDate(NOW_MS), syntheaDate(NOW_MS + DAY_MS)];
 const OBS_CATEGORIES = new Set(['laboratory', 'vital-signs', 'social-history']);
 const CAP: Record<string, number> = { Observation: 2, DiagnosticReport: 1, Procedure: 1, MedicationRequest: 2, Condition: 1, Encounter: 6, DocumentReference: 6 };
 const PER_PATIENT = new Set(['Encounter', 'DocumentReference']);
@@ -118,7 +125,7 @@ function selectPatient(entries: Json[], patientIndex: number): Kept[] {
     }
   }
   for (const [key, group] of groups) {
-    group.sort((a, b) => a.date - b.date || (a.resource.id as string).localeCompare(b.resource.id as string));
+    group.sort((a, b) => a.date - b.date || cmp(a.resource.id as string, b.resource.id as string));
     kept.push(...group.slice(-CAP[key.split('|')[0]!]!));
   }
   return kept;
@@ -196,6 +203,10 @@ function transform(r: Json, id: string, refs: Map<string, string>, medications: 
 
 function main(): void {
   const argv = process.argv.slice(2);
+  if (argv[0] === '--dates') {
+    console.log(SYNTHEA_DATES.join(' '));
+    return;
+  }
   const sep = argv.indexOf('--');
   const [fhirDir, outDir] = argv;
   const flag = (name: string) => {
@@ -215,7 +226,7 @@ function main(): void {
     .map((f) => (JSON.parse(readFileSync(join(fhirDir, f), 'utf8')) as { entry: Array<{ resource: Json }> }).entry.map((e) => e.resource));
   const living = bundles
     .filter((entries) => entries[0]?.resourceType === 'Patient' && entries[0].deceasedDateTime === undefined && entries[0].deceasedBoolean !== true)
-    .sort((a, b) => ((a[0]!.birthDate as string) + a[0]!.id).localeCompare((b[0]!.birthDate as string) + b[0]!.id));
+    .sort((a, b) => cmp((a[0]!.birthDate as string) + a[0]!.id, (b[0]!.birthDate as string) + b[0]!.id));
 
   const medications = new Map<string, Json>();
   const kept: Kept[] = [];
@@ -225,7 +236,7 @@ function main(): void {
   });
 
   // Stable short ids, numbered per type in (patient, date, code, Synthea id) order.
-  kept.sort((a, b) => a.patient - b.patient || a.date - b.date || codeOf(a.resource).localeCompare(codeOf(b.resource)) || (a.resource.id as string).localeCompare(b.resource.id as string));
+  kept.sort((a, b) => a.patient - b.patient || a.date - b.date || cmp(codeOf(a.resource), codeOf(b.resource)) || cmp(a.resource.id as string, b.resource.id as string));
   const seq = new Map<string, number>();
   const ids = new Map<string, string>(); // Synthea id -> short id
   const refs = new Map<string, string>(); // Synthea id -> Type/short id
