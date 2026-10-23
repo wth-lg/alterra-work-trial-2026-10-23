@@ -2,12 +2,12 @@
 // and a per-call refusal at the actual cap. Grant policy is process-wide state, so every case
 // that depends on it runs in a fresh child process.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { repoRoot, tempDir } from '../../../scripts/test/helpers.ts';
+import { repoRoot, runScript, tempDir } from '../../../scripts/test/helpers.ts';
 import { SpendRefused, totals, type LedgerRow } from '../../../packages/core/ledger.ts';
 import { worstCaseUsd } from '../../../packages/core/cost.ts';
 import { openNodeLedger, readRows } from '../ledger-node.ts';
@@ -34,6 +34,10 @@ function child(code: string, env: Env, cwd: string): Promise<{ code: number | nu
     p.stderr.on('data', (d: Buffer) => (err += d.toString()));
     p.on('close', (code) => resolve({ code, out, err }));
   });
+}
+
+function spendCli(args: string[], env: Env, cwd: string) {
+  return runScript('cli/index.ts', ['spend', ...args], { cwd, env });
 }
 
 function settleRow(usd: number, call_id: string): LedgerRow {
@@ -98,6 +102,58 @@ catch (e) { if (e.name !== 'SpendRefused') throw e; console.log('refused'); }
     const t = totals(readRows(real));
     expect(readRows(real).filter((x) => x.kind === 'reserve')).toHaveLength(1);
     expect(t.settled + t.reserved).toBeLessThanOrEqual(500 + 1e-9);
+  });
+});
+
+describe('own-run mode needs the canonical file to exist', () => {
+  it('refuses a marker naming a missing file or a directory, creates nothing, and spend --init creates the file once', async () => {
+    const root = tempDir('ownrun-init');
+    const home = join(root, 'home');
+    mkdirSync(join(root, 'canon'));
+    const marker = join(root, 'canon', 'spend.jsonl');
+    const env = envFor(home, { CHARTR_CANONICAL_LEDGER: marker });
+
+    for (const transport of ['live', 'offline'] as const) {
+      expect(() => openNodeLedger({ transport, env }), transport).toThrow(/does not exist.*spend --init/);
+    }
+    const where = spendCli(['--where'], env, root);
+    expect(where.stdout).toBe(`own-run ${marker}\n`);
+    expect(where.stderr).toMatch(/spend --init/);
+    expect(where.status).toBe(1);
+    expect(spendCli([], env, root).status).toBe(1);
+    expect(existsSync(marker)).toBe(false);
+
+    const init = spendCli(['--init'], env, root);
+    expect(init.stderr).toBe('');
+    expect(init.stdout).toBe(`created own-run ${marker}\n`);
+    expect(init.status).toBe(0);
+    // A successful own-run open binds its process, so it runs in a child.
+    const opened = await child(`
+const L = await import(${ADAPTER});
+await L.openNodeLedger({ transport: 'live' }).ledger.batchStart(1);
+`, env, root);
+    expect(opened.err).toBe('');
+    expect(readRows(marker).map((x) => x.kind)).toEqual(['open']);
+    const before = readFileSync(marker);
+    // A second --init changes nothing.
+    const again = spendCli(['--init'], env, root);
+    expect(again.stdout).toBe(`exists own-run ${marker}\n`);
+    expect(again.status).toBe(0);
+    expect(readFileSync(marker).equals(before)).toBe(true);
+
+    // --init never creates the directory, and a marker naming a directory is refused.
+    const gone = envFor(home, { CHARTR_CANONICAL_LEDGER: join(root, 'gone', 'spend.jsonl') });
+    expect(spendCli(['--init'], gone, root).status).toBe(1);
+    expect(existsSync(join(root, 'gone'))).toBe(false);
+    const dir = envFor(home, { CHARTR_CANONICAL_LEDGER: join(root, 'canon') });
+    expect(() => openNodeLedger({ transport: 'live', env: dir })).toThrow(/not a file/);
+    expect(existsSync(join(home, '.chartr'))).toBe(false);
+  });
+
+  it('default mode still creates ~/.chartr/spend.jsonl on a live open', () => {
+    const home = tempDir('default-create');
+    openNodeLedger({ transport: 'live', env: envFor(home) });
+    expect(existsSync(join(home, '.chartr', 'spend.jsonl'))).toBe(true);
   });
 });
 

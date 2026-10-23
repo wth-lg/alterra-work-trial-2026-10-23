@@ -1,16 +1,17 @@
 // The Node LedgerStore: the ledger file, its cross-process lockfile, env and the wall clock.
 // Two modes, and no machine-specific path in the code:
-//   own-run  CHARTR_CANONICAL_LEDGER is set. The path comes only from it. Opening refuses,
-//            before any call can be made, when the value is empty or not absolute, its
-//            directory is missing, or SPEND_LEDGER names another file. It never creates a
-//            directory. Only a grant minted over the canonical file passes assertGrant.
+//   own-run  CHARTR_CANONICAL_LEDGER is set. The path comes only from it, and the file must
+//            already exist (`pnpm cli spend --init` creates it once). Opening refuses, before
+//            any call can be made, when the value is empty or not absolute, the file is
+//            missing or not a file, or SPEND_LEDGER names another file. Only a grant minted
+//            over the canonical file passes assertGrant.
 //   default  SPEND_LEDGER, else ~/.chartr/spend.jsonl, created on first live open.
 // A ledger is known by its real path, so a symlink or a relative name reaches the same file
 // and the same lock. The caps are the same in both modes; packages/core/ledger.ts enforces them.
 import { randomUUID } from 'node:crypto';
 import {
   closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync,
-  realpathSync, renameSync, rmSync, truncateSync, unlinkSync, writeFileSync, writeSync,
+  realpathSync, renameSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -41,13 +42,18 @@ export function realLedgerPath(path: string): string {
   }
 }
 
-export function resolveLedgerPath(env: Env = process.env): { mode: LedgerMode; path: string; problems: string[] } {
+// `requireFile: false` is for `spend --init`, which creates the own-run file.
+export function resolveLedgerPath(env: Env = process.env, opts: { requireFile?: boolean } = {}): { mode: LedgerMode; path: string; problems: string[] } {
   const marker = env.CHARTR_CANONICAL_LEDGER;
   if (marker !== undefined) {
     const problems: string[] = [];
     if (marker === '') problems.push('CHARTR_CANONICAL_LEDGER is set but empty');
     else if (!isAbsolute(marker)) problems.push(`CHARTR_CANONICAL_LEDGER=${marker} is not an absolute path`);
     else if (!existsSync(dirname(marker))) problems.push(`the directory of CHARTR_CANONICAL_LEDGER=${marker} does not exist`);
+    else if (existsSync(marker) && !statSync(marker).isFile()) problems.push(`CHARTR_CANONICAL_LEDGER=${marker} is not a file`);
+    else if (opts.requireFile !== false && !existsSync(marker)) {
+      problems.push(`CHARTR_CANONICAL_LEDGER=${marker} does not exist; create it once with pnpm cli spend --init`);
+    }
     if (env.SPEND_LEDGER && realLedgerPath(env.SPEND_LEDGER) !== realLedgerPath(marker)) {
       problems.push(`SPEND_LEDGER=${env.SPEND_LEDGER} names another file than CHARTR_CANONICAL_LEDGER=${marker}`);
     }
@@ -236,9 +242,8 @@ export class FileLedgerStore implements LedgerStore {
   }
 }
 
-// Opens the ledger for this process. A live open (any code path that can call the API)
-// also creates the ledger file on first use. Throws, with no row written, on an own-run
-// setup problem.
+// Opens the ledger for this process. A live open in default mode also creates the ledger
+// file on first use. Throws, with no row written, on an own-run setup problem.
 export function openNodeLedger(opts: { transport: 'live' | 'offline'; env?: Env; runId?: string | null }): {
   ledger: Ledger;
   store: FileLedgerStore;
@@ -249,8 +254,8 @@ export function openNodeLedger(opts: { transport: 'live' | 'offline'; env?: Env;
   if (problems.length > 0) throw new Error(`own-run spend ledger refused: ${problems.join('; ')}`);
   const store = new FileLedgerStore(path, { createDir: mode === 'default' });
   if (mode === 'own-run' && path === CANONICAL_PATH) canonicalStores.add(store);
-  if (opts.transport === 'live' && !existsSync(path)) {
-    if (mode === 'default') mkdirSync(dirname(path), { recursive: true });
+  if (mode === 'default' && opts.transport === 'live' && !existsSync(path)) {
+    mkdirSync(dirname(path), { recursive: true });
     closeSync(openSync(path, 'a'));
   }
   const ledger = createLedger({
@@ -264,6 +269,21 @@ export function openNodeLedger(opts: { transport: 'live' | 'offline'; env?: Env;
     isAlive,
   });
   return { ledger, store, mode, path };
+}
+
+// `pnpm cli spend --init`: creates the ledger file, never its own-run directory. Safe to run
+// twice: an existing file is left as it is.
+export function initNodeLedger(env: Env = process.env): { mode: LedgerMode; path: string; created: boolean } {
+  const { mode, path, problems } = resolveLedgerPath(env, { requireFile: false });
+  if (problems.length > 0) throw new Error(`spend ledger refused: ${problems.join('; ')}`);
+  if (mode === 'default') mkdirSync(dirname(path), { recursive: true });
+  try {
+    closeSync(openSync(path, 'wx'));
+    return { mode, path, created: true };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    return { mode, path, created: false };
+  }
 }
 
 // For the Node side of our live Playwright specs, which meter calls the browser makes.

@@ -1,7 +1,9 @@
-// pnpm cli spend [--where] [--check [--projected X] [--final-reserve [--cost-from <run,...>]]]
+// pnpm cli spend [--where] [--init] [--check [--projected X] [--final-reserve [--cost-from <run,...>]]]
 //                [--close <batch_id> [--force <reason>]] [--ingest <file>] [--export <path>]
 // With no action, prints the ledger totals.
 //   --where           prints the ledger mode and path: `own-run <path>` or `default <path>`
+//   --init            creates the ledger file; own-run mode needs this once, since an own-run
+//                     open refuses a missing file. Leaves an existing file as it is
 //   --check           prints each term and exits 1 when settled + reserved + open batch
 //                     projections + X (+ the remaining final-run projection with
 //                     --final-reserve) > $450
@@ -19,15 +21,15 @@ import { join } from 'node:path';
 import { finalReserve, formatProjection, money } from '../packages/core/cost.ts';
 import { checkProjected, parseRow, PROJECTED_CAP_USD, type Totals } from '../packages/core/ledger.ts';
 import {
-  auditorDone, loadFinalTrials, loadPlannedTasks, loadTrialObservations, openNodeLedger, resolveLedgerPath,
+  auditorDone, initNodeLedger, loadFinalTrials, loadPlannedTasks, loadTrialObservations, openNodeLedger, resolveLedgerPath,
 } from './adapters/ledger-node.ts';
 
-const ACTIONS = ['--where', '--check', '--close', '--ingest', '--export'];
+const ACTIONS = ['--where', '--init', '--check', '--close', '--ingest', '--export'];
 const WITH_VALUE = new Set(['--close', '--force', '--ingest', '--export', '--projected', '--cost-from']);
-const FLAGS = new Set(['--where', '--check', '--final-reserve']);
+const FLAGS = new Set(['--where', '--init', '--check', '--final-reserve']);
 
 function usage(problem: string): number {
-  process.stderr.write(`spend: ${problem}\nusage: pnpm cli spend [--where] [--check [--projected X] [--final-reserve [--cost-from <run,...>]]] [--close <batch_id> [--force <reason>]] [--ingest <file>] [--export <path>]\n`);
+  process.stderr.write(`spend: ${problem}\nusage: pnpm cli spend [--where] [--init] [--check [--projected X] [--final-reserve [--cost-from <run,...>]]] [--close <batch_id> [--force <reason>]] [--ingest <file>] [--export <path>]\n`);
   return 2;
 }
 
@@ -77,6 +79,12 @@ async function run(args: string[]): Promise<number> {
     process.stdout.write(`${where.mode} ${where.path}\n`);
     for (const p of where.problems) process.stderr.write(`spend: ${p}\n`);
     return where.problems.length > 0 ? 1 : 0;
+  }
+
+  if (opts.has('--init')) {
+    const { mode, path, created } = initNodeLedger();
+    process.stdout.write(`${created ? 'created' : 'exists'} ${mode} ${path}\n`);
+    return 0;
   }
 
   const { ledger, store, path } = openNodeLedger({ transport: 'offline' });

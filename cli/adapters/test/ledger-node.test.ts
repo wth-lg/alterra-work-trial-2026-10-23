@@ -97,6 +97,7 @@ describe('ledger modes', () => {
     const root = tempDir('ledger-c3');
     const marker = join(root, 'canon', 'spend.jsonl');
     mkdirSync(join(root, 'canon'));
+    writeFileSync(marker, '');
     const home = join(root, 'home');
 
     const r = await child(ONE_CALL, envFor(home, { CHARTR_CANONICAL_LEDGER: marker }), root);
@@ -319,6 +320,7 @@ describe('fixes for the P1 findings', () => {
     const root = tempDir('ledger-bound');
     const marker = join(root, 'canon', 'spend.jsonl');
     mkdirSync(join(root, 'canon'));
+    writeFileSync(marker, '');
     const shadowPath = join(root, 'shadow', 'spend.jsonl');
     const home = join(root, 'home');
     const r = await child(`
