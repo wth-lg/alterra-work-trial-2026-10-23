@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Resource } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
-import { NOW } from '../clock.ts';
+import { NOW, NOW_PROMPT } from '../clock.ts';
 import { lintWorld, type LintSpec } from '../lint/index.ts';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -98,8 +98,19 @@ describe('answer leakage', () => {
 
 describe('clock sanity', () => {
   it('every weekday named in a prompt matches its date', () => {
-    expect(rules([], { prompts: ['Appointment Monday 2026-10-26 09:00 -04:00.'] })).toEqual([]);
-    expect(rules([], { prompts: ['Appointment Tuesday, 2026-10-26 09:00.'] })).toEqual(['weekday']);
+    expect(rules([], { prompts: ['Appointment Monday 2026-10-26 09:00 -04:00.'], promptDates: ['2026-10-26'] })).toEqual([]);
+    expect(rules([], { prompts: ['Appointment Tuesday, 2026-10-26 09:00.'], promptDates: ['2026-10-26'] })).toEqual(['weekday']);
+  });
+  it('the current time a prompt states is NOW, and NOW_PROMPT is built from NOW', () => {
+    expect(NOW_PROMPT).toBe('Current time: Friday 2026-10-23 08:00 America/New_York.');
+    expect(rules([], { prompts: [NOW_PROMPT, 'Due today, 2026-10-23.'] })).toEqual([]);
+    for (const prompt of ['Current time: Friday 2026-10-30 08:00 America/New_York.', 'Current time: Friday 2026-10-23 17:00 America/New_York.', 'Today is October 24.']) {
+      expect(rules([], { prompts: [prompt] }), prompt).toEqual(['prompt-date']);
+    }
+  });
+  it('a prompt names another date only when the task declares it', () => {
+    expect(rules([], { prompts: ['The CT was on 2026-06-04 and re-routed on October 22, 2026.'] })).toEqual(['prompt-date', 'prompt-date']);
+    expect(rules([], { prompts: ['The CT was on 2026-06-04 and re-routed on October 22, 2026.'], promptDates: ['2026-06-04', '2026-10-22'] })).toEqual([]);
   });
   it('no DST transition inside a task time window', () => {
     expect(rules([], { timeWindows: [{ name: 'prep', start: '2026-10-23T08:00:00-04:00', end: '2026-10-26T09:00:00-04:00' }] })).toEqual([]);

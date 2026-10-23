@@ -12,11 +12,13 @@
 //                     task names it as a trap
 //   leakage           an answer token in a tool description, policy text or distractor field
 //   weekday           a weekday named in a prompt that does not match its date
+//   prompt-date       a date in a prompt that is not NOW's (with a time, not NOW's time),
+//                     unless the task declares it in promptDates
 //   dst               a US DST transition inside a task time window
 //   future-date       a recorded clinical fact dated after NOW (scheduled times may be later)
 //   dangling-reference  a reference to a resource the world does not hold
 import type { Resource } from '@medplum/fhirtypes';
-import { NOW } from '../clock.ts';
+import { NOW, NOW_DATE, NOW_TIME, WEEKDAYS } from '../clock.ts';
 
 export type Quantity = 'scr' | 'egfr' | 'crcl' | 'weight' | 'potassium';
 
@@ -53,6 +55,8 @@ export interface LintSpec {
     distractors?: readonly string[];
   };
   prompts?: readonly string[];
+  // YYYY-MM-DD dates other than NOW's that a prompt names on purpose (a past visit, a due date).
+  promptDates?: readonly string[];
   timeWindows?: ReadonlyArray<{ name: string; start: string; end: string }>;
 }
 
@@ -61,7 +65,7 @@ export interface LintSource {
   spec: LintSpec;
 }
 
-export type LintRule = 'threshold-margin' | 'age-margin' | 'date-margin' | 'leakage' | 'weekday' | 'dst' | 'future-date' | 'dangling-reference';
+export type LintRule = 'threshold-margin' | 'age-margin' | 'date-margin' | 'leakage' | 'weekday' | 'prompt-date' | 'dst' | 'future-date' | 'dangling-reference';
 
 export interface LintFinding {
   source: string;
@@ -82,7 +86,19 @@ const UNITS: Readonly<Record<Quantity, Readonly<Record<string, number>>>> = {
 
 const DAY_MS = 86_400_000;
 const NOW_MS = Date.parse(NOW);
-const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const PROMPT_DATE = new RegExp(`\\b(?:(\\d{4})-(\\d{2})-(\\d{2})|(${MONTHS.join('|')}) (\\d{1,2})(?:, (\\d{4}))?)(?:[ T](\\d{2}:\\d{2}))?`, 'g');
+
+// Every date a prompt names, as YYYY-MM-DD, with its HH:MM when one follows. A month and day
+// without a year are in NOW's year.
+function promptDates(prompt: string): Array<{ text: string; date: string; time: string | undefined }> {
+  return [...prompt.matchAll(PROMPT_DATE)].map((m) => {
+    const pad = (n: string | number) => String(n).padStart(2, '0');
+    const date = m[1] ? `${m[1]}-${m[2]}-${m[3]}` : `${m[6] ?? NOW_DATE.slice(0, 4)}-${pad(MONTHS.indexOf(m[4]!) + 1)}-${pad(m[5]!)}`;
+    return { text: m[0], date, time: m[7] };
+  });
+}
 
 // Differences are rounded to 1e-9 so that 1.65 - 1.5 is not 0.1499999.
 const within = (a: number, b: number, margin: number) => Math.round(Math.abs(a - b) * 1e9) < Math.round(margin * 1e9);
@@ -287,6 +303,11 @@ export function lintWorld(resources: readonly Resource[], sources: readonly Lint
       for (const m of prompt.matchAll(/\b(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),? (\d{4}-\d{2}-\d{2})\b/g)) {
         const actual = WEEKDAYS[new Date(`${m[2]}T12:00:00Z`).getUTCDay()];
         if (actual !== m[1]) add('weekday', `prompt names ${m[1]} ${m[2]}, which is a ${actual}`);
+      }
+      for (const { text, date, time } of promptDates(prompt)) {
+        if (date === NOW_DATE ? time !== undefined && time !== NOW_TIME : !spec.promptDates?.includes(date)) {
+          add('prompt-date', `prompt names "${text}", but NOW is ${NOW_DATE} ${NOW_TIME}; declare the date in promptDates if it is meant`);
+        }
       }
     }
 
