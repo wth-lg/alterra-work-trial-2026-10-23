@@ -4,10 +4,9 @@ import { defineConfig, devices } from '@playwright/test';
 //   mocked    chromium, e2e/*.spec.ts; runs in CI
 //   xbrowser  chromium, firefox and webkit, e2e/xbrowser/**; runs in CI
 //   live      chromium, e2e/live/**; calls the real API, never runs in CI (scripts/ci-guard.ts).
-//             With ANTHROPIC_API_KEY unset every live spec is skipped, and trace, video,
-//             screenshot and HAR are off so a key can never land in an artifact.
+//             Each live spec skips itself when ANTHROPIC_API_KEY is unset, so the project still
+//             lists them. Trace, video, screenshot and HAR are off so a key can never land in an artifact.
 const PORT = 4173;
-const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
 const xbrowser = { name: 'xbrowser', testDir: './e2e/xbrowser' };
 
 export default defineConfig({
@@ -37,7 +36,6 @@ export default defineConfig({
     {
       name: 'live',
       testDir: './e2e/live',
-      testIgnore: hasKey ? [] : ['**/*'],
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off', screenshot: 'off' },
     },
   ],
