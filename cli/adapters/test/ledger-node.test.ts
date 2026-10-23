@@ -210,12 +210,13 @@ await grant.reserve({ bodyBytes: 0, maxTokens: 150000 });
     const root = tempDir('ledger-stale');
     const path = join(root, 'spend.jsonl');
     seed(path, []);
-    const dead = spawn(process.execPath, ['-e', '']);
-    await new Promise((r) => dead.on('close', r));
-    writeFileSync(`${path}.lock`, JSON.stringify({ pid: dead.pid, host: hostname() }));
+    await deadHolder(root, path);
+    expect(readdirSync(`${path}.lock`)).toHaveLength(1);
     const { ledger } = openNodeLedger({ transport: 'live', env: envFor(join(root, 'home'), { SPEND_LEDGER: path }) });
     assertGrant(await ledger.batchStart(1));
-    expect(existsSync(`${path}.lock`)).toBe(false);
+    // Released: the lock directory is empty, and no candidate directory is left behind.
+    expect(readdirSync(`${path}.lock`)).toEqual([]);
+    expect(readdirSync(root).filter((f) => f.includes('.candidate-'))).toEqual([]);
   });
 });
 
@@ -439,5 +440,76 @@ console.log(g.batch_id);
     // A torn tail that follows a newline-terminated bad line does not hide it either.
     writeFileSync(bad, `{"kind":"settle"}\n${torn}`);
     expect(() => readRows(bad)).toThrow(/bad\.jsonl:1/);
+  });
+});
+
+// Runs `code` in a child that waits for `start`, holds the ledger lock for `holdMs` inside a
+// transaction and reports whether anyone else was inside at the same time (an `inside` file
+// created with O_EXCL stands for the critical section).
+function lockClient(root: string, path: string, opts: { start: number; holdMs: number; times?: number; slowRead?: boolean }) {
+  const inside = join(root, 'inside');
+  return child(`
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+if (${opts.slowRead === true}) {
+  // A breaker that stalls after it has read who holds the lock and before it acts on it.
+  const read = fs.readFileSync;
+  fs.readFileSync = function (p, ...a) { const r = read.call(this, p, ...a); if (String(p).includes('.lock')) sleep(400); return r; };
+  syncBuiltinESMExports();
+}
+const store = new L.FileLedgerStore(${JSON.stringify(path)}, { createDir: false });
+while (Date.now() < ${opts.start}) {}
+let overlaps = 0;
+for (let i = 0; i < ${opts.times ?? 1}; i++) {
+  await store.transact(() => {
+    try { fs.closeSync(fs.openSync(${JSON.stringify(inside)}, 'wx')); } catch { overlaps++; return { append: [], result: 0 }; }
+    sleep(${opts.holdMs});
+    fs.unlinkSync(${JSON.stringify(inside)});
+    return { append: [], result: 0 };
+  });
+}
+console.log(JSON.stringify({ overlaps }));
+`, envFor(join(root, 'home')), root);
+}
+
+// Leaves the ledger lock held by a process that is dead.
+async function deadHolder(root: string, path: string): Promise<void> {
+  const r = await child(`
+const store = new L.FileLedgerStore(${JSON.stringify(path)}, { createDir: false });
+await store.transact(() => { process.kill(process.pid, 'SIGKILL'); return { append: [], result: 0 }; });
+`, envFor(join(root, 'home')), root);
+  expect(r.signal).toBe('SIGKILL');
+}
+
+describe('stale lock', () => {
+  it('4 contenders and a dead holder: exactly one owner at a time', async () => {
+    const root = tempDir('ledger-lock4');
+    const path = join(root, 'spend.jsonl');
+    seed(path, []);
+    for (let round = 0; round < 3; round++) {
+      await deadHolder(root, path);
+      const start = Date.now() + 1000;
+      const results = await Promise.all([0, 1, 2, 3].map(() => lockClient(root, path, { start, holdMs: 5, times: 5 })));
+      for (const r of results) {
+        expect(r.err).toBe('');
+        expect(JSON.parse(r.out)).toEqual({ overlaps: 0 });
+      }
+    }
+  });
+
+  it('a breaker that stalls between judging the dead holder and removing its lock cannot unseat the next owner', async () => {
+    const root = tempDir('ledger-lock-slow');
+    const path = join(root, 'spend.jsonl');
+    seed(path, []);
+    await deadHolder(root, path);
+    const t0 = Date.now() + 1000;
+    const [slow, first, third] = await Promise.all([
+      lockClient(root, path, { start: t0, holdMs: 50, slowRead: true }),
+      lockClient(root, path, { start: t0 + 100, holdMs: 1500 }),
+      lockClient(root, path, { start: t0 + 200, holdMs: 50 }),
+    ]);
+    for (const r of [slow, first, third]) expect(r.err).toBe('');
+    expect([slow, first, third].map((r) => JSON.parse(r.out))).toEqual([{ overlaps: 0 }, { overlaps: 0 }, { overlaps: 0 }]);
   });
 });

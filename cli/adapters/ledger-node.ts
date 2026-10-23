@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync,
-  linkSync, renameSync, statSync, truncateSync, unlinkSync, writeFileSync, writeSync,
+  renameSync, rmSync, truncateSync, unlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -23,8 +23,6 @@ export type LedgerMode = 'own-run' | 'default';
 type Env = Record<string, string | undefined>;
 
 const LOCK_TIMEOUT_MS = 30_000;
-// A lock whose content cannot be read is treated as abandoned after this long.
-const UNREADABLE_LOCK_MS = 10_000;
 
 export function resolveLedgerPath(env: Env = process.env): { mode: LedgerMode; path: string; problems: string[] } {
   const marker = env.CHARTR_CANONICAL_LEDGER;
@@ -99,66 +97,68 @@ function isAlive(pid: number): boolean {
   }
 }
 
-// Removes the lock when its holder is a dead process on this host. The lock is renamed
-// aside first and removed only if it is still the dead holder's, so a lock another process
-// took in between is put back rather than deleted.
+// The lock is a directory, <ledger>.lock, that holds one entry named after its holder's
+// nonce, with {pid, host, ts} inside. A contender builds a private candidate directory with
+// its entry and renames it onto the lock path: rename(2) replaces only a missing or empty
+// directory, so exactly one contender wins, and the lock never exists without its holder.
+// Release unlinks the entry; an empty lock directory is free. A holder that is a dead pid on
+// this host has its entry unlinked by name. Entry names are never reused, so a breaker that
+// stalls after judging a holder dead can only remove that holder's entry, never the entry of
+// whoever took the lock since.
+const HELD = new Set(['ENOTEMPTY', 'EEXIST', 'ENOTDIR']);
+
 function breakStaleLock(lock: string): void {
-  let content: string;
-  let mtimeMs: number;
+  let entries: string[];
   try {
-    content = readFileSync(lock, 'utf8');
-    mtimeMs = statSync(lock).mtimeMs;
+    entries = readdirSync(lock);
   } catch {
-    return; // released meanwhile
+    return; // missing, or not a directory: nothing this code can break
   }
-  let holder: { pid?: unknown; host?: unknown } | undefined;
-  try {
-    holder = JSON.parse(content) as typeof holder;
-  } catch {
-    holder = undefined;
-  }
-  const stale =
-    holder === undefined
-      ? Date.now() - mtimeMs > UNREADABLE_LOCK_MS
-      : holder.host === hostname() && typeof holder.pid === 'number' && !isAlive(holder.pid);
-  if (!stale) return;
-  const aside = `${lock}.stale-${process.pid}-${randomUUID()}`;
-  try {
-    renameSync(lock, aside);
-  } catch {
-    return;
-  }
-  if (readFileSync(aside, 'utf8') !== content) {
+  for (const entry of entries) {
+    let holder: { pid?: unknown; host?: unknown };
     try {
-      linkSync(aside, lock);
+      holder = JSON.parse(readFileSync(join(lock, entry), 'utf8')) as typeof holder;
     } catch {
-      // Someone else holds a fresh lock now; the renamed one is lost either way.
+      continue; // released meanwhile, or unreadable: left for the timeout message
+    }
+    if (holder.host !== hostname() || typeof holder.pid !== 'number' || isAlive(holder.pid)) continue;
+    try {
+      unlinkSync(join(lock, entry));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
     }
   }
-  unlinkSync(aside);
 }
 
 async function withLock<T>(lock: string, fn: () => T): Promise<T> {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      const fd = openSync(lock, 'wx');
-      writeSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), ts: new Date().toISOString() }));
-      closeSync(fd);
-      break;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  const nonce = randomUUID();
+  const entry = `holder-${nonce}`;
+  const candidate = `${lock}.candidate-${nonce}`;
+  mkdirSync(candidate);
+  try {
+    writeFileSync(join(candidate, entry), JSON.stringify({ pid: process.pid, host: hostname(), ts: new Date().toISOString() }));
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    for (;;) {
+      try {
+        renameSync(candidate, lock);
+        break;
+      } catch (e) {
+        if (!HELD.has((e as NodeJS.ErrnoException).code ?? '')) throw e;
+      }
+      breakStaleLock(lock);
+      if (Date.now() > deadline) {
+        throw new Error(`spend ledger lock ${lock} has been held for over ${LOCK_TIMEOUT_MS / 1000}s; if its holder is gone, delete it`);
+      }
+      await new Promise((r) => setTimeout(r, 2 + Math.random() * 10));
     }
-    breakStaleLock(lock);
-    if (Date.now() > deadline) {
-      throw new Error(`spend ledger lock ${lock} has been held for over ${LOCK_TIMEOUT_MS / 1000}s; if its holder is gone, delete the file`);
-    }
-    await new Promise((r) => setTimeout(r, 2 + Math.random() * 10));
+  } catch (e) {
+    rmSync(candidate, { recursive: true, force: true });
+    throw e;
   }
   try {
     return fn();
   } finally {
-    unlinkSync(lock);
+    unlinkSync(join(lock, entry));
   }
 }
 
