@@ -3,13 +3,32 @@
 // globalThis, window, self or global. IO goes through the ResultSink and FixtureSource
 // adapters that only cli/ and apps/web pick.
 
+import { builtinModules } from 'node:module';
 import { destructuredKeys, GLOBAL_OBJECTS, globalUses, inType, propertyName } from './lib/globals.js';
 
 export const files = ['packages/env/**', 'packages/core/**', 'packages/grader/**', 'tasks/**'];
 
-const BANNED_MODULE = /^(node:)?(fs|process|child_process|os|module|path|url|worker_threads)(\/.*)?$/;
+// Every builtin of the Node running ESLint, so a module added in a later release is banned
+// without an edit here. Entries such as node:test exist only in the node: form.
+const BUILTINS = new Set(builtinModules.map((m) => m.replace(/^node:/, '')));
 
-const NODE_GLOBALS = new Set(['process', 'global']);
+// Any node: specifier names a builtin. A bare one is banned when it, or its first path
+// segment, is a builtin: fs, fs/promises, timers/promises.
+function isBuiltin(specifier) {
+  if (specifier.startsWith('node:')) return true;
+  return BUILTINS.has(specifier) || BUILTINS.has(specifier.split('/')[0]);
+}
+
+const NODE_GLOBALS = new Set([
+  'process',
+  'global',
+  'Buffer',
+  'setImmediate',
+  'clearImmediate',
+  '__dirname',
+  '__filename',
+  'require',
+]);
 const BANNED_GLOBALS = new Set([
   ...NODE_GLOBALS,
   'window',
@@ -38,17 +57,24 @@ export default {
     },
   },
   create(context) {
-    function checkSource(node) {
-      const source = node.source;
-      if (source && source.type === 'Literal' && typeof source.value === 'string' && BANNED_MODULE.test(source.value)) {
-        context.report({ node: source, messageId: 'module', data: { name: source.value } });
-      }
+    // Static specifiers only: 'fs' or `fs`. A computed import() source is left to review.
+    function checkSpecifier(source) {
+      const name =
+        source?.type === 'Literal' && typeof source.value === 'string'
+          ? source.value
+          : source?.type === 'TemplateLiteral' && source.expressions.length === 0
+            ? source.quasis[0].value.cooked
+            : undefined;
+      if (name !== undefined && isBuiltin(name)) context.report({ node: source, messageId: 'module', data: { name } });
     }
+    const checkSource = (node) => checkSpecifier(node.source);
     return {
       ImportDeclaration: checkSource,
       ExportNamedDeclaration: checkSource,
       ExportAllDeclaration: checkSource,
       ImportExpression: checkSource,
+      // import fs = require('fs')
+      TSExternalModuleReference: (node) => checkSpecifier(node.expression),
       'Program:exit'(program) {
         const report = (node, name) =>
           context.report({ node, messageId: 'global', data: { name, kind: NODE_GLOBALS.has(name) ? 'Node' : 'DOM' } });

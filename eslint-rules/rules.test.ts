@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
@@ -147,6 +148,58 @@ describe('isomorphic-imports catches global-object access and more node modules'
       expect(await ruleIds(code, 'packages/core/a.ts')).not.toContain(ISO);
     },
   );
+});
+
+describe('isomorphic-imports bans every Node builtin', () => {
+  // Derived the same way as the rule, so a builtin added in a later Node release is covered too.
+  const names = [...new Set(builtinModules.map((m) => m.replace(/^node:/, '')))];
+  it.each(names)('flags %s in bare and node: forms', async (name) => {
+    expect(await ruleIds(`import * as m from 'node:${name}'; export { m };`, 'packages/env/a.ts')).toContain(ISO);
+    if (!builtinModules.includes(`node:${name}`)) {
+      expect(await ruleIds(`import * as m from '${name}'; export { m };`, 'packages/env/a.ts')).toContain(ISO);
+    }
+  });
+  it.each([
+    "import { randomUUID, randomBytes } from 'node:crypto'; export const a = [randomUUID, randomBytes];",
+    "import { performance as perf } from 'node:perf_hooks'; export const t = perf.now();",
+    "import { setTimeout as sleep } from 'node:timers/promises'; export { sleep };",
+    "import { setTimeout as sleep } from 'timers/promises'; export { sleep };",
+    "import { request } from 'node:http'; export { request };",
+    "import { gzipSync } from 'node:zlib'; export { gzipSync };",
+    "import { inspect } from 'node:util'; export { inspect };",
+    "import { Buffer as B } from 'node:buffer'; export const b = B.from('x');",
+    "import { createHash } from 'crypto'; export { createHash };",
+    "import { readFile } from 'fs/promises'; export { readFile };",
+    "import { test } from 'node:test'; export { test };",
+    'export const m = await import(`node:fs`);',
+    'export const m = await import(`crypto`);',
+    "export const m = await import('node:crypto');",
+    "import fs = require('fs'); export const r = fs.readFileSync;",
+  ])('flags %s', async (code) => {
+    expect(await ruleIds(code, 'packages/core/a.ts')).toContain(ISO);
+  });
+  it.each([
+    "export const b64 = Buffer.from('x').toString('base64');",
+    'setImmediate(() => {});',
+    'export const c = clearImmediate;',
+    'export const d = __dirname;',
+    'export const f = __filename;',
+    "export const r = require('fs');",
+    'export const g = global;',
+    'export const b = globalThis.Buffer.alloc(1);',
+    'export const s = globalThis.setImmediate;',
+  ])('flags the Node-only global in %s', async (code) => {
+    expect(await ruleIds(code, 'tasks/t1/a.ts')).toContain(ISO);
+  });
+  it.each([
+    "import { x } from './fs.ts'; export { x };",
+    "import { x } from 'fs-extra'; export { x };",
+    "import { x } from 'node-fetch'; export { x };",
+    "import { x } from '@acme/path'; export { x };",
+    "export const m = await import('./crypto.ts');",
+  ])('allows %s, which is not a builtin', async (code) => {
+    expect(await ruleIds(code, 'packages/core/a.ts')).not.toContain(ISO);
+  });
 });
 
 describe('clean fixture', () => {
