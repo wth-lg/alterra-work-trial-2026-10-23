@@ -52,7 +52,8 @@ export interface ToolResult {
 // Results are capped at 8k tokens (design section 3). The count is estimated, not tokenized:
 // one token per 3 UTF-16 code units of the JSON. Claude's tokenizer averages more characters
 // per token than that on JSON and English, so the estimate errs high and the real size stays
-// under the cap.
+// under the cap. List results page to stay under it (read/page.ts); callTool turns any result
+// still over it, such as one long note, into NOT_SUPPORTED.
 export const RESULT_TOKEN_CAP = 8000;
 export const approxTokens = (json: string): number => Math.ceil(json.length / 3);
 export const withinCap = (jsonLength: number): boolean => Math.ceil(jsonLength / 3) <= RESULT_TOKEN_CAP;
@@ -140,6 +141,11 @@ export function callTool<C>(tools: readonly Tool<C>[], name: string, input: unkn
   } catch (e) {
     if (e instanceof ToolError) return failure(e);
     throw e;
+  }
+  const json = JSON.stringify(payload);
+  if (!withinCap(json.length)) {
+    const message = `the result is about ${approxTokens(json)} tokens, over the ${RESULT_TOKEN_CAP}-token cap; ask for less (a smaller count, narrower filters, or search_notes for passages of a long note)`;
+    return failure(new ToolError('NOT_SUPPORTED', message));
   }
   return { is_error: false, content: payload, ...exposure(payload) };
 }

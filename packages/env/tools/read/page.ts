@@ -1,7 +1,8 @@
 // Paging for every list result (design section 3): at most `count` entries from `offset`,
 // further cut so the JSON stays under the token cap. `next_offset` is present whenever entries
 // remain after the page; `truncated` marks a page the cap cut short. A page always holds at
-// least one entry when any remain, so following next_offset always reaches the end.
+// least one entry when any remain, so following next_offset always reaches the end; a single
+// entry over the cap makes callTool answer NOT_SUPPORTED (registry.ts).
 import { withinCap } from '../registry.ts';
 
 export interface Page<T> {

@@ -394,6 +394,32 @@ describe('read_policy', () => {
   });
 });
 
+describe('results that cannot be paged', () => {
+  it('answer a single policy or note over the 8k cap with NOT_SUPPORTED, never an oversized payload', () => {
+    const long = 'word '.repeat(6000);
+    const big: ReadContext = {
+      ...context([
+        {
+          resourceType: 'DocumentReference',
+          id: 'doc-z-long',
+          status: 'current',
+          subject: { reference: 'Patient/pt-0060' },
+          content: [{ attachment: { contentType: 'text/plain', data: btoa(long) } }],
+        } satisfies DocumentReference,
+      ]),
+      policies: [{ id: 'RBC-LONG-01', title: 'Long', version: '1', effective: '2026-01-01', source: 'environment-local', text: long }],
+    };
+    for (const [name, input] of [
+      ['read_policy', { policy_id: 'RBC-LONG-01' }],
+      ['fhir_read', { resource_type: 'DocumentReference', id: 'doc-z-long' }],
+    ] as const) {
+      const e = err(call(name, input, big));
+      expect(e.code).toBe('NOT_SUPPORTED');
+      expect(e.message).toContain(`${RESULT_TOKEN_CAP}-token cap`);
+    }
+  });
+});
+
 describe('lookup_catalog', () => {
   it('matches every query word within one kind, ordered by display', () => {
     const r = call('lookup_catalog', { query: 'Metformin tablet', kind: 'medication' });

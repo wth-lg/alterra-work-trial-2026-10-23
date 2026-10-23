@@ -280,8 +280,7 @@ async function fuzz(tools: readonly Tool<ReadContext>[], perTool: number, seed: 
         const [type, rid] = id.split('/') as [string, string];
         if (type === 'Policy' ? !POLICIES.some((p) => p.id === rid) : !store.get(type, rid)) defect(`#${n} ${name}: exposed ${id} is not in the world`);
       }
-      const content = result.content as { entries?: unknown[] };
-      if (approxTokens(JSON.stringify(content)) > RESULT_TOKEN_CAP && (content.entries?.length ?? 1) > 1) defect(`#${n} ${name}: page over the cap`);
+      if (approxTokens(JSON.stringify(result.content)) > RESULT_TOKEN_CAP) defect(`#${n} ${name}: result over the cap`);
       // Same input, same bytes: reads are pure.
       if (n % 10 === 0 && JSON.stringify(callTool(tools, name, input, ctx)) !== JSON.stringify(result)) defect(`#${n} ${name}: not deterministic`);
     }
