@@ -1,0 +1,10 @@
+{
+  "sources": [
+    {
+      "source": "lint-bad",
+      "spec": {
+        "thresholds": [{ "quantity": "scr", "threshold": 1.5, "observation": "obs-t1-scr-bad" }]
+      }
+    }
+  ]
+}
