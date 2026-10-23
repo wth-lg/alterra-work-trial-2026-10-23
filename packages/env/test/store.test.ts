@@ -1,8 +1,9 @@
 /* eslint-disable local/isomorphic-imports -- Node-only test: node:zlib builds gzipped input. */
 import { gzipSync } from 'node:zlib';
-import type { Observation, Resource } from '@medplum/fhirtypes';
+import type { Identifier, Observation, Resource } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
 import { loadStore, parseNdjson, type FixtureSource } from '../fixture-source.ts';
+import { stateHash } from '../hash.ts';
 import { search, SearchError } from '../search.ts';
 import { Store } from '../store.ts';
 
@@ -58,6 +59,68 @@ describe('Store', () => {
     store.put(mine);
     mine.status = 'cancelled';
     expect(store.get<Observation>('Observation', 'b')?.status).toBe('final');
+  });
+
+  it('never freezes or shares the caller\'s objects, even shallow-frozen ones', async () => {
+    const plain = obs('a', { effectiveDateTime: '2026-10-01' });
+    // Frozen at the top only: its code and subject stay mutable.
+    const shallow = Object.freeze(obs('b', { effectiveDateTime: '2026-10-02' }));
+    const input = [plain, shallow];
+    const one = new Store(input);
+    const two = new Store(input);
+    const before = await stateHash(one.resources());
+    expect(await stateHash(two.resources())).toBe(before);
+    expect(Object.isFrozen(plain)).toBe(false);
+    expect(Object.isFrozen(plain.code)).toBe(false);
+    // Every nested stored object is frozen, including those under an already-frozen top.
+    const stored = one.get<Observation>('Observation', 'b')!;
+    expect(Object.isFrozen(stored.subject)).toBe(true);
+    expect(Object.isFrozen(stored.code!.coding![0])).toBe(true);
+    // The caller changes their objects; neither store sees it.
+    plain.status = 'cancelled';
+    plain.code!.coding![0]!.code = 'zz';
+    shallow.subject!.reference = 'Patient/pt-2';
+    shallow.code!.coding![0]!.code = 'zz';
+    for (const store of [one, two]) {
+      expect(store.get<Observation>('Observation', 'a')?.status).toBe('final');
+      expect(store.get<Observation>('Observation', 'b')?.subject?.reference).toBe('Patient/pt-1');
+      expect(ids(store, 'Observation', { patient: 'pt-2' })).toEqual([]);
+      expect(ids(store, 'Observation', { code: '2160-0' })).toEqual(['a', 'b']);
+      expect(await stateHash(store.resources())).toBe(before);
+    }
+  });
+
+  it('put and the constructor reject dates search cannot read, naming the resource', () => {
+    const bad: Array<Partial<Observation>> = [
+      { effectiveDateTime: '23/10/2026' },
+      { effectiveDateTime: '2026-10-23T12:00:00+05:99' },
+      { effectiveDateTime: '2026-10-23T12:00:00+15:00' },
+      { effectiveDateTime: '2026-10-23T12:00:00+14:30' },
+      { effectiveDateTime: '2026-10-23T12:00:00-14:01' },
+      { effectiveDateTime: '0100-02-29' },
+      { effectivePeriod: { start: '2026-10-23', end: 'soon' } },
+    ];
+    const store = new Store([obs('a')]);
+    for (const extra of bad) {
+      expect(() => store.put(obs('x', extra)), JSON.stringify(extra)).toThrow(/Observation\/x.*not a FHIR date/);
+      expect(() => new Store([obs('x', extra)]), JSON.stringify(extra)).toThrow(/Observation\/x.*not a FHIR date/);
+    }
+    expect(store.get('Observation', 'x')).toBeUndefined();
+    // So no stored value can make a date query or a sort throw.
+    expect(ids(store, 'Observation', { date: 'ge2026-01-01', _sort: 'date' })).toEqual([]);
+    for (const ok of ['2026-10-23T12:00:00+14:00', '2026-10-23T12:00:00-14:00', '2026-10-23T12:00:00-12:00', '0000-02-29']) {
+      expect(() => store.put(obs('y', { effectiveDateTime: ok })), ok).not.toThrow();
+    }
+  });
+
+  it('put rejects values with no JSON form: sparse arrays and undefined elements', () => {
+    const store = new Store([]);
+    // eslint-disable-next-line no-sparse-arrays
+    const sparse = obs('s', { identifier: [{ value: '1' }, , { value: '3' }] as Identifier[] });
+    expect(() => store.put(sparse)).toThrow(/sparse/);
+    expect(() => store.put(obs('u', { identifier: [undefined] as unknown as Identifier[] }))).toThrow(/no JSON form/);
+    expect(() => new Store([sparse])).toThrow(/sparse/);
+    expect(store.size).toBe(0);
   });
 
   it('has no clear(): a fresh trial builds a fresh store', () => {
