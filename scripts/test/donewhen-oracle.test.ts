@@ -24,7 +24,7 @@ function clause3(root: string) {
       DONEWHEN_CLI: `${process.execPath} ${join(root, 'cli/index.ts')}`,
       HOME: home,
       SPEND_LEDGER: join(home, 'spend.jsonl'),
-      CHARTR_CANONICAL_LEDGER: undefined,
+      CLINENV_CANONICAL_LEDGER: undefined,
     },
   });
   const line = r.stdout.split('\n').find((l) => /^(PASS|FAIL) \(3\)/.test(l));

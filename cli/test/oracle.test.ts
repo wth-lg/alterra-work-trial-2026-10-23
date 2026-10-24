@@ -65,7 +65,7 @@ describe('oracle', () => {
     expect(p).toBeGreaterThan(0);
     // Each call at its real size is well under the $1 ceiling the dry run of run-one prices it at.
     expect(p).toBeLessThan(4 * 2 * JUDGE_MAX_CALL_USD);
-    expect(existsSync(join(h.home, '.chartr'))).toBe(false);
+    expect(existsSync(join(h.home, '.clinenv'))).toBe(false);
     expect(h.written).toHaveLength(0);
   });
 
@@ -73,7 +73,7 @@ describe('oracle', () => {
     const h = harness();
     expect(await main(['--task', '_toy', '--live-judge'], h.deps)).toBe(1);
     expect(h.text()).toContain('ANTHROPIC_API_KEY is not set');
-    expect(existsSync(join(h.home, '.chartr'))).toBe(false);
+    expect(existsSync(join(h.home, '.clinenv'))).toBe(false);
   });
 
 });
