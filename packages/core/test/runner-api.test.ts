@@ -128,6 +128,12 @@ describe('runner-api trial, run and SSE contracts (P12b)', () => {
       }
     }
     expect(parseTrialsRequest({ ...SAMPLES.trialsRequest, key }).key).toBe(key);
+    // Unknown fields are counted, never named: a field name is client text, and an encoded key
+    // passes redaction (security review P12b-4 G1).
+    const encoded = key.replace('s', '%73');
+    expect(() => parseTrialsRequest({ ...SAMPLES.trialsRequest, [encoded]: 1 })).toThrow(/^trials request: 1 unknown field$/);
+    expect(() => parseTrialsRequest({ ...SAMPLES.trialsRequest, [encoded]: 1, [key.slice(14)]: 2 })).toThrow(/^trials request: 2 unknown fields$/);
+    expect(() => parseKeyRequest({ key, [encoded]: 1 })).toThrow(/^key request: 1 unknown field$/);
   });
 
   it('frames and parses the SSE stream: id, event, one data line, comments dropped, a partial frame kept', () => {

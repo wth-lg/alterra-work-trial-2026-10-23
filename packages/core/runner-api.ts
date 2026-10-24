@@ -134,8 +134,7 @@ export function parseHealth(x: unknown): Health {
 // name the rule broken, never the value.
 export function parseKeyRequest(x: unknown): KeyRequest {
   const o = object(x, 'key request');
-  const extra = Object.keys(o).filter((k) => k !== 'key');
-  if (extra.length > 0) throw new ContractError(`key request: unknown field ${extra.join(', ')}`);
+  only(o, 'key request', ['key']);
   const key = field(o, 'key request', 'key', isString, 'a string');
   if (key === '' || key.trim() !== key || key.length > MAX_KEY_LENGTH || /\s/.test(key)) {
     throw new ContractError(`key request: key must be 1 to ${MAX_KEY_LENGTH} characters with no whitespace`);
@@ -159,9 +158,11 @@ const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.is
 const isNullableString = (v: unknown): v is string | null => v === null || typeof v === 'string';
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every(isString);
 
+// Unknown fields are counted, never named: a field name is client text too, and a key in it,
+// percent-encoded or without its sk-ant- prefix, would pass redaction (security review P12b-4 G1).
 function only(o: Obj, what: string, allowed: readonly string[]): void {
-  const extra = Object.keys(o).filter((k) => !allowed.includes(k));
-  if (extra.length > 0) throw new ContractError(`${what}: unknown field ${extra.join(', ')}`);
+  const extra = Object.keys(o).filter((k) => !allowed.includes(k)).length;
+  if (extra > 0) throw new ContractError(`${what}: ${extra} unknown field${extra === 1 ? '' : 's'}`);
 }
 
 export interface TrialsRequest {
@@ -173,6 +174,10 @@ export interface TrialsRequest {
   // The UI session's cap: the runner refuses a batch whose projection, with what this runner's
   // batches have spent, would cross it, and the batch's grant stops it at the cap after that
   // (reruns included). Never above PROJECTED_CAP_USD; the ledger checks that.
+  // Caps are per batch (security review P12b-4 G3, option A): each batch keeps the cap of its own
+  // accepted POST as its ceiling for its whole run, so a later POST with another cap neither
+  // tightens nor loosens a batch already running. POST api/key checks Validate against the cap
+  // of the last batch accepted; a refused POST (or a dry run) never changes it.
   session_cap_usd: number;
   // A key for this batch only, held in memory until it ends; else the key POST api/key holds.
   key?: string;
@@ -183,7 +188,8 @@ export interface TrialsRequest {
 
 const TRIALS_FIELDS = ['tasks', 'trials', 'concurrency', 'effort', 'session_cap_usd', 'key', 'smoke'] as const;
 
-// Messages name the field and the rule, never a value: a key could be in any field.
+// Messages name a known field and the rule, never a value or an unknown name: a key could be in
+// any of them.
 export function parseTrialsRequest(x: unknown): TrialsRequest {
   const what = 'trials request';
   const o = object(x, what);

@@ -68,11 +68,12 @@ describe('key secrecy (gate case 2)', () => {
         await send('GET', `/api/trials/${a.trial_ids[0]}`);
         await send('GET', '/api/runs');
 
-        // A mocked 401 Validate and a mocked 500: errors pass through redaction.
+        // A mocked 401 Validate and a mocked 500: the answer is the class's fixed message, with
+        // no upstream text to redact (security review P12b-4 G2).
         mode = '401';
         const e401 = await send('POST', '/api/key', { key });
         expect(e401.status).toBe(401);
-        expect(e401.text).toContain('[redacted]');
+        expect(e401.json()).toEqual({ error: { type: 'authentication_error', message: 'The API refused this key (unauthorized). Check the key and press Validate again.' } });
         mode = '500';
         const e500 = await send('POST', '/api/key', { key });
         expect(e500.status).toBeGreaterThanOrEqual(500);

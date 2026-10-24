@@ -26,7 +26,14 @@
 // holds the key in this closure for the process's lifetime; DELETE api/key forgets it. The key
 // leaves the process only in the x-api-key header MessagesClient sends (packages/core/anthropic.ts);
 // it is never written to a record, ledger row, log line or response, and every error text passes
-// through redactText. The runner reads only ENV_KEYS from its environment, never
+// through redactText. No response or log line echoes request input: a contract error counts
+// unknown fields instead of naming them and an unknown task id is not named (security review
+// P12b-4 G1). Upstream text never enters the process: typeOnly wraps every transport so an
+// error answer or stream error event keeps its status and error type and loses its message, and
+// a failed connection or stream throws a fixed error. So a log line, trial record or response
+// carries an upstream error as its status and type only, and a failed Validate answers a fixed
+// message for its class: unauthorized, forbidden, rate limited or upstream error (G2). The
+// runner reads only ENV_KEYS from its environment, never
 // ANTHROPIC_API_KEY. The request log is method, route template (routeOf: /api/trials/:id,
 // BASE*, or `unmatched`), status and duration; never a path, body, header or query, so no
 // encoding of a key typed into a URL can reach it. No response echoes the path either: an /api
@@ -46,9 +53,12 @@
 // take the session past it, a re-queued attempt's included, is refused, the batch stops
 // (stopped: spend_refused_ceiling), the trial in flight ends CANCELLED (stopped from outside,
 // kept as a re-queued attempt, so a later batch runs it again) and every reservation settles.
-// POST api/key checks its Validate worst case against the cap of the last batch posted, in this
-// runner and in the ledger, and gets 409 session_cap with no call when it would cross it; before
-// any batch there is no cap yet, and the first batch counts what Validate spent. A batch
+// Caps are per batch (runner-api.ts TrialsRequest.session_cap_usd): a batch keeps the cap of its
+// own POST as its ceiling, and a later POST with a lower cap is refused without reining it in.
+// POST api/key checks its Validate worst case against the cap of the last batch accepted (202),
+// in this runner and in the ledger, and gets 409 session_cap with no call when it would cross it;
+// a refused POST or a dry run never changes that cap (security review P12b-4 G3). Before any
+// batch there is no cap yet, and the first batch counts what Validate spent. A batch
 // runBatch refuses before its grant (its run is locked, batchStart refuses it) gets 409 with the
 // reason and leaves no run or trial. The run id (<session>-<n>) is taken before any await, so
 // two requests at once never share one.
@@ -79,7 +89,7 @@ import { homedir } from 'node:os';
 import { basename, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { okResponse, scenarioTransport } from '../web/src/harness/scenarios.ts';
-import { ApiError, MessagesClient, MODEL, type Transport } from '../../packages/core/anthropic.ts';
+import { ApiError, EgressRefusal, MessagesClient, MODEL, type Transport } from '../../packages/core/anthropic.ts';
 import { BatchRefused, planBatch, runBatch, trialKey, type BatchRecord, type BatchSpec, type ResultSink, type TrialKey } from '../../packages/core/batch.ts';
 import type { Projection, TrialObservation } from '../../packages/core/cost.ts';
 import type { TrialEvent } from '../../packages/core/events.ts';
@@ -131,6 +141,86 @@ const fullyDecoded = (text: string): string => {
     text = next;
   }
 };
+// An upstream error type as the API names them (authentication_error, overloaded_error, ...).
+const ERROR_TYPE = /^[a-z_]{1,64}$/;
+// An error body, or an SSE error event's data, reduced to its type: { type: 'error', error: { type } }.
+const typeOnly = (raw: string): string => {
+  let type: unknown;
+  try {
+    type = (JSON.parse(raw) as { error?: { type?: unknown } }).error?.type;
+  } catch {
+    type = undefined;
+  }
+  return JSON.stringify({ type: 'error', error: typeof type === 'string' && ERROR_TYPE.test(type) ? { type } : {} });
+};
+// A stream with each SSE error event's data reduced by typeOnly; a stream that fails mid-read
+// fails with a fixed error.
+function sseTypeOnly(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let rest = '';
+  const line = (l: string) => {
+    if (!l.startsWith('data:') || !l.includes('"error"')) return l;
+    try {
+      if ((JSON.parse(l.slice(5)) as { type?: unknown }).type !== 'error') return l;
+    } catch {
+      return l;
+    }
+    return `data: ${typeOnly(l.slice(5))}`;
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(c) {
+      let r: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        r = await reader.read();
+      } catch {
+        c.error(new TypeError('stream failed'));
+        return;
+      }
+      if (r.done) {
+        if (rest !== '') c.enqueue(encoder.encode(line(rest)));
+        c.close();
+        return;
+      }
+      const lines = (rest + decoder.decode(r.value, { stream: true })).split('\n');
+      rest = lines.pop() ?? '';
+      if (lines.length > 0) c.enqueue(encoder.encode(`${lines.map(line).join('\n')}\n`));
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+}
+// The transport as the client sees it: upstream text removed (see the header). An abort and the
+// egress guard's refusal pass through as they are, since the client tells them apart.
+const upstreamTypeOnly = (f: Transport): Transport => async (request) => {
+  let res: Response | null = null;
+  try {
+    res = await f(request);
+  } catch (e) {
+    if (request.signal.aborted || e instanceof EgressRefusal) throw e;
+  }
+  // Any other failure: a fixed error, without the cause, which is upstream text.
+  if (res === null) throw new TypeError('fetch failed');
+  const headers = new Headers(res.headers);
+  headers.delete('content-length');
+  headers.delete('content-encoding');
+  if (res.status !== 200) {
+    const raw = await res.text().catch(() => '');
+    headers.set('content-type', 'application/json');
+    return new Response(typeOnly(raw), { status: res.status, statusText: '', headers });
+  }
+  return res.body === null ? res : new Response(sseTypeOnly(res.body), { status: res.status, headers });
+};
+// A failed Validate's answer, by class: the upstream status picks it, never the upstream text.
+const VALIDATE_FAILED = {
+  unauthorized: 'The API refused this key (unauthorized). Check the key and press Validate again.',
+  forbidden: 'This key may not use the model (forbidden). Check the key\'s workspace and press Validate again.',
+  rate_limited: 'The API is rate limiting this key. Wait a minute, then press Validate again.',
+  upstream: 'The API call failed (upstream error). Press Validate again in a minute.',
+} as const;
+const validateFailed = (status: number | null): string =>
+  status === 401 ? VALIDATE_FAILED.unauthorized : status === 403 ? VALIDATE_FAILED.forbidden : status === 429 ? VALIDATE_FAILED.rate_limited : VALIDATE_FAILED.upstream;
+
 const API_ROUTES = new Set(['health', 'key', 'runs', 'trials']);
 const TRIAL_ROUTE = /^trials\/([^/]+)(\/events)?$/;
 // An /api route's template (trials/:id), or null for no route.
@@ -289,7 +379,8 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   const token = randomBytes(32).toString('hex');
   const session = `ui-${stamp()}-${randomBytes(2).toString('hex')}`;
   const mockToy = (label: string): Transport => (label.includes('validate') ? async () => okResponse({ text: 'OK' }, 1) : scenarioTransport('toy').transport);
-  const transport = opts.transport ?? (opts.mock ? mockToy : () => (request: Request) => fetch(request));
+  const base = opts.transport ?? (opts.mock ? mockToy : () => (request: Request) => fetch(request));
+  const transport = (label: string) => upstreamTypeOnly(base(label));
   const tasks = nodeTaskSource({ testMode: false });
   const git = gitState(REPO);
   let world: ReturnType<typeof repoWorld> | undefined;
@@ -314,7 +405,8 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   const sessionRows = (rows: readonly LedgerRow[]) => rows.filter((r) => inSession(r.run_id));
   // The session cap as a grant's ceiling: the ledger checks it at every reserve.
   const ceilingAt = (usd: number): SpendCeiling => ({ usd, scope: inSession, what: 'session cap' });
-  // The cap of the last batch posted, which POST api/key checks Validate against; null before any.
+  // The cap of the last batch accepted, which POST api/key checks Validate against; null before
+  // any. Set only on a 202, never by a refused POST or a dry run (see the header).
   let sessionCap: number | null = null;
   // The projection of each of this runner's batches that is not done, by run id (see the header).
   // Each batch removes only its own entry.
@@ -398,6 +490,14 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   // ---- batches ----
 
+  // 400 when a task id is not one of this runner's tasks. The message counts them and never
+  // names one: the ids are client text (see the header).
+  async function knownTasks(ids: readonly string[]): Promise<void> {
+    const found = await Promise.all(ids.map((id) => tasks.get(id).then(() => true, () => false)));
+    const unknown = found.filter((ok) => !ok).length;
+    if (unknown > 0) throw new HttpError(400, 'invalid_request', `tasks: ${unknown} task ${unknown === 1 ? 'id is not a task' : 'ids are not tasks'} this runner has`);
+  }
+
   function terms(projection: Projection, rows: readonly LedgerRow[], sessionCap: number): ProjectionTerms {
     const t = totals(rows);
     return {
@@ -413,6 +513,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   async function postTrials(body: TrialsRequest, dryRun: boolean): Promise<{ status: number; body: unknown }> {
     if (body.session_cap_usd > PROJECTED_CAP_USD) throw new HttpError(400, 'invalid_request', `the session cap can be at most $${PROJECTED_CAP_USD}`);
+    await knownTasks(body.tasks);
     if (body.smoke) return startSmoke(body);
     const key = opts.mock ? 'mock-key-not-sent' : (body.key ?? heldKey);
     world ??= repoWorld();
@@ -432,7 +533,6 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     const rows = readRows(ledgerPath);
     const projection = terms(plan.projection, rows, body.session_cap_usd);
     if (dryRun) return { status: 200, body: { dry_run: true, calls: 0, projection } };
-    sessionCap = body.session_cap_usd;
     if (key === null) return { status: 409, body: { error: { type: 'no_key', message: 'No API key yet: paste your Anthropic API key and press Validate, then start the trial again.' }, projection: null } };
     if (projection.session_spent_usd + projection.total_usd > body.session_cap_usd) {
       return {
@@ -506,7 +606,10 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     const entry: RunEntry = { view, controller, done };
     runs.push(entry);
     const ran = await Promise.race([started.then(() => true), batch.then(() => false, () => false)]);
-    if (ran) return { status: 202, body: { run_id: runId, trial_ids: view.trial_ids } };
+    if (ran) {
+      sessionCap = body.session_cap_usd;
+      return { status: 202, body: { run_id: runId, trial_ids: view.trial_ids } };
+    }
 
     // Refused or cancelled before its grant: no call was made. It leaves no run or trial.
     const outcome = await batch.then(() => null, (e: unknown) => e);
@@ -522,9 +625,6 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   async function startSmoke(body: TrialsRequest): Promise<{ status: number; body: unknown }> {
     if (!forcedFail) throw new HttpError(400, 'invalid_request', 'Smoke trials are turned off in this runner.');
-    for (const id of body.tasks) await tasks.get(id).catch((e: unknown) => {
-      throw new HttpError(400, 'invalid_request', `tasks: ${(e as Error).message}`);
-    });
     world ??= repoWorld();
     const w = world;
     const taken = existsSync(runsDir) ? readdirSync(runsDir).filter((d) => /^smoke-\d+$/.test(d)).map((d) => Number(d.slice(6))) : [];
@@ -593,13 +693,15 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
         await grant.close();
       }
     } catch (e) {
-      const message = redactText(e instanceof Error ? e.message : String(e), [key]);
-      if (e instanceof SpendRefused) return { status: 409, body: { error: { type: `spend_refused_${e.cap}`, message } } };
+      // The ledger's refusal is the runner's own text; an API error answers its class's fixed
+      // message (see the header).
+      if (e instanceof SpendRefused) return { status: 409, body: { error: { type: `spend_refused_${e.cap}`, message: redactText(e.message, [key]) } } };
       if (e instanceof ApiError) {
-        const status = e.status !== null && e.status >= 400 && e.status < 500 ? e.status : 502;
-        return { status, body: { error: { type: e.errorType ?? (e.status === null ? 'network_error' : `http_${e.status}`), message } } };
+        const status = e.status === 401 || e.status === 403 || e.status === 429 ? e.status : 502;
+        return { status, body: { error: { type: e.errorType ?? (e.status === null ? 'network_error' : `http_${e.status}`), message: validateFailed(e.status) } } };
       }
-      return { status: 500, body: { error: { type: 'runner_error', message } } };
+      say(`${label}: ${e instanceof Error ? e.name : 'error'}`);
+      return { status: 500, body: { error: { type: 'runner_error', message: 'Validate failed inside the runner. Press Validate again.' } } };
     } finally {
       batchKeys.delete(key);
     }
@@ -826,7 +928,11 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
         return;
       }
       if (e instanceof HttpError) fail(res, e.status, e.type, e.message, isApi || e.type.startsWith('forbidden'));
-      else fail(res, 500, 'runner_error', e instanceof Error ? e.message : String(e), true);
+      else {
+        // An unexpected error's text could hold anything the request carried: its name only.
+        say(`${req.method} ${shown}: ${e instanceof Error ? e.name : 'error'}`);
+        fail(res, 500, 'runner_error', 'the runner hit an unexpected error', true);
+      }
     }
   }
 
