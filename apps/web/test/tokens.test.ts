@@ -220,7 +220,7 @@ describe('colour utilities', () => {
 
 const publicDir = join(webRoot, 'public');
 // api/health is the static build's answer to surface detection: a 200 that is not
-// chartr-runner, so the hosted page is browser-direct without a 404 in the console.
+// clinenv-runner, so the hosted page is browser-direct without a 404 in the console.
 const ALLOWED = [/^fonts\/[\w.-]+\.woff2$/, /^fonts\/OFL\.txt$/, /^api\/health$/];
 
 // WOFF2 (W3C, 2018): the 48-byte header, then the table directory, then one Brotli stream of

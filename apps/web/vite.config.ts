@@ -17,7 +17,7 @@ function stripCspInDev(): Plugin {
 // harness.html and probe.html are test pages: `pnpm build` builds them for the e2e runs, and
 // the Pages build (`--mode pages`, .github/workflows/pages.yml) leaves them out of the artifact.
 export default defineConfig(({ mode }) => ({
-  base: '/alterra-work-trial-2026-10-23/',
+  base: '/clinical-agent-env/',
   plugins: [react(), tailwindcss(), stripCspInDev(), copyDataPlugin()],
   build: {
     rollupOptions: {

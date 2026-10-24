@@ -5,7 +5,7 @@ import { LocalCommand } from './LocalCommand.tsx';
 
 export const RETRY_MS = 2000;
 
-// The runner's own page when its api/health did not answer as chartr-runner. It retries every
+// The runner's own page when its api/health did not answer as clinenv-runner. It retries every
 // RETRY_MS and on an answer reloads, which also picks up a new token if the runner restarted.
 // Nothing here takes a key.
 export function RunnerDown() {

@@ -3,18 +3,18 @@
 // (key included) as a page.evaluate argument, never in a URL or storage. The page installs the
 // egress guard like every entry point; the relay keeps the fetch from before it, because the
 // Request it forwards was registered and claimed on the Node side (relayFetch), and a Request
-// cannot cross into the page. window.chartrFetch is the page's one path to the API host.
+// cannot cross into the page. window.clinenvFetch is the page's one path to the API host.
 import { installEgressGuard } from '../../../../packages/core/egress.ts';
 import { pageFetch, type PageReply, type PageRequest } from './transport.ts';
 
 declare global {
   interface Window {
-    chartrFetch?: (url: string, req: PageRequest) => Promise<PageReply>;
+    clinenvFetch?: (url: string, req: PageRequest) => Promise<PageReply>;
   }
 }
 
 const send = globalThis.fetch.bind(globalThis);
 installEgressGuard(globalThis);
 
-window.chartrFetch = (url, req) => pageFetch(send, url, req);
+window.clinenvFetch = (url, req) => pageFetch(send, url, req);
 document.body.dataset.page = 'probe';

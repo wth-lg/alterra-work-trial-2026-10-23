@@ -1,12 +1,12 @@
 // The Node LedgerStore: the ledger file, its cross-process lockfile, env and the wall clock.
 // Two modes, and no machine-specific path in the code:
-//   own-run  CHARTR_CANONICAL_LEDGER is set. The path comes only from it, and the file must
+//   own-run  CLINENV_CANONICAL_LEDGER is set. The path comes only from it, and the file must
 //            already exist (`pnpm cli spend --init` creates it once). Opening refuses, before
 //            any call can be made, when the value is empty or not absolute, the file is
 //            missing or not a file, or SPEND_LEDGER names another file. Once an open in this
 //            process resolves own-run mode, only a grant minted over that file passes
 //            assertGrant.
-//   default  SPEND_LEDGER, else ~/.chartr/spend.jsonl, created on first live open.
+//   default  SPEND_LEDGER, else ~/.clinenv/spend.jsonl, created on first live open.
 // A ledger is known by its real path, so a symlink or a relative name reaches the same file
 // and the same lock. The caps are the same in both modes; packages/core/ledger.ts enforces them.
 import { randomUUID } from 'node:crypto';
@@ -45,22 +45,22 @@ export function realLedgerPath(path: string): string {
 
 // `requireFile: false` is for `spend --init`, which creates the own-run file.
 export function resolveLedgerPath(env: Env = process.env, opts: { requireFile?: boolean } = {}): { mode: LedgerMode; path: string; problems: string[] } {
-  const marker = env.CHARTR_CANONICAL_LEDGER;
+  const marker = env.CLINENV_CANONICAL_LEDGER;
   if (marker !== undefined) {
     const problems: string[] = [];
-    if (marker === '') problems.push('CHARTR_CANONICAL_LEDGER is set but empty');
-    else if (!isAbsolute(marker)) problems.push(`CHARTR_CANONICAL_LEDGER=${marker} is not an absolute path`);
-    else if (!existsSync(dirname(marker))) problems.push(`the directory of CHARTR_CANONICAL_LEDGER=${marker} does not exist`);
-    else if (existsSync(marker) && !statSync(marker).isFile()) problems.push(`CHARTR_CANONICAL_LEDGER=${marker} is not a file`);
+    if (marker === '') problems.push('CLINENV_CANONICAL_LEDGER is set but empty');
+    else if (!isAbsolute(marker)) problems.push(`CLINENV_CANONICAL_LEDGER=${marker} is not an absolute path`);
+    else if (!existsSync(dirname(marker))) problems.push(`the directory of CLINENV_CANONICAL_LEDGER=${marker} does not exist`);
+    else if (existsSync(marker) && !statSync(marker).isFile()) problems.push(`CLINENV_CANONICAL_LEDGER=${marker} is not a file`);
     else if (opts.requireFile !== false && !existsSync(marker)) {
-      problems.push(`CHARTR_CANONICAL_LEDGER=${marker} does not exist; create it once with pnpm cli spend --init`);
+      problems.push(`CLINENV_CANONICAL_LEDGER=${marker} does not exist; create it once with pnpm cli spend --init`);
     }
     if (env.SPEND_LEDGER && realLedgerPath(env.SPEND_LEDGER) !== realLedgerPath(marker)) {
-      problems.push(`SPEND_LEDGER=${env.SPEND_LEDGER} names another file than CHARTR_CANONICAL_LEDGER=${marker}`);
+      problems.push(`SPEND_LEDGER=${env.SPEND_LEDGER} names another file than CLINENV_CANONICAL_LEDGER=${marker}`);
     }
     return { mode: 'own-run', path: marker, problems };
   }
-  const path = env.SPEND_LEDGER ? resolve(env.SPEND_LEDGER) : join(env.HOME || homedir(), '.chartr', 'spend.jsonl');
+  const path = env.SPEND_LEDGER ? resolve(env.SPEND_LEDGER) : join(env.HOME || homedir(), '.clinenv', 'spend.jsonl');
   return { mode: 'default', path, problems: [] };
 }
 
@@ -74,14 +74,14 @@ let canonical: { path: string; stores: WeakSet<LedgerStore> } | undefined;
 function bindOwnRun(env: Env, mode: LedgerMode, store: FileLedgerStore): void {
   const paths = new Set<string>();
   if (mode === 'own-run') paths.add(store.path);
-  if (env !== process.env && process.env.CHARTR_CANONICAL_LEDGER !== undefined) {
+  if (env !== process.env && process.env.CLINENV_CANONICAL_LEDGER !== undefined) {
     const own = resolveLedgerPath(process.env);
     if (own.problems.length > 0) throw new Error(`own-run spend ledger refused: ${own.problems.join('; ')}`);
     paths.add(realLedgerPath(own.path));
   }
   if (canonical !== undefined) paths.add(canonical.path);
   if (paths.size > 1) {
-    throw new Error(`own-run spend ledger refused: one process meters through one CHARTR_CANONICAL_LEDGER, got ${[...paths].join(' and ')}`);
+    throw new Error(`own-run spend ledger refused: one process meters through one CLINENV_CANONICAL_LEDGER, got ${[...paths].join(' and ')}`);
   }
   const [path] = paths;
   if (path === undefined) return;

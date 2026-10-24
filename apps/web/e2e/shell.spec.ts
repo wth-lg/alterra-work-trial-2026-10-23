@@ -60,7 +60,7 @@ async function storageDump(page: Page): Promise<{ local: string; session: string
   });
 }
 
-// The local runner: health answers as chartr-runner, index.html carries the runner's token
+// The local runner: health answers as clinenv-runner, index.html carries the runner's token
 // meta, and /api/key accepts a POST and a DELETE.
 async function mockLocalRunner(page: Page, token: string) {
   const keyCalls: Array<{ method: string; token: string | null; body: string | null; url: string }> = [];
@@ -70,7 +70,7 @@ async function mockLocalRunner(page: Page, token: string) {
     keyCalls.push({ method: r.method(), token: (await r.headerValue(TOKEN_HEADER)) ?? null, body: r.postData(), url: r.url() });
     return json(route, 200, r.method() === 'DELETE' ? SAMPLES.keyCleared : SAMPLES.keyAccepted);
   });
-  await page.route((url) => url.pathname.endsWith('/alterra-work-trial-2026-10-23/') || url.pathname.endsWith('/index.html'), async (route) => {
+  await page.route((url) => url.pathname.endsWith('/clinical-agent-env/') || url.pathname.endsWith('/index.html'), async (route) => {
     const res = await route.fetch();
     const html = (await res.text()).replace('<head>', `<head>\n    <meta name="${TOKEN_META}" content="${token}" />`);
     return route.fulfill({ response: res, body: html });
@@ -119,7 +119,7 @@ const capField = (page: Page) => page.getByLabel('Session spend cap (USD)');
 const validate = (page: Page) => page.getByRole('button', { name: 'Validate' }).click();
 
 test.describe('surface detection', () => {
-  test('a chartr-runner health names the local runner', async ({ page }) => {
+  test('a clinenv-runner health names the local runner', async ({ page }) => {
     await mockLocalRunner(page, 'stub');
     await page.goto('./');
     await expect(chip(page)).toHaveText('Local runner');
@@ -403,9 +403,9 @@ test.describe('the runner\'s own page (token meta present)', () => {
     await expect(chip(page)).toHaveText('Local runner', { timeout: 10_000 });
   });
 
-  test('a health that does not parse as chartr-runner shows runner not responding, not browser-direct', async ({ page }) => {
+  test('a health that does not parse as clinenv-runner shows runner not responding, not browser-direct', async ({ page }) => {
     await mockLocalRunner(page, 'stub');
-    await page.route((url) => isPath(url, HEALTH_PATH), (route) => json(route, 200, { app: 'chartr-runner', api_version: 1, key_set: false }));
+    await page.route((url) => isPath(url, HEALTH_PATH), (route) => json(route, 200, { app: 'clinenv-runner', api_version: 1, key_set: false }));
     await page.goto('./');
     await expect(page.getByRole('heading', { name: /runner not responding/i })).toBeVisible();
     await expect(page.getByText('Browser-direct')).toHaveCount(0);
