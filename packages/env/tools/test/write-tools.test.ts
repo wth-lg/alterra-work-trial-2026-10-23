@@ -181,7 +181,8 @@ describe('order_medication', () => {
     expect(r.written_ids).toEqual(['MedicationRequest/mr-00005', 'MedicationRequest/mr-t0001', 'Provenance/prov-t0001']);
     expect(get<MedicationRequest>(c, 'MedicationRequest/mr-00005').status).toBe('stopped');
     expect(get<MedicationRequest>(c, 'MedicationRequest/mr-t0001').priorPrescription).toEqual({ reference: 'MedicationRequest/mr-00005' });
-    expect(get<Provenance>(c, 'Provenance/prov-t0001').target).toEqual([{ reference: 'MedicationRequest/mr-00005' }, { reference: 'MedicationRequest/mr-t0001' }]);
+    const targets = get<Provenance>(c, 'Provenance/prov-t0001').target.map((t) => [t.reference, t.extension?.[0]?.valueCodeableConcept?.coding?.[0]?.code]);
+    expect(targets).toEqual([['MedicationRequest/mr-00005', 'UPDATE'], ['MedicationRequest/mr-t0001', 'CREATE']]);
   });
 });
 
@@ -325,7 +326,7 @@ describe('record_allergy', () => {
     expect(await rejected(c, 'record_allergy', { ...allergy, patient: 'pt-0009', update_id: 'alg-w-eie' })).toMatchObject({ code: 'CONFLICT', field: 'update_id' });
     expect(await rejected(c, 'record_allergy', { ...allergy, verification: 'entered-in-error', clinical_status: 'active' })).toMatchObject({ code: 'INVALID_INPUT', field: 'clinical_status' });
     expect(await rejected(c, 'record_allergy', { ...allergy, substance_code: 'IMG-CT-CHEST-WO' })).toMatchObject({ code: 'INVALID_INPUT', field: 'substance_code' });
-    expect(await rejected(c, 'record_allergy', { ...allergy, reactions: [{ severity: 'mild' }] })).toMatchObject({ code: 'INVALID_INPUT', field: 'reactions[0].manifestation' });
+    expect(await rejected(c, 'record_allergy', { ...allergy, reactions: [{ severity: 'mild' }] })).toMatchObject({ code: 'INVALID_INPUT', field: 'reactions[0]' });
     const eie = callTool(TOOLS, 'record_allergy', { ...allergy, verification: 'entered-in-error' }, c);
     expect(get<AllergyIntolerance>(c, ok(eie).allergy_intolerance as string).clinicalStatus).toBeUndefined();
   });

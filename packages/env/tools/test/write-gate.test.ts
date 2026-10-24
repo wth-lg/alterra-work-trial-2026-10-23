@@ -5,6 +5,9 @@
 //   - each committed write creates exactly one Provenance, whose targets are the call's other
 //     written ids;
 //   - created ids run <prefix>-t0001..N in commit order and are identical on a second run;
+//   - every coded element a call writes is in its R4 required value set, checked here from the
+//     R4 value sets in @medplum/definitions and the bindings in the pruned definitions, apart
+//     from validate.ts's own table (Medplum's validateResource does not check codes);
 //   - every mutated call is rejected with is_error, names the mutated field, and leaves the
 //     state hash, the store and the write sequence unchanged;
 //   - replaying a recorded mixed tool log on a fresh store reproduces every result and the
@@ -14,8 +17,8 @@
 // tool enforces the cross-field constraints a schema cannot state.
 import { readFileSync } from 'node:fs';
 import { indexStructureDefinitionBundle, normalizeErrorString, validateResource } from '@medplum/core';
-import type { AllergyIntolerance, Bundle, MedicationRequest, Provenance, Resource, Task } from '@medplum/fhirtypes';
-import { beforeAll, describe, expect, it } from 'vitest';
+import type { AllergyIntolerance, Bundle, CodeSystem, CodeSystemConcept, MedicationRequest, Provenance, Resource, ServiceRequest, StructureDefinition, Task, ValueSet } from '@medplum/fhirtypes';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { clock } from '../../clock.ts';
 import { parseNdjson } from '../../fixture-source.ts';
 import { stateHash } from '../../hash.ts';
@@ -39,7 +42,17 @@ beforeAll(() => {
 
 const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm';
 const CATALOG: CatalogEntry[] = [
-  ...[['860975', 'metformin hydrochloride 500 MG Oral Tablet'], ['197361', 'amlodipine 5 MG Oral Tablet'], ['723', 'amoxicillin'], ['7980', 'penicillin G'], ['1191', 'aspirin']].map(
+  ...[
+    ['860975', 'metformin hydrochloride 500 MG Oral Tablet'],
+    ['197361', 'amlodipine 5 MG Oral Tablet'],
+    ['1364435', 'apixaban 2.5 MG Oral Tablet'],
+    ['866436', '24 HR metoprolol succinate 50 MG Extended Release Oral Tablet'],
+    ['310431', 'gabapentin 300 MG Oral Capsule'],
+    ['628958', 'potassium chloride 20 MEQ Extended Release Oral Tablet'],
+    ['723', 'amoxicillin'],
+    ['7980', 'penicillin G'],
+    ['1191', 'aspirin'],
+  ].map(
     ([code, display]): CatalogEntry => ({ kind: 'medication', code: code!, system: RXNORM, display: display! }),
   ),
   { kind: 'lab', code: '2160-0', system: 'http://loinc.org', display: 'Creatinine [Mass/volume] in Serum or Plasma' },
@@ -47,7 +60,7 @@ const CATALOG: CatalogEntry[] = [
   { kind: 'imaging', code: 'IMG-CT-CHEST-WO', system: 'urn:riverbend:orders', display: 'CT chest without contrast' },
   { kind: 'referral', code: 'REF-GI', system: 'urn:riverbend:orders', display: 'Referral to gastroenterology' },
 ];
-const POLICIES: Policy[] = [];
+const POLICIES: Policy[] = ['RBC-PHARM-07', 'RBC-MED-04'].map((id) => ({ id, title: id, version: '1', effective: '2026-01-01', source: 'environment-local', text: 'Text.' }));
 const PATIENTS = base.filter((r) => r.resourceType === 'Patient').map((r) => r.id!);
 // 150 open inbox items across the patients, so >= 100 completions find an open one.
 const INBOX: Task[] = Array.from({ length: 150 }, (_, i) => ({
@@ -91,6 +104,29 @@ function future(rnd: Rnd, dateOnly = rnd() < 0.4, minDays = 1): string {
 
 // ---- state-aware pools ----
 
+// A single-ingredient tablet or capsule product, read from its RxNorm name the way a pharmacist
+// would: the dose must be whole units, or half tablets of an immediate-release tablet.
+function solid(display: string | undefined): { strength: number; unit: string; form: string; step: number } | undefined {
+  if (display === undefined || /[/{}]|\b(Pack|Kit)\b/i.test(display)) return undefined;
+  const s = [...display.matchAll(/\b(\d+(?:\.\d+)?) (MG|MCG|MEQ|G)\b/gi)];
+  const f = /\b(Tablet|Capsule)\b/i.exec(display);
+  if (s.length !== 1 || !f) return undefined;
+  const u = s[0]![2]!.toUpperCase();
+  const form = f[1]!.toLowerCase();
+  const modified = /\b(\d+ HR|Extended Release|Delayed Release|Sustained Release|Controlled Release|Disintegrating|ER|XR|SR|DR|CR|XL)\b/i.test(display);
+  return { strength: Number(s[0]![1]) * ({ G: 1000, MG: 1, MCG: 0.001, MEQ: 1 } as Record<string, number>)[u]!, unit: u === 'MEQ' ? 'meq' : 'mg', form, step: form === 'tablet' && !modified ? 0.5 : 1 };
+}
+// A dose of `display` the product rule accepts, as {value, unit}; undefined for a product with no
+// unit strength (any dose is accepted).
+function doseFor(rnd: Rnd, display: string | undefined): { value: number; unit: string } | undefined {
+  const p = solid(display);
+  if (!p) return undefined;
+  const n = p.step * (1 + Math.floor(rnd() * (p.step === 0.5 ? 6 : 3)));
+  return rnd() < 0.3 ? { value: n, unit: `{${p.form}}` } : { value: Math.round(n * p.strength * 1e6) / 1e6, unit: p.unit };
+}
+const PRN = (f: unknown) => typeof f === 'string' && f.endsWith('_PRN');
+const AS_NEEDED = ['pain', 'nausea', 'wheeze', 'insomnia', 'anxiety — acute'];
+
 const patientOf = (r: Readonly<Resource>): string | undefined => (r.resourceType === 'Patient' ? r.id : [...patientRefs(r)][0]);
 const all = <T extends Resource>(c: WriteContext, type: string) => [...c.world.search<T>(type, {}).resources];
 const REF_TYPES = ['Observation', 'Condition', 'DocumentReference', 'DiagnosticReport', 'MedicationRequest', 'Procedure', 'Encounter'];
@@ -110,7 +146,11 @@ type Provider = (rnd: Rnd, c: WriteContext, s: Scratch, schema: PropertySchema) 
 const PROVIDERS: Record<string, Provider> = {
   patient: (rnd, _c, s) => asRef(rnd, 'Patient', s.patient),
   rxnorm_code: (rnd, c) => pick(rnd, c.catalog.filter((e) => e.kind === 'medication')).code,
-  substance_code: (rnd, c) => pick(rnd, c.catalog.filter((e) => e.kind === 'medication')).code,
+  // A drug from the catalog, or an allergen code (SNOMED or RxNorm) already used in the world.
+  substance_code: (rnd, c) => (rnd() < 0.6 ? pick(rnd, c.catalog.filter((e) => e.kind === 'medication')).code : pick(rnd, all<AllergyIntolerance>(c, 'AllergyIntolerance').map((a) => a.code!.coding![0]!.code!))),
+  medication_code: () => undefined,
+  as_needed_reason: () => undefined,
+  cites_policies: (rnd, c) => someRefs(rnd, c.policies.map((p) => p.id), 2),
   code: (rnd, c) => pick(rnd, c.catalog.filter((e) => e.kind !== 'medication')).code,
   dose_value: (rnd) => pick(rnd, [0.5, 1, 2.5, 5, 10, 25, 81, 500, 1000, Math.round(rnd() * 10000) / 100 + 0.01]),
   value: (rnd) => pick(rnd, [0.25, 1, 20, 40, 200]),
@@ -165,7 +205,9 @@ function fromObject(rnd: Rnd, c: WriteContext, s: Scratch, schema: Pick<ObjectSc
 }
 
 const OPEN_MR = new Set(['active', 'on-hold']);
-const LEGAL: Record<string, readonly string[]> = { active: ['stop', 'hold', 'modify'], 'on-hold': ['stop', 'resume', 'modify'] };
+const LEGAL: Record<string, readonly string[]> = { active: ['stop', 'hold', 'modify', 'complete'], 'on-hold': ['stop', 'resume', 'modify', 'complete'] };
+// Orders this episode placed may also be cancelled or marked entered-in-error.
+const PLACED_HERE = /^mr-t\d{4}$/;
 const tail = (ref: string) => ref.slice(ref.indexOf('/') + 1);
 
 // Cross-field rules a schema cannot state. Returns undefined when the state offers no valid call.
@@ -178,6 +220,9 @@ const RULES: Record<string, (input: Record<string, unknown>, rnd: Rnd, c: WriteC
       delete input.timing_events;
       input.frequency ??= pick(rnd, ['QD', 'BID', 'TID']);
     }
+    if (PRN(input.frequency)) input.as_needed_reason = pick(rnd, AS_NEEDED);
+    const dose = doseFor(rnd, c.catalog.find((e) => e.code === input.rxnorm_code)?.display);
+    if (dose) [input.dose_value, input.dose_unit] = [dose.value, dose.unit];
     const open = all<MedicationRequest>(c, 'MedicationRequest').filter((m) => OPEN_MR.has(m.status) && m.subject?.reference === `Patient/${s.patient}`);
     if (open.length > 0 && rnd() < 0.25) input.replaces = asRef(rnd, 'MedicationRequest', pick(rnd, open).id!);
     return input;
@@ -187,9 +232,20 @@ const RULES: Record<string, (input: Record<string, unknown>, rnd: Rnd, c: WriteC
     if (open.length === 0) return undefined;
     const mr = pick(rnd, open);
     input.medication_request = asRef(rnd, 'MedicationRequest', mr.id!);
-    input.action = pick(rnd, LEGAL[mr.status]!);
-    if (input.action === 'modify') input.new_dose ??= fromSchema(rnd, c, { patient: '' }, 'new_dose', WRITE_TOOLS[1]!.inputSchema.properties.new_dose!);
-    else delete input.new_dose;
+    input.action = pick(rnd, [...LEGAL[mr.status]!, ...(PLACED_HERE.test(mr.id!) ? ['cancel', 'entered-in-error'] : [])]);
+    if (input.action !== 'modify') {
+      for (const k of ['new_dose', 'medication_code', 'route']) delete input[k];
+      return input;
+    }
+    const nd = (input.new_dose ??= fromSchema(rnd, c, { patient: '' }, 'new_dose', WRITE_TOOLS[1]!.inputSchema.properties.new_dose!)) as Record<string, unknown>;
+    if (PRN(nd.frequency)) nd.as_needed_reason = pick(rnd, AS_NEEDED);
+    else delete nd.as_needed_reason;
+    // A third of modifies change the product to another catalog drug.
+    const product = rnd() < 0.33 ? pick(rnd, c.catalog.filter((e) => e.kind === 'medication')) : undefined;
+    if (product) input.medication_code = product.code;
+    else delete input.medication_code;
+    const dose = doseFor(rnd, product?.display ?? mr.medicationCodeableConcept?.coding?.[0]?.display);
+    if (dose) [nd.value, nd.unit] = [dose.value, dose.unit];
     return input;
   },
   order_service(input, rnd) {
@@ -213,6 +269,16 @@ const RULES: Record<string, (input: Record<string, unknown>, rnd: Rnd, c: WriteC
       (a) => a.patient.reference === `Patient/${s.patient}` && a.verificationStatus?.coding?.[0]?.code !== 'entered-in-error',
     );
     if (existing.length > 0 && rnd() < 0.3) input.update_id = asRef(rnd, 'AllergyIntolerance', pick(rnd, existing).id!);
+    else {
+      // A new record needs its substance, criticality and verification.
+      const props = WRITE_TOOLS.find((t) => t.name === 'record_allergy')!.inputSchema.properties;
+      for (const k of ['substance_code', 'criticality', 'verification']) input[k] ??= fromSchema(rnd, c, s, k, props[k]!);
+      if (input.verification === 'entered-in-error') delete input.clinical_status;
+    }
+    // Each reaction has a coded manifestation, text, or both.
+    for (const r of (input.reactions ?? []) as Array<Record<string, unknown>>) {
+      if (r.manifestation_code === undefined && r.manifestation === undefined) r.manifestation_code = '126485001';
+    }
     return input;
   },
   update_inbox_item(input, rnd, c, s) {
@@ -221,13 +287,12 @@ const RULES: Record<string, (input: Record<string, unknown>, rnd: Rnd, c: WriteC
     const task = pick(rnd, open);
     s.patient = tail(task.for!.reference!);
     input.task_id = asRef(rnd, 'Task', task.id!);
-    if (input.action === 'reassign') {
-      input.new_owner = pick(rnd, OWNERS);
-      delete input.linked;
-    } else {
-      delete input.new_owner;
-      if ('linked' in input) input.linked = PROVIDERS.linked!(rnd, c, s, { type: 'string', description: '' });
-    }
+    if (input.action === 'reassign') input.new_owner = pick(rnd, OWNERS);
+    else delete input.new_owner;
+    if (input.action === 'cancel' || input.action === 'reject') input.reason = words(rnd, 4);
+    else delete input.reason;
+    if (input.action === 'complete' && 'linked' in input) input.linked = PROVIDERS.linked!(rnd, c, s, { type: 'string', description: '' });
+    else delete input.linked;
     return input;
   },
 };
@@ -248,14 +313,110 @@ function validCall(tool: string, rnd: Rnd, c: WriteContext): Record<string, unkn
 
 // ---- checks ----
 
+// The R4 value sets, and the structure definitions the tools validate against.
+const VALUE_SETS = JSON.parse(readFileSync(new URL('../../node_modules/@medplum/definitions/dist/fhir/r4/valuesets.json', import.meta.url), 'utf8')) as Bundle;
+const CODE_SYSTEMS = new Map<string, Set<string>>();
+const VS = new Map<string, ValueSet>();
+for (const e of VALUE_SETS.entry ?? []) {
+  const r = e.resource as CodeSystem | ValueSet;
+  if (r.resourceType === 'ValueSet') VS.set(r.url!, r);
+  else {
+    const codes = new Set<string>();
+    const walk = (cs: readonly CodeSystemConcept[] | undefined) => cs?.forEach((x) => (codes.add(x.code), walk(x.concept)));
+    walk(r.concept);
+    CODE_SYSTEMS.set(r.url!, codes);
+  }
+}
+const SDS = new Map((definitions.entry ?? []).map((e) => [(e.resource as StructureDefinition).type, e.resource as StructureDefinition]));
+// Required value sets this check cannot enumerate (MIME types, languages): logged, not silent.
+const UNENUMERABLE = new Set<string>();
+
+// The codes of a value set, or undefined when it is not enumerable from the bundle.
+function expand(url: string): Set<string> | undefined {
+  const vs = VS.get(url.split('|')[0]!);
+  if (!vs?.compose?.include) return undefined;
+  const out = new Set<string>();
+  for (const inc of vs.compose.include) {
+    if (inc.filter?.length) return undefined;
+    for (const v of inc.valueSet ?? []) {
+      const sub = expand(v);
+      if (!sub) return undefined;
+      sub.forEach((c) => out.add(c));
+    }
+    if (inc.concept) inc.concept.forEach((x) => out.add(x.code));
+    else if (inc.system) {
+      const cs = CODE_SYSTEMS.get(inc.system);
+      if (!cs) return undefined;
+      cs.forEach((c) => out.add(c));
+    }
+  }
+  return out;
+}
+
+const valuesAt = (value: unknown, path: readonly string[], where: string, out: Array<[string, unknown]> = []): Array<[string, unknown]> => {
+  if (value === undefined || value === null) return out;
+  if (Array.isArray(value)) value.forEach((v, i) => valuesAt(v, path, `${where}[${i}]`, out));
+  else if (path.length === 0) out.push([where, value]);
+  else if (typeof value === 'object') valuesAt((value as Record<string, unknown>)[path[0]!], path.slice(1), `${where}.${path[0]}`, out);
+  return out;
+};
+
+// The codes of a code, Coding or CodeableConcept value.
+function codesOf(v: unknown): string[] {
+  if (typeof v === 'string') return [v];
+  const o = v as { coding?: Array<{ code?: string }>; code?: string };
+  return (o.coding ?? [o]).flatMap((c) => (c.code === undefined ? [] : [c.code]));
+}
+
+// Every coded value of `value` (of FHIR type `type`) outside its required value set, walking
+// the type's elements and recursing into complex datatypes.
+function unbound(value: unknown, type: string, where: string, out: string[] = []): string[] {
+  for (const el of SDS.get(type)?.snapshot?.element ?? []) {
+    const rel = el.path!.split('.').slice(1);
+    if (rel.length === 0 || rel.some((p) => p.endsWith('[x]'))) continue;
+    for (const [path, v] of valuesAt(value, rel, where)) {
+      if (el.binding?.strength === 'required' && el.binding.valueSet) {
+        const codes = expand(el.binding.valueSet);
+        if (!codes) UNENUMERABLE.add(el.binding.valueSet);
+        else {
+          const found = codesOf(v);
+          if (found.length > 0 && !found.some((c) => codes.has(c))) out.push(`${path}: ${JSON.stringify(found)} not in ${el.binding.valueSet}`);
+        }
+      }
+      for (const t of el.type ?? []) {
+        if (/^[A-Z]/.test(t.code!) && SDS.has(t.code!) && !['Element', 'BackboneElement', 'Resource', 'Extension'].includes(t.code!)) unbound(v, t.code!, path, out);
+      }
+    }
+  }
+  return out;
+}
+
 function medplumValid(r: Readonly<Resource>): string | undefined {
   try {
     validateResource(structuredClone(r) as Resource);
-    return undefined;
   } catch (e) {
     return `${r.resourceType}/${r.id}: ${normalizeErrorString(e)}`;
   }
+  const codes = unbound(r, r.resourceType, r.resourceType);
+  return codes.length ? `${r.resourceType}/${r.id}: ${codes.join('; ')}` : undefined;
 }
+
+describe('the validity check is live', () => {
+  it('flags a code outside its required value set, which validateResource alone lets through', () => {
+    const sr: ServiceRequest = { resourceType: 'ServiceRequest', id: 'sr-x', status: 'active', intent: 'order', subject: { reference: 'Patient/pt-0001' } };
+    expect(medplumValid(sr)).toBeUndefined();
+    expect(() => validateResource(structuredClone({ ...sr, intent: 'bogus-intent' }) as never)).not.toThrow();
+    expect(medplumValid({ ...sr, intent: 'bogus-intent' } as never)).toMatch(/ServiceRequest.intent: \["bogus-intent"\]/);
+    const t = { resourceType: 'Task', id: 't', status: 'requested', intent: 'order', restriction: { period: { end: '2026-11-01' } } } as Task;
+    expect(medplumValid({ ...t, status: 'done' } as never)).toMatch(/Task.status/);
+    const mr = base.find((x) => x.resourceType === 'MedicationRequest' && (x as MedicationRequest).dosageInstruction?.[0]?.timing) as MedicationRequest;
+    expect(medplumValid(mr)).toBeUndefined();
+    const bad = structuredClone(mr);
+    bad.dosageInstruction![0]!.timing!.repeat!.periodUnit = 'fortnight' as never;
+    expect(medplumValid(bad)).toMatch(/periodUnit/);
+  });
+});
+afterAll(() => process.stdout.write(`write-gate: required value sets not enumerable here (not checked): ${[...UNENUMERABLE].sort().join(', ') || 'none'}\n`));
 
 const PREFIX: Record<string, string> = { MedicationRequest: 'mr', ServiceRequest: 'sr', Task: 'task', Communication: 'comm', AllergyIntolerance: 'alg', DocumentReference: 'doc' };
 const seqOf = (ref: string) => Number(/-t(\d+)$/.exec(ref)?.[1]);
@@ -280,6 +441,8 @@ async function drive(tool: string, seed: number, target: number): Promise<Run> {
     const input = validCall(tool, rnd, c);
     if (!input) break;
     run.calls++;
+    // finish ends an episode, so each finish call is the end of a fresh one.
+    if (tool === 'finish') c.session = newSession();
     const seq = c.session.writeSeq;
     const r = callTool(TOOLS, tool, input, c);
     if (r.is_error) {
@@ -365,16 +528,39 @@ const OTHER_PATIENT_DOC = (c: WriteContext, input: Record<string, unknown>) => {
 const SEMANTIC_MUTATIONS: Record<string, Mutation[]> = {
   order_medication: [
     set('patient', 'pt-9999', ['NOT_FOUND']),
+    { field: 'as_needed_reason', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, frequency: 'Q8H_PRN', timing_events: undefined, as_needed_reason: undefined }) },
+    { field: 'rxnorm_code', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, rxnorm_code: '197361', dose_value: 3, dose_unit: 'mg' }) },
     set('rxnorm_code', '2160-0'),
     set('reason', 'ctrl \u0001 char'),
-    { field: 'timing_events[0]', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, frequency: undefined, timing_events: ['2026-10-22T09:00:00-04:00'] }) },
-    { field: 'timing_events[0]', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, frequency: undefined, timing_events: ['2026-13-01T09:00:00-04:00'] }) },
+    { field: 'timing_events[0]', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, frequency: undefined, as_needed_reason: undefined, timing_events: ['2026-10-22T09:00:00-04:00'] }) },
+    { field: 'timing_events[0]', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, frequency: undefined, as_needed_reason: undefined, timing_events: ['2026-13-01T09:00:00-04:00'] }) },
     set('replaces', 'mr-nope', ['NOT_FOUND']),
   ],
   change_medication: [
     set('medication_request', 'mr-nope', ['NOT_FOUND']),
-    { field: 'action', codes: ['CONFLICT'], apply: (i, c) => ({ ...i, action: 'stop', new_dose: undefined, medication_request: all<MedicationRequest>(c, 'MedicationRequest').find((m) => m.status === 'completed')!.id }) },
+    {
+      field: 'action',
+      codes: ['CONFLICT'],
+      apply: (i, c) => ({ ...i, action: 'stop', new_dose: undefined, medication_code: undefined, route: undefined, medication_request: all<MedicationRequest>(c, 'MedicationRequest').find((m) => m.status === 'completed')!.id }),
+    },
     { field: 'new_dose', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, action: 'modify', new_dose: undefined }) },
+    // A world order, not placed in this episode, cannot be cancelled.
+    {
+      field: 'action',
+      codes: ['CONFLICT'],
+      apply: (i, c) => ({ ...i, action: 'cancel', new_dose: undefined, medication_code: undefined, route: undefined, medication_request: all<MedicationRequest>(c, 'MedicationRequest').find((m) => m.status === 'active' && !PLACED_HERE.test(m.id!))!.id }),
+    },
+    // Half an extended-release tablet.
+    {
+      field: 'medication_code',
+      codes: ['INVALID_INPUT'],
+      apply: (i, c) => {
+        const er = all<MedicationRequest>(c, 'MedicationRequest').find((m) => OPEN_MR.has(m.status) && solid(m.medicationCodeableConcept?.coding?.[0]?.display)?.step === 1 && /Extended Release/.test(m.medicationCodeableConcept!.coding![0]!.display!));
+        const p = solid(er?.medicationCodeableConcept?.coding?.[0]?.display);
+        return er && p ? { medication_request: er.id, action: 'modify', reason: 'r', new_dose: { value: p.strength / 2, unit: p.unit, frequency: 'QD' } } : undefined;
+      },
+    },
+    { field: 'new_dose.as_needed_reason', codes: ['INVALID_INPUT'], apply: (i) => (i.action === 'modify' ? { ...i, new_dose: { ...(i.new_dose as object), frequency: 'Q8H_PRN', as_needed_reason: undefined } } : undefined) },
   ],
   order_service: [
     set('occurrence_start', '2026-10-01'),
@@ -397,6 +583,9 @@ const SEMANTIC_MUTATIONS: Record<string, Mutation[]> = {
   ],
   record_allergy: [
     set('substance_code', 'REF-GI'),
+    set('substance_code', '999999999'),
+    { field: 'reactions[0]', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, reactions: [{ severity: 'mild' }] }) },
+    { field: 'criticality', codes: ['INVALID_INPUT'], apply: (i) => (i.update_id === undefined ? { ...i, criticality: undefined } : undefined) },
     set('update_id', 'alg-nope', ['NOT_FOUND']),
     { field: 'clinical_status', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, verification: 'entered-in-error', clinical_status: 'active' }) },
     { field: 'source', codes: ['INVALID_INPUT'], apply: (i, c) => ({ ...i, source: OTHER_PATIENT_DOC(c, i) }) },
@@ -407,11 +596,19 @@ const SEMANTIC_MUTATIONS: Record<string, Mutation[]> = {
     { field: 'cites[0]', codes: ['INVALID_INPUT'], apply: (i, c) => ({ ...i, cites: [OTHER_PATIENT_DOC(c, i)] }) },
     set('title', 'ctrl \u0003'),
     set('text', 'x'.repeat(100_001)),
+    { field: 'cites_policies[0]', codes: ['NOT_FOUND'], apply: (i) => ({ ...i, cites_policies: ['RBC-NOPE-01'] }) },
+    { field: 'cites_policies', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, cites_policies: 'RBC-PHARM-07' }) },
+    { field: 'cites[0]', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, cites: ['Policy/RBC-PHARM-07'] }) },
   ],
   update_inbox_item: [
     set('task_id', 'task-nope', ['NOT_FOUND']),
-    { field: 'new_owner', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, action: 'reassign', new_owner: undefined, linked: undefined }) },
-    { field: 'linked[0]', codes: ['INVALID_INPUT'], apply: (i, c) => ({ ...i, action: 'complete', new_owner: undefined, linked: [OTHER_PATIENT_DOC(c, { patient: (c.world.get<Task>('Task', tail(String(i.task_id)))!.for!.reference) })] }) },
+    { field: 'new_owner', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, action: 'reassign', new_owner: undefined, linked: undefined, reason: undefined }) },
+    {
+      field: 'linked[0]',
+      codes: ['INVALID_INPUT'],
+      apply: (i, c) => ({ ...i, action: 'complete', new_owner: undefined, reason: undefined, linked: [OTHER_PATIENT_DOC(c, { patient: (c.world.get<Task>('Task', tail(String(i.task_id)))!.for!.reference) })] }),
+    },
+    { field: 'reason', codes: ['INVALID_INPUT'], apply: (i) => ({ ...i, action: 'cancel', new_owner: undefined, linked: undefined, reason: undefined }) },
   ],
   finish: [],
 };
@@ -426,6 +623,7 @@ describe('rejections', () => {
       let rejected = 0;
       // Interleave valid commits so rejections are checked against a store that has changed.
       for (let round = 0; round < 3; round++) {
+        if (tool === 'finish') c.session = newSession();
         const seed = validCall(tool, rnd, c);
         if (!seed) break;
         for (const m of mutations) {
