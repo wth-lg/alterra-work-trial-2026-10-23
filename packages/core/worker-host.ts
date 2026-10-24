@@ -4,7 +4,9 @@
 // cancelled event. The Worker entry passes its global scope and a setup that builds what run()
 // takes from the start message: the task source, the world, the clock and a MessagesClient
 // from a BatchGrant (apps/web/src/adapters/), so the host itself touches no DOM or Worker
-// global and sends only through that client.
+// global and sends only through that client. Setup defers its teardown (closing the grant) as
+// soon as it has something to tear down; the host runs what was deferred once, after run() or
+// when setup fails, before it posts the result or the failure.
 import type { TrialEvent } from './events.ts';
 import { run, type Effort, type RunOptions, type TrialRecord } from './run.ts';
 
@@ -27,7 +29,11 @@ export interface HostScope {
 }
 
 // What setup provides; the host adds the caps, effort, signal and onEvent from the start message.
-export type HostSetup<S extends HostStart> = (start: S) => Promise<Pick<RunOptions, 'tasks' | 'client' | 'world' | 'worldHash' | 'now' | 'definitions'>>;
+// run() clamps maxCostUsd to the per-trial cap, so a start message cannot raise it.
+export type HostSetup<S extends HostStart> = (
+  start: S,
+  defer: (teardown: () => Promise<void> | void) => void,
+) => Promise<Pick<RunOptions, 'tasks' | 'client' | 'world' | 'worldHash' | 'now' | 'timeout' | 'definitions'>>;
 
 export function hostTrial<S extends HostStart>(scope: HostScope, setup: HostSetup<S>): void {
   const controller = new AbortController();
@@ -44,18 +50,24 @@ export function hostTrial<S extends HostStart>(scope: HostScope, setup: HostSetu
       return;
     }
     started = true;
+    const teardowns: Array<() => Promise<void> | void> = [];
     void (async () => {
-      const deps = await setup(msg);
-      const { record } = await run(msg.task, msg.model, {
-        ...deps,
-        signal: controller.signal,
-        onEvent: (event) => scope.postMessage({ type: 'event', event }),
-        ...(msg.effort === undefined ? {} : { effort: msg.effort }),
-        ...(msg.maxTurns === undefined ? {} : { maxTurns: msg.maxTurns }),
-        ...(msg.maxCostUsd === undefined ? {} : { maxCostUsd: msg.maxCostUsd }),
-        ...(msg.maxWallMs === undefined ? {} : { maxWallMs: msg.maxWallMs }),
-        ...(msg.trialId === undefined ? {} : { trialId: msg.trialId }),
-      });
+      let record: TrialRecord;
+      try {
+        const deps = await setup(msg, (t) => teardowns.push(t));
+        ({ record } = await run(msg.task, msg.model, {
+          ...deps,
+          signal: controller.signal,
+          onEvent: (event) => scope.postMessage({ type: 'event', event }),
+          ...(msg.effort === undefined ? {} : { effort: msg.effort }),
+          ...(msg.maxTurns === undefined ? {} : { maxTurns: msg.maxTurns }),
+          ...(msg.maxCostUsd === undefined ? {} : { maxCostUsd: msg.maxCostUsd }),
+          ...(msg.maxWallMs === undefined ? {} : { maxWallMs: msg.maxWallMs }),
+          ...(msg.trialId === undefined ? {} : { trialId: msg.trialId }),
+        }));
+      } finally {
+        for (const t of teardowns.reverse()) await t();
+      }
       scope.postMessage({ type: 'result', record });
     })().catch((e: unknown) => scope.postMessage({ type: 'failed', error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }));
   });

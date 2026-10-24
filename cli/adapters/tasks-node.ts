@@ -10,7 +10,8 @@ export const TASKS_DIR = fileURLToPath(new URL('../../tasks/', import.meta.url))
 
 export const isTestMode = (env: Record<string, string | undefined> = process.env): boolean => env.VITEST === 'true' || env.NODE_ENV === 'test';
 
-function readTaskDirs(root: string): TaskFiles[] {
+// Every task directory under root, as TaskFiles.
+export function nodeTaskDirs(root: string = TASKS_DIR): TaskFiles[] {
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
     .filter((e) => e.isDirectory() && existsSync(join(root, e.name, 'task.toml')))
@@ -28,5 +29,5 @@ function readTaskDirs(root: string): TaskFiles[] {
 
 export function nodeTaskSource(opts: { root?: string; testMode?: boolean } = {}): TaskSource {
   const root = opts.root ?? TASKS_DIR;
-  return taskSource(async () => readTaskDirs(root), { testMode: opts.testMode ?? isTestMode() });
+  return taskSource(async () => nodeTaskDirs(root), { testMode: opts.testMode ?? isTestMode() });
 }

@@ -5,7 +5,8 @@ import { taskSource, type TaskFiles, type TaskSource } from '../../../../package
 
 const FILES = import.meta.glob<string>('../../../../tasks/**/*', { query: '?raw', import: 'default', eager: true });
 
-function taskDirs(): TaskFiles[] {
+// Every bundled task directory, as TaskFiles.
+export function browserTaskDirs(): TaskFiles[] {
   const dirs = new Map<string, Record<string, string>>();
   for (const [path, text] of Object.entries(FILES)) {
     const m = /\/tasks\/([^/]+)\/(.+)$/.exec(path);
@@ -18,5 +19,5 @@ function taskDirs(): TaskFiles[] {
 }
 
 export function browserTaskSource(opts: { testMode?: boolean } = {}): TaskSource {
-  return taskSource(async () => taskDirs(), { testMode: opts.testMode ?? import.meta.env.MODE === 'test' });
+  return taskSource(async () => browserTaskDirs(), { testMode: opts.testMode ?? import.meta.env.MODE === 'test' });
 }
