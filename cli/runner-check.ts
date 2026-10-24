@@ -231,7 +231,11 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       check('key validated', k.status === 200, `POST /api/key: ${k.status}${k.status === 200 ? '' : ` ${k.text.slice(0, 300)}`}`);
     }
     if (!flags.has('--dry-run') && projection !== null && checks.every((c) => c.ok)) {
-      const posted = await http(port, 'POST', '/api/trials', { token, body: { ...trial, session_cap_usd: projection } });
+      // The session cap: this trial's projection on top of what the session spent (Validate).
+      const again = parseDryRun(JSON.parse((await http(port, 'POST', '/api/trials?dry_run=1', { token, body: trial })).text)).projection;
+      const cap = again.total_usd + again.session_spent_usd;
+      const posted = await http(port, 'POST', '/api/trials', { token, body: { ...trial, session_cap_usd: cap } });
+      if (posted.status !== 202) throw new Error(`POST /api/trials: ${posted.status} ${posted.text.slice(0, 400)}`);
       const accepted = parseTrialsAccepted(JSON.parse(posted.text));
       const id = accepted.trial_ids[0] as string;
       const frames = await readStream(port, `/api/trials/${id}/events`, token, mode === 'mock' ? MOCK_TRIAL_MS : LIVE_TRIAL_MS);
