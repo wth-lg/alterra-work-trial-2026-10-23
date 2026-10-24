@@ -9,8 +9,10 @@
 // The matrix passes when:
 //   oracle            PASS, score 1.0, no judge item unknown
 //   alternatives      at least MIN_ALTERNATIVES, each PASS with no judge item unknown
-//   mutants           at least MIN_MUTANTS, each FAIL with exactly its declared failed gates;
-//                     every trap task.toml declares has one, and every mutant's trap is declared
+//   mutants           at least MIN_MUTANTS, each FAIL with exactly its declared failed gates
+//                     and, where it declares `loses`, exactly those rubric items lost (each a
+//                     rubric item of the task); every trap task.toml declares has one, and every
+//                     mutant's trap is declared
 //   null, spray, output-gap, and status-only where the task declares it
 //                     FAIL (a model FAIL: outcome FAIL, fault model)
 //   every case        graded validly (a GRADER_ERROR names its check), no judge cache miss,
@@ -201,6 +203,8 @@ export interface CaseResult {
   unknown: number;
   misses: Miss[];
   failed_gates: string[];
+  // Rubric items lost: a positive item not met, a penalty met (an unknown item is neither).
+  lost_items: string[];
   // null when not checked (one grade, one trial, no fresh process).
   regrade_same: boolean | null;
   replay_same: boolean | null;
@@ -222,9 +226,10 @@ function differing(a: Grade, b: Grade): string {
 }
 
 // The case's verdict problems, from its first grade.
-function verdict(c: Case, run: CaseRun, grade: Grade, misses: Miss[]): Pick<CaseResult, 'unknown' | 'failed_gates' | 'problems'> {
+function verdict(c: Case, run: CaseRun, grade: Grade, misses: Miss[]): Pick<CaseResult, 'unknown' | 'failed_gates' | 'lost_items' | 'problems'> {
   const unknown = grade.checks.filter((r) => r.method !== 'code' && r.met === 'unknown' && !('judge_cache_miss' in r.evidence)).length;
   const failed_gates = grade.checks.filter((r) => r.kind === 'gate' && r.met === false).map((r) => r.id);
+  const lost_items = grade.checks.filter((r) => r.kind === 'rubric' && ((r.points! > 0 && r.met === false) || (r.points! < 0 && r.met === true))).map((r) => r.id);
   const problems: string[] = [];
   if (grade.error !== null) problems.push(`${grade.outcome} in ${grade.error.check ?? 'trial'}: ${grade.error.message}`);
   else if (!grade.valid) problems.push(`outcome ${grade.outcome} (${run.record.status}${run.record.detail ? ` ${run.record.detail}` : ''}), not a graded trial`);
@@ -234,8 +239,13 @@ function verdict(c: Case, run: CaseRun, grade: Grade, misses: Miss[]): Pick<Case
   if (c.kind === 'oracle' && unknown > 0) problems.push(`oracle judge.unknown ${unknown}, want 0`);
   if (c.kind === 'alternative' && unknown > 0) problems.push(`judge.unknown ${unknown}, want 0`);
   if (c.mutant && !sameSet(failed_gates, c.mutant.fails)) problems.push(`failed [${failed_gates.join(', ')}], declared [${c.mutant.fails.join(', ')}]`);
+  const loses = c.mutant?.loses;
+  if (loses && grade.valid) {
+    for (const id of loses) if (!lost_items.includes(id)) problems.push(`declares it loses rubric item ${id}, which it keeps`);
+    for (const id of lost_items) if (!loses.includes(id)) problems.push(`loses rubric item ${id}, not declared`);
+  }
   for (const m of misses) problems.push(`judge cache miss: ${m.check} (cache key ${m.key})`);
-  return { unknown, failed_gates, problems };
+  return { unknown, failed_gates, lost_items, problems };
 }
 
 // The cases `ids` names, in report order; every case when absent.
@@ -378,8 +388,10 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask, opts: MatrixOp
   if (task.mutants.length < MIN_MUTANTS) fail(`${task.mutants.length} mutants, need ${MIN_MUTANTS}`);
   for (const r of mutants) {
     const m = r.case.mutant!;
-    const verdict = r.grade.outcome !== 'FAIL' ? 'not FAIL' : sameSet(r.failed_gates, m.fails) ? 'ok' : 'MISMATCH';
-    lines.push(`  mutant ${m.id} [trap ${m.trap}]: ${r.grade.outcome} failed [${r.failed_gates.join(', ')}] declared [${m.fails.join(', ')}] ${verdict}`);
+    const lossesOk = m.loses === undefined || sameSet(r.lost_items, m.loses);
+    const verdict = r.grade.outcome !== 'FAIL' ? 'not FAIL' : sameSet(r.failed_gates, m.fails) && lossesOk ? 'ok' : 'MISMATCH';
+    const losses = `lost [${r.lost_items.join(', ')}] ${m.loses === undefined ? '(not declared)' : `declared [${m.loses.join(', ')}]`}`;
+    lines.push(`  mutant ${m.id} [trap ${m.trap}]: ${r.grade.outcome} failed [${r.failed_gates.join(', ')}] declared [${m.fails.join(', ')}], ${losses} ${verdict}`);
     noteProblems(r);
   }
 
@@ -427,6 +439,10 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask, opts: MatrixOp
   lines.push(`traps: ${task.declares.traps.length - uncovered.length}/${task.declares.traps.length} declared traps have a mutant`);
   for (const t of uncovered) fail(`trap ${t} has no mutant`);
   for (const m of task.mutants) if (!task.declares.traps.includes(m.trap)) fail(`mutant ${m.id} names trap ${m.trap}, which task.toml [matrix] traps does not declare`);
+
+  const rubricIds = new Set(task.checks.filter((c) => c.kind === 'rubric').map((c) => c.id));
+  lines.push(`rubric losses: ${task.mutants.filter((m) => m.loses !== undefined).length}/${task.mutants.length} mutants declare loses`);
+  for (const m of task.mutants) for (const id of m.loses ?? []) if (!rubricIds.has(id)) fail(`mutant ${m.id} declares loses ${id}, which is not a rubric item of the task`);
 
   const misses = results.flatMap((r) => r.misses.map((m) => ({ ...m, case: nameOf(r.case) })));
   const sources = new Map<string, number>();

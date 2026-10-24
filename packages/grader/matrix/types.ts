@@ -3,7 +3,8 @@
 //   solution/solve.ts      `oracle`: the reference solution, a script of tool calls
 //   tests/alternatives.ts  `alternatives`: other correct solutions, each expected to PASS
 //   tests/mutants.ts       `mutants`: near misses, one trap each, each expected to FAIL on
-//                          exactly the gate checks it declares
+//                          exactly the gate checks it declares and to lose exactly the rubric
+//                          items it declares
 //   tests/agents.ts        `spray`, `output_gap` and, where the task declares it, `status_only`
 //   tests/grader.ts        `checks` (its path is `checksModule`, which the matrix's isolation
 //                          check imports again in a fresh process)
@@ -43,6 +44,9 @@ export interface Mutant extends Agent {
   trap: string;
   // The gate checks it must fail, and no other.
   fails: readonly string[];
+  // The rubric items it must lose (a positive item not met, a penalty met), and no other; absent,
+  // its rubric results are not checked.
+  loses?: readonly string[];
 }
 
 export interface Agents {
