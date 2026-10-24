@@ -44,6 +44,19 @@ describe('no-grader-module-state', () => {
     'const o = { n: 0 }; export function f() { Object.assign(o, { n: 1 }); }',
     'const o: Record<string, number> = { a: 1 }; export function f() { delete o.a; }',
     'const s = new Set<number>(); export const f = () => () => s.clear();',
+    // The forms the P9 gate found missing (builder-33 item 2).
+    'const seen = new Set<string>(); const alias = seen; export const f = (t: string) => { alias.add(t); };',
+    'const o = Object.create(null) as Record<string, number>; export const f = (k: string) => { o[k] = 1; };',
+    'const xs = Array.of<number>(); export const f = (x: number) => { xs.push(x); };',
+    'const make = () => new Set<string>(); const s = make(); export const f = (t: string) => { s.add(t); };',
+    'const st = { xs: [] as number[] }; export const f = (x: number) => { st.xs.push(x); };',
+    "import { seen } from './state.ts'; export const f = (t: string) => { seen.add(t); };",
+    'class Memo { static last: string | null = null; } export const f = (t: string) => { Memo.last = t; };',
+    'export class Memo { static seen = new Set<string>(); }',
+    'export const f = (t: string) => { (globalThis as Record<string, unknown>).last = t; };',
+    "export const f = (t: string) => { globalThis['last' as never] = t as never; };",
+    'export const f = (t: string) => { Object.assign(globalThis, { last: t }); };',
+    'export const f = (t: string) => { Reflect.set(globalThis, "last", t); };',
   ])('flags module state a function changes: %s', async (code) => {
     expect(await ruleIds(code, GRADER)).toContain(RULE);
   });
@@ -61,11 +74,17 @@ describe('no-grader-module-state', () => {
     expect(await ruleIds(code, GRADER)).not.toContain(RULE);
   });
 
-  it.each(['tasks/t9/tests/rubric.ts', 'packages/grader/check.ts', 'packages/grader/normalize.ts'])('covers %s', async (path) => {
+  it.each(['tasks/t9/tests/rubric.ts', 'tasks/t9/tests/helpers.ts', 'tasks/t9/tests/lib/state.ts', 'packages/grader/check.ts', 'packages/grader/normalize.ts', 'packages/grader/grade.ts', 'packages/grader/matrix/matrix.ts'])('covers %s', async (path) => {
     expect(await ruleIds('let n = 0; export const f = () => n;', path)).toContain(RULE);
+  });
+
+  it('names the matrix isolation check as the real guard', async () => {
+    const { readFileSync } = await import('node:fs');
+    expect(readFileSync(join(root, 'eslint-rules/no-grader-module-state.js'), 'utf8')).toMatch(/isolation check/);
   });
 
   it('leaves files outside the graders alone', async () => {
     expect(await ruleIds('let n = 0; export const f = () => n;', 'cli/planted.ts')).not.toContain(RULE);
+    expect(await ruleIds('let n = 0; export const f = () => n;', 'packages/grader/test/planted.test.ts')).not.toContain(RULE);
   });
 });
