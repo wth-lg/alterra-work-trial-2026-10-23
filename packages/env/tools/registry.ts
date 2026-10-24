@@ -3,17 +3,35 @@
 // is the one way a tool runs: strict input validation, then the tool, then exposure tags
 // computed from the payload it returned.
 //
-// Exposure (design section 3, "Exposure tagging") is derived from the payload, not declared by
-// each tool, so it cannot drift from what the model saw:
-//   - exposed_ids: every object in the payload with a string resourceType and id, i.e. a full
-//     resource (or a full policy, resourceType 'Policy') returned with its content;
+// Exposure (design section 3, "Exposure tagging") follows one rule: a result exposes a resource
+// when it shows the fields a clinician would act on (a Patient's demographics, birth date
+// included; an Observation's value, unit, status and date; a MedicationRequest's medication,
+// dose and status; a note's or report's whole text, as fhir_read returns it; a policy's text),
+// and only references it when it shows an id, a title, a pointer to read it later or an excerpt.
+// The tags are derived from the payload, not declared by each tool, so they cannot drift from
+// what the model saw:
+//   - exposed_ids: every object in the payload with a string resourceType and id (a full
+//     resource, a full policy with resourceType 'Policy', or a row that shows that resource's
+//     decisive fields, as search_patients rows do);
 //   - referenced_ids: every other string in the payload of the form <Kind>/<id>: references
-//     inside those resources and the ids that summary rows and snippets name, plus resources
-//     returned without their decisive content (below).
-// Tools follow two conventions for this to hold: a summary row names ids as references
-// ('Patient/pt-0001') and never carries a resourceType; and a resource returned with content
-// left out holds an object with a `read_with` key naming the tool that returns it (a note's
-// text attachment in fhir_search), which makes the resource referenced, not exposed.
+//     inside those resources and the ids that summary rows name, plus resources returned
+//     without their decisive content (below);
+//   - shown: for each note, report or policy whose text the payload shows, that text with its
+//     whitespace collapsed to single spaces (case kept), the same for every shape: a search_notes
+//     row's snippet ({note, snippet}), a note or report read with fhir_read ({resource, text}) or
+//     a whole policy ({resourceType: 'Policy', id, text}). Shown text is not exposure: a snippet
+//     is an excerpt, so its note stays referenced, and exposed_ids keeps meaning "the decisive
+//     content was shown". A task grader asks whether a decisive phrase was shown with
+//     grader/exposure.ts shows(), which compares both sides whitespace-collapsed and ignoring
+//     case, so a phrase split across lines in the note matches as it does in a snippet.
+// Tools follow four conventions for this to hold: a row that shows a resource's decisive
+// fields carries its resourceType and id; a row that shows a note's, report's or policy's text
+// carries it in one of the three shapes above (no other object's `text` is shown text); a row
+// that does neither (an inbox item, a policy title, a search_notes row) names ids only as
+// references ('Patient/pt-0001') and never carries a resourceType; and a resource returned with
+// content left out holds an object with a `read_with` key naming the tool that returns it (a
+// note's text attachment in fhir_search, which shows only its size), which makes the resource
+// referenced, not exposed. Each read tool's header says which applies.
 //
 // A write tool (tools/write/) returns a Committed: its payload plus the ids it put into the
 // store. callTool reports those as written_ids, which is how the grader learns what a call
@@ -64,6 +82,10 @@ export interface ToolResult {
   content: unknown;
   exposed_ids: string[];
   referenced_ids: string[];
+  // Present only when the payload shows a note's, report's or policy's text: that text per
+  // reference, whitespace-collapsed (above).
+  // The loop does not record it; the grader derives it from the recorded content (shownText).
+  shown?: Readonly<Record<string, string>>;
   // Present only on a committed write: every resource the call put into the store, as
   // <Type>/<id>, sorted (the resources it created or changed, and its Provenance). Reads,
   // errors and finish have none.
@@ -165,25 +187,70 @@ export function validateInput(schema: ObjectSchema, input: unknown): ToolError |
 
 const REF = new RegExp(`^(${[...RESOURCE_TYPES, 'Policy'].join('|')})/[A-Za-z0-9.-]{1,64}$`);
 
+const isId = (v: unknown): v is string => typeof v === 'string';
+
+const TEXT_TYPES = new Set(['DocumentReference', 'DiagnosticReport']);
+const typeOf = (ref: string) => ref.slice(0, ref.indexOf('/'));
+
+// Shown text as it is recorded and compared: whitespace runs collapsed to one space, trimmed,
+// case kept.
+export const collapseWhitespace = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+// The note, report or policy whose text an object shows, and the text, in one of the three
+// shapes above. Any other object shows no text, whatever its keys.
+function textIn(o: Record<string, unknown>): [string, string] | undefined {
+  if (typeof o.snippet === 'string' && isId(o.note) && REF.test(o.note) && TEXT_TYPES.has(typeOf(o.note))) return [o.note, o.snippet];
+  if (typeof o.text !== 'string') return undefined;
+  const r = (o.resource ?? {}) as { resourceType?: unknown; id?: unknown };
+  if (isId(r.resourceType) && TEXT_TYPES.has(r.resourceType) && isId(r.id)) return [`${r.resourceType}/${r.id}`, o.text];
+  return o.resourceType === 'Policy' && isId(o.id) ? [`Policy/${o.id}`, o.text] : undefined;
+}
+
+interface Tags {
+  exposed: Set<string>;
+  refs: Set<string>;
+  shown: Map<string, string[]>;
+}
+
 // Walks one value; returns whether it holds content left out (an object with read_with).
-function walk(value: unknown, exposed: Set<string>, refs: Set<string>): boolean {
+function walk(value: unknown, tags: Tags): boolean {
   if (typeof value === 'string') {
-    if (REF.test(value)) refs.add(value);
+    if (REF.test(value)) tags.refs.add(value);
     return false;
   }
   if (value === null || typeof value !== 'object') return false;
   let partial = !Array.isArray(value) && Object.hasOwn(value, 'read_with');
-  for (const v of Object.values(value)) partial = walk(v, exposed, refs) || partial;
+  for (const v of Object.values(value)) partial = walk(v, tags) || partial;
+  if (Array.isArray(value)) return partial;
   const { resourceType, id } = value as { resourceType?: unknown; id?: unknown };
-  if (typeof resourceType === 'string' && typeof id === 'string') (partial ? refs : exposed).add(`${resourceType}/${id}`);
+  if (isId(resourceType) && isId(id)) (partial ? tags.refs : tags.exposed).add(`${resourceType}/${id}`);
+  const text = textIn(value as Record<string, unknown>);
+  if (text) tags.shown.set(text[0], [...(tags.shown.get(text[0]) ?? []), collapseWhitespace(text[1])]);
   return partial;
 }
 
-export function exposure(payload: unknown): Pick<ToolResult, 'exposed_ids' | 'referenced_ids'> {
-  const exposed = new Set<string>();
-  const refs = new Set<string>();
-  walk(payload, exposed, refs);
-  return { exposed_ids: [...exposed].sort(), referenced_ids: [...refs].filter((r) => !exposed.has(r)).sort() };
+function tagsOf(payload: unknown): Tags {
+  const tags: Tags = { exposed: new Set(), refs: new Set(), shown: new Map() };
+  walk(payload, tags);
+  return tags;
+}
+
+const shownOf = (tags: Tags): Record<string, string> =>
+  Object.fromEntries([...tags.shown].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => [k, v.join('\n')]));
+
+// The text a payload shows per reference, whitespace-collapsed, in payload order and
+// newline-joined when one resource's text appears twice. The grader calls this on a recorded result's content.
+export const shownText = (payload: unknown): Record<string, string> => shownOf(tagsOf(payload));
+
+export function exposure(payload: unknown): Pick<ToolResult, 'exposed_ids' | 'referenced_ids' | 'shown'> {
+  const tags = tagsOf(payload);
+  const { exposed, refs } = tags;
+  const shown = shownOf(tags);
+  return {
+    exposed_ids: [...exposed].sort(),
+    referenced_ids: [...refs].filter((r) => !exposed.has(r)).sort(),
+    ...(Object.keys(shown).length > 0 ? { shown } : {}),
+  };
 }
 
 const failure = (e: ToolError): ToolResult => ({ is_error: true, content: e.body() satisfies ErrorBody, exposed_ids: [], referenced_ids: [] });

@@ -1,5 +1,6 @@
-// search_patients (design section 3): find a patient by name words, birth date or MRN. Rows
-// are summaries, so the patients are referenced, not exposed.
+// search_patients (design section 3): find a patient by name words, birth date or MRN. A row
+// shows the demographics a clinician acts on (name, birth date, gender, MRN), so it carries
+// resourceType and id and exposes the Patient (the exposure rule, registry.ts).
 import type { Patient } from '@medplum/fhirtypes';
 import type { Tool } from '../registry.ts';
 import type { ReadContext } from './context.ts';
@@ -23,7 +24,7 @@ export const searchPatients: Tool<ReadContext> = {
   name: 'search_patients',
   description:
     'Find patients. name matches when every word starts a given or family name (any case); birthdate and mrn match exactly. ' +
-    'Filters combine with AND; with none, every patient is listed. Returns {patient, name, birthDate, gender, mrn, pcp} rows in id order.',
+    'Filters combine with AND; with none, every patient is listed. Returns {resourceType, id, patient, name, birthDate, gender, mrn, pcp} rows in id order.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -46,6 +47,8 @@ export const searchPatients: Tool<ReadContext> = {
       })
       .sort((a, b) => (a.id! < b.id! ? -1 : a.id! > b.id! ? 1 : 0))
       .map((p) => ({
+        resourceType: 'Patient',
+        id: p.id!,
         patient: `Patient/${p.id}`,
         name: displayName(officialName(p)),
         birthDate: p.birthDate ?? null,

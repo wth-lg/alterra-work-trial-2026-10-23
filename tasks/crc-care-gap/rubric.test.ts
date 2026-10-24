@@ -6,7 +6,7 @@ import { loadMatrixTask, matrixEnv } from '../../cli/matrix.ts';
 import { stepsOf } from '../../packages/grader/exposure.ts';
 import { cases, gradeRun, trial, type Miss } from '../../packages/grader/matrix/matrix.ts';
 import { expected } from './expected.ts';
-import { alternatives, pendingExposure } from './tests/alternatives.ts';
+import { alternatives } from './tests/alternatives.ts';
 import { mutants } from './tests/mutants.ts';
 import { named } from './tests/rubric.ts';
 
@@ -53,19 +53,14 @@ describe('crc-care-gap rubric', () => {
     expect(Object.values(DECIDING).flat().filter((id) => !exposed.has(id))).toEqual([]);
   });
 
-  // Until the exposure PR tags search_patients rows as exposing the Patient, G4 sees E4's birth
-  // date only as referenced: the case may fail gap_seen_before_order on E4 and nothing else.
-  // When it passes, move it into `alternatives`.
-  it('E4 read through search_patients fails at most G4 on her birth date', async () => {
-    const run = await trial(env, task, { kind: 'alternative', id: pendingExposure.id, script: pendingExposure.script });
-    expect(stepsOf(run.events).some((s) => s.tool === 'search_patients' && s.referenced_ids.includes('Patient/pt-0023'))).toBe(true);
-    const misses: Miss[] = [];
-    const grade = await gradeRun(env, task, task.checks, run, misses);
-    expect(misses).toEqual([]);
-    const failed = grade.checks.filter((r) => r.kind === 'gate' && r.met === false);
-    if (grade.outcome === 'PASS') expect(failed).toEqual([]);
-    else expect(failed.map((r) => [r.id, r.evidence.late])).toEqual([['gap_seen_before_order', ['Patient/pt-0023']]]);
-    expect(grade.score).toBe(1);
+  // The alternative must reach E4's birth date only through search_patients, or its PASS above
+  // says nothing about search exposure.
+  it('e4_birth_date_from_search_patients exposes E4 through search_patients alone', async () => {
+    const c = cases(task).find((x) => x.id === 'e4_birth_date_from_search_patients')!;
+    const steps = stepsOf((await trial(env, task, c)).events);
+    const e4 = steps.filter((s) => s.exposed_ids.includes('Patient/pt-0023')).map((s) => s.tool);
+    expect(e4.length).toBeGreaterThan(0);
+    expect(new Set(e4)).toEqual(new Set(['search_patients']));
   });
 
   it.each([

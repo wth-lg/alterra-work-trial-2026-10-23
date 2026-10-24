@@ -40,8 +40,9 @@ import { FAULT, isValid, trialOutcome, type Fault, type Outcome, type TrialFacts
 
 // Bump on any change that can change what a grade is. It is part of every task's
 // grader_task_version (packages/core/tasks.ts), with the task's grader-side files; regrades
-// record both.
-export const GRADER_VERSION = '5';
+// record both. 6: main's 5 (shown text, decisive_phrases) and this branch's 5 (grading past a
+// thrown check) were different graders; the merge of the two is 6.
+export const GRADER_VERSION = '6';
 
 export interface CheckResult {
   id: string;

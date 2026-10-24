@@ -47,6 +47,12 @@ interface Common {
   // The source resources the decision depends on (bare ids or <Type>/<id>): attribution asks
   // whether each was exposed.
   decisive_ids: readonly string[];
+  // For a decisive note, report or policy, the phrase in its text the decision turns on, keyed
+  // by the id as decisive_ids gives it. When one is declared, attribution counts the id as
+  // retrieved only if some step showed that phrase (exposure.ts shows(): a search_notes snippet
+  // or a fhir_read), not merely exposed it. Without one, exposure decides, as for other types.
+  // Ignored for ids not in decisive_ids, and only text-bearing types have shown text.
+  decisive_phrases?: Readonly<Record<string, string>>;
 }
 
 export interface GateCheck extends Common {
@@ -81,6 +87,12 @@ export interface Step {
   referenced_ids: readonly string[];
   // Empty unless the call committed a write.
   written_ids: readonly string[];
+  // The text this call's result showed, per reference ('DocumentReference/<id>'), with
+  // whitespace collapsed: a search_notes snippet, a note's text read with fhir_read, a policy's
+  // text. Empty for other results and errors. Shown text is not exposure: a snippet leaves its
+  // note in referenced_ids. Derived from the recorded content (env registry shownText); query it
+  // with exposure.ts shows().
+  shown: Readonly<Record<string, string>>;
 }
 
 // Null-safe reads: a resource that is not in the state is absent, never an exception.

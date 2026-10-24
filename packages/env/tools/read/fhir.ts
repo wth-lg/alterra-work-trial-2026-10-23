@@ -1,6 +1,7 @@
 // fhir_search and fhir_read (design section 3): generic FHIR-shaped reads that return full
 // resources, so every entry is exposed, except notes and reports in fhir_search: those come
-// without their text and are referenced until fhir_read returns it (notes.ts).
+// without their text (only its size and read_with) and are referenced; fhir_read returns the
+// text and exposes them (notes.ts, the exposure rule in registry.ts).
 import type { Resource } from '@medplum/fhirtypes';
 import { search, SearchError, sortStart } from '../../search.ts';
 import { ToolError } from '../errors.ts';
