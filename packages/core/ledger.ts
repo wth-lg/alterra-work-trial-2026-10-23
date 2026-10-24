@@ -11,7 +11,12 @@
 //   exposure = settled + reserved + that open-batch excess
 // batchStart refuses when exposure + projection > PROJECTED_CAP_USD. A reservation is refused
 // when settled + reserved + its worst case > ACTUAL_CAP_USD, and every call is blocked once
-// settled reaches ACTUAL_CAP_USD. A process that dies leaves its reservations and its open
+// settled reaches ACTUAL_CAP_USD. A batch may also carry its caller's SpendCeiling (the local
+// runner's session cap): batchStart refuses when the in-scope exposure plus the projection would
+// cross it, and each of the grant's reservations is refused when it would take the in-scope
+// exposure past it (one within the batch's projection adds nothing, so it always passes). The
+// refusal is SpendRefused('ceiling'), which stops the batch (classifyFailure). The CLI passes
+// none: it has no session, and its operator's `spend --check` and the two caps bound it. A process that dies leaves its reservations and its open
 // batch counting, until `pnpm cli spend --close <batch_id>` closes the batch. Every row is
 // validated when it is read and before it is appended, so a NaN or negative amount never
 // reaches a cap check.
@@ -66,8 +71,8 @@ export interface LedgerDeps {
 
 export class SpendRefused extends Error {
   override readonly name = 'SpendRefused';
-  readonly cap: 'projected' | 'actual';
-  constructor(cap: 'projected' | 'actual', message: string) {
+  readonly cap: 'projected' | 'actual' | 'ceiling';
+  constructor(cap: 'projected' | 'actual' | 'ceiling', message: string) {
     super(message);
     this.cap = cap;
   }
@@ -238,8 +243,17 @@ export interface BatchGrant {
   close(): Promise<void>;
 }
 
+// A caller's own cap on a batch, checked inside the ledger's lock. scope picks the run ids whose
+// rows count against it (the runner's session prefix) and must take the ledger's own run id;
+// what names it in the refusal ("session cap").
+export interface SpendCeiling {
+  usd: number;
+  scope: (runId: string | null) => boolean;
+  what: string;
+}
+
 export interface Ledger {
-  batchStart(projection: number): Promise<BatchGrant>;
+  batchStart(projection: number, ceiling?: SpendCeiling): Promise<BatchGrant>;
   reserve(req: ReserveRequest, batch_id?: string | null): Promise<Reservation>;
   // Settles a reserved call. The worst case comes from the ledger's reserve row, and the
   // call counts at its highest settle.
@@ -337,9 +351,47 @@ export function createLedger(deps: LedgerDeps): Ledger {
     }
   };
 
+  // The exposure of the rows in the ceiling's scope, as tally counts it.
+  const scoped = (rows: readonly LedgerRow[], c: SpendCeiling): number => {
+    const t = tally(rows.filter((r) => c.scope(r.run_id)));
+    return t.settled + t.reserved + t.openExcess;
+  };
+  // Throws when appending `next` would take the in-scope exposure past the ceiling and raise it.
+  const checkCeiling = (rows: readonly LedgerRow[], next: LedgerRow, c: SpendCeiling | undefined, what: string) => {
+    if (c === undefined) return;
+    const before = scoped(rows, c);
+    const after = scoped([...rows, next], c);
+    if (after > µ(c.usd) && after > before) {
+      throw new SpendRefused('ceiling', `${c.what}: ${fmt(before)} already committed + ${what} = ${fmt(after)} > ${fmt(µ(c.usd))}`);
+    }
+  };
+
+  // ledger.reserve, and a grant's reserve with the grant's ceiling.
+  async function reserveIn(req: ReserveRequest, batch_id: string | null, ceiling: SpendCeiling | undefined): Promise<Reservation> {
+    const worst = worstCaseUsd(req);
+    const call_id = deps.newId();
+    const trial = req.trial ?? null;
+    await guarded((rows) => {
+      const t = tally(rows);
+      if (batch_id !== null && t.batches.get(batch_id) === 'closed') throw new TypeError(`batch grant ${batch_id} is closed`);
+      if (t.settled >= ACTUAL_CAP) throw blockedError(t);
+      const total = t.settled + t.reserved + µ(worst);
+      if (total > ACTUAL_CAP) {
+        throw new SpendRefused('actual', `actual cap: settled ${fmt(t.settled)} + reserved ${fmt(t.reserved)} + this call's worst case ${fmt(µ(worst))} = ${fmt(total)} > $${ACTUAL_CAP_USD}`);
+      }
+      const reserve = row('reserve', { call_id, batch_id, trial, cost_usd: worst });
+      checkCeiling(rows, reserve, ceiling, `this call's worst case ${fmt(µ(worst))}`);
+      return { append: [reserve], result: undefined };
+    });
+    return { call_id, batch_id, trial, worst_usd: worst };
+  }
+
   const ledger: Ledger = {
-    async batchStart(projection) {
+    async batchStart(projection, ceiling) {
       if (!Number.isFinite(projection) || projection < 0) throw new TypeError(`batch projection must be a finite number >= 0, got ${projection}`);
+      if (ceiling !== undefined && (!Number.isFinite(ceiling.usd) || ceiling.usd < 0 || !ceiling.scope(deps.runId))) {
+        throw new TypeError(`a spend ceiling needs a finite amount >= 0 and a scope that takes this ledger's run ${deps.runId}`);
+      }
       const batch_id = deps.newId();
       await guarded((rows) => {
         const t = tally(rows);
@@ -351,27 +403,14 @@ export function createLedger(deps: LedgerDeps): Ledger {
             `projected cap: settled ${fmt(t.settled)} + reserved ${fmt(t.reserved)} + open batches ${fmt(t.openExcess)} + projection ${fmt(µ(projection))} = ${fmt(total)} > $${PROJECTED_CAP_USD}`,
           );
         }
-        return { append: [row('open', { call_id: `open:${batch_id}`, batch_id, pid: deps.pid, host: deps.host, projection })], result: undefined };
+        const open = row('open', { call_id: `open:${batch_id}`, batch_id, pid: deps.pid, host: deps.host, projection });
+        checkCeiling(rows, open, ceiling, `this batch's projection ${fmt(µ(projection))}`);
+        return { append: [open], result: undefined };
       });
-      return makeGrant(batch_id, projection);
+      return makeGrant(batch_id, projection, ceiling);
     },
 
-    async reserve(req, batch_id = null) {
-      const worst = worstCaseUsd(req);
-      const call_id = deps.newId();
-      const trial = req.trial ?? null;
-      await guarded((rows) => {
-        const t = tally(rows);
-        if (batch_id !== null && t.batches.get(batch_id) === 'closed') throw new TypeError(`batch grant ${batch_id} is closed`);
-        if (t.settled >= ACTUAL_CAP) throw blockedError(t);
-        const total = t.settled + t.reserved + µ(worst);
-        if (total > ACTUAL_CAP) {
-          throw new SpendRefused('actual', `actual cap: settled ${fmt(t.settled)} + reserved ${fmt(t.reserved)} + this call's worst case ${fmt(µ(worst))} = ${fmt(total)} > $${ACTUAL_CAP_USD}`);
-        }
-        return { append: [row('reserve', { call_id, batch_id, trial, cost_usd: worst })], result: undefined };
-      });
-      return { call_id, batch_id, trial, worst_usd: worst };
-    },
+    reserve: (req, batch_id = null) => reserveIn(req, batch_id, undefined),
 
     async settle(res, usage) {
       const priced = usage === null ? null : usageCostUsd(usage);
@@ -458,19 +497,20 @@ export function createLedger(deps: LedgerDeps): Ledger {
     });
   }
 
-  function makeGrant(batch_id: string, projection: number): BatchGrant {
+  function makeGrant(batch_id: string, projection: number, ceiling: SpendCeiling | undefined): BatchGrant {
     const controller = new AbortController();
     live.add(controller);
     const grant: BatchGrant = {
       batch_id,
       projection,
       signal: controller.signal,
-      // A refusal for this call's own worst case throws for this call only; once settled
-      // spend reaches ACTUAL_CAP_USD, `guarded` aborts every live grant, this one included.
+      // A refusal for this call's own worst case, or at the grant's ceiling, throws for this call
+      // only; once settled spend reaches ACTUAL_CAP_USD, `guarded` aborts every live grant, this
+      // one included.
       async reserve(req) {
         assertGrant(grant);
         if (controller.signal.aborted) throw controller.signal.reason;
-        return ledger.reserve(req, batch_id);
+        return reserveIn(req, batch_id, ceiling);
       },
       // A grant settles after close too: a call that was in flight still has to be recorded.
       settle: (res, usage) => ledger.settle(res, usage),

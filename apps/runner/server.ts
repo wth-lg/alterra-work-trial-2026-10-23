@@ -16,8 +16,8 @@
 // rebinding); an Origin, when present, must be http://<that Host>; Sec-Fetch-Site, when present,
 // must be same-origin (the page itself may also be opened from the address bar, `none`); OPTIONS
 // gets 403 and no response carries an Access-Control-* header; a query parameter whose name
-// looks like a key, or whose name or value is shaped like an sk-ant key, gets 400, and an /api query may
-// hold only dry_run. Every /api route but
+// looks like a key, or a query whose raw text, fully percent-decoded (fullyDecoded), holds
+// sk-ant-shaped text, gets 400, and an /api query may hold only dry_run. Every /api route but
 // GET /api/health needs X-Clinenv-Token equal to the token, which only a page this process
 // served can read; a POST body must be application/json.
 //
@@ -27,10 +27,11 @@
 // leaves the process only in the x-api-key header MessagesClient sends (packages/core/anthropic.ts);
 // it is never written to a record, ledger row, log line or response, and every error text passes
 // through redactText. The runner reads only ENV_KEYS from its environment, never
-// ANTHROPIC_API_KEY. The request log is method, path, status and duration; never a body,
-// header or query. Every log line and API error message also has any sk-ant-shaped string
-// replaced, held or not, so a key pasted into a path is not echoed; a path is percent-decoded
-// before it is scrubbed, so an encoded key is not echoed either.
+// ANTHROPIC_API_KEY. The request log is method, route template (routeOf: /api/trials/:id,
+// BASE*, or `unmatched`), status and duration; never a path, body, header or query, so no
+// encoding of a key typed into a URL can reach it. No response echoes the path either: an /api
+// 404 or 405 names only the matched route template. Every log line and API error message also
+// has any sk-ant-shaped string replaced, held or not, as defence in depth.
 //
 // The server drops a client that takes over HEADERS_TIMEOUT_MS to send its headers or
 // REQUEST_TIMEOUT_MS to send its whole request (checked every CONNECTIONS_CHECK_MS), and holds
@@ -40,9 +41,17 @@
 // key is held, when its projection with what this session has committed would cross the
 // session cap, or when the ledger's exposure plus the projection would cross PROJECTED_CAP_USD,
 // and otherwise runs it with runBatch, which gets its grant from batchStart, and answers 202 once
-// the grant is held. A batch runBatch refuses before its grant (its run is locked, batchStart
-// refuses it) gets 409 with the reason and leaves no run or trial. The run id
-// (<session>-<n>) is taken before any await, so two requests at once never share one.
+// the grant is held. The grant carries the session cap as its ceiling (ledger.ts SpendCeiling,
+// scope: this session's run ids), so the cap also holds after admission: a reserve that would
+// take the session past it, a re-queued attempt's included, is refused, the batch stops
+// (stopped: spend_refused_ceiling), the trial in flight ends CANCELLED (stopped from outside,
+// kept as a re-queued attempt, so a later batch runs it again) and every reservation settles.
+// POST api/key checks its Validate worst case against the cap of the last batch posted, in this
+// runner and in the ledger, and gets 409 session_cap with no call when it would cross it; before
+// any batch there is no cap yet, and the first batch counts what Validate spent. A batch
+// runBatch refuses before its grant (its run is locked, batchStart refuses it) gets 409 with the
+// reason and leaves no run or trial. The run id (<session>-<n>) is taken before any await, so
+// two requests at once never share one.
 // What a session has committed is its ledger rows' settled and reserved spend plus, for each of
 // this runner's batches not yet done, the part of its projection its rows do not hold yet: a
 // batch counts in full from the moment it is accepted, so two batches posted back to back cannot
@@ -74,7 +83,7 @@ import { ApiError, MessagesClient, MODEL, type Transport } from '../../packages/
 import { BatchRefused, planBatch, runBatch, trialKey, type BatchRecord, type BatchSpec, type ResultSink, type TrialKey } from '../../packages/core/batch.ts';
 import type { Projection, TrialObservation } from '../../packages/core/cost.ts';
 import type { TrialEvent } from '../../packages/core/events.ts';
-import { checkProjected, PROJECTED_CAP_USD, SpendRefused, totals, type Ledger, type LedgerRow } from '../../packages/core/ledger.ts';
+import { checkProjected, PROJECTED_CAP_USD, SpendRefused, totals, type Ledger, type LedgerRow, type SpendCeiling } from '../../packages/core/ledger.ts';
 import type { TrialClient } from '../../packages/core/loop.ts';
 import { REDACTED, redactText } from '../../packages/core/redact.ts';
 import { run, type RunOptions } from '../../packages/core/run.ts';
@@ -112,6 +121,33 @@ const KEYISH = /key|token|secret|auth|password/i;
 // The shape keyscan looks for, held or not.
 const KEY_SHAPE = /sk-ant-[A-Za-z0-9_-]*/gi;
 const keyShaped = (text: string) => new RegExp(KEY_SHAPE.source, 'i').test(text);
+// Text with every %XX escape decoded, one escape at a time (as its byte, so an invalid UTF-8
+// sequence cannot stop it) and again until nothing changes: each pass that changes the text
+// shortens it, so the loop ends.
+const fullyDecoded = (text: string): string => {
+  for (;;) {
+    const next = text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (next === text) return text;
+    text = next;
+  }
+};
+const API_ROUTES = new Set(['health', 'key', 'runs', 'trials']);
+const TRIAL_ROUTE = /^trials\/([^/]+)(\/events)?$/;
+// An /api route's template (trials/:id), or null for no route.
+const apiTemplate = (route: string): string | null => {
+  if (API_ROUTES.has(route)) return route;
+  const m = TRIAL_ROUTE.exec(route);
+  return m ? `trials/:id${m[2] ?? ''}` : null;
+};
+// What the request log shows for a path: a route template, never the path itself.
+const routeOf = (pathname: string, apiRoute: string | null): string => {
+  if (apiRoute !== null) {
+    const t = apiTemplate(apiRoute);
+    return t === null ? 'unmatched' : `/api/${t}`;
+  }
+  if (pathname === '/' || pathname === BASE || pathname === BASE.slice(0, -1)) return pathname;
+  return pathname.startsWith(BASE) ? `${BASE}*` : 'unmatched';
+};
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
@@ -266,23 +302,6 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   // Held keys first, then any other key-shaped string.
   const scrub = (text: string) => redactText(text, secrets()).replace(KEY_SHAPE, REDACTED);
   const say = (line: string) => opts.log?.(scrub(line));
-  // A request path as it may be shown (log line, error text): percent-decoded, up to three
-  // layers, so encoded key text is redacted too, then scrubbed, control characters dropped.
-  const shownPath = (path: string) => {
-    let text = path;
-    for (let i = 0; i < 3; i++) {
-      const next = text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (m) => {
-        try {
-          return decodeURIComponent(m);
-        } catch {
-          return m;
-        }
-      });
-      if (next === text) break;
-      text = next;
-    }
-    return [...scrub(text)].map((c) => (c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f ? '?' : c)).join('');
-  };
 
   const runs: RunEntry[] = [];
   const trials = new Map<string, TrialEntry>();
@@ -291,7 +310,12 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   const ledgerMode = ledgerPlace.mode;
   const ledgerPath = ledgerPlace.path;
-  const sessionRows = (rows: readonly LedgerRow[]) => rows.filter((r) => r.run_id !== null && r.run_id.startsWith(session));
+  const inSession = (runId: string | null) => runId !== null && runId.startsWith(session);
+  const sessionRows = (rows: readonly LedgerRow[]) => rows.filter((r) => inSession(r.run_id));
+  // The session cap as a grant's ceiling: the ledger checks it at every reserve.
+  const ceilingAt = (usd: number): SpendCeiling => ({ usd, scope: inSession, what: 'session cap' });
+  // The cap of the last batch posted, which POST api/key checks Validate against; null before any.
+  let sessionCap: number | null = null;
   // The projection of each of this runner's batches that is not done, by run id (see the header).
   // Each batch removes only its own entry.
   const pending = new Map<string, { usd: number }>();
@@ -408,6 +432,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     const rows = readRows(ledgerPath);
     const projection = terms(plan.projection, rows, body.session_cap_usd);
     if (dryRun) return { status: 200, body: { dry_run: true, calls: 0, projection } };
+    sessionCap = body.session_cap_usd;
     if (key === null) return { status: 409, body: { error: { type: 'no_key', message: 'No API key yet: paste your Anthropic API key and press Validate, then start the trial again.' }, projection: null } };
     if (projection.session_spent_usd + projection.total_usd > body.session_cap_usd) {
       return {
@@ -433,8 +458,8 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     const started = new Promise<void>((r) => (granted = r));
     const gated: Ledger = {
       ...ledger,
-      batchStart: async (projected) => {
-        const grant = await ledger.batchStart(projected);
+      batchStart: async (projected, ceiling) => {
+        const grant = await ledger.batchStart(projected, ceiling);
         granted();
         return grant;
       },
@@ -451,7 +476,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     if (!opts.mock) batchKeys.add(key);
     const w = world;
     const batch = runBatch(
-      { ...spec, signal: controller.signal, log: (l) => say(`run ${runId}: ${l}`) },
+      { ...spec, ceiling: ceilingAt(body.session_cap_usd), signal: controller.signal, log: (l) => say(`run ${runId}: ${l}`) },
       {
         ledger: gated, rows: () => store.read(), sink: trackingSink(sink, byKey), tasks, checks: taskChecks, world: w.world, worldHash: w.worldHash, definitions: w.definitions, now: nodeNow,
         client: (grant, label) => new MessagesClient({ grant, ledger, apiKey: key, fetch: transport(label), trial: label, log: (l) => say(`${label}: ${l}`), ...(opts.sleep ? { sleep: opts.sleep } : {}) }),
@@ -545,13 +570,22 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   // ---- the key ----
 
   async function postKey(key: string): Promise<{ status: number; body: unknown }> {
+    const projection = validateWorstCaseUsd();
+    // Refused before anything changes: the held key stays as it was.
+    const cap = sessionCap;
+    const spent = cap === null ? 0 : committed(readRows(ledgerPath));
+    if (cap !== null && spent + projection > cap) {
+      return {
+        status: 409,
+        body: { error: { type: 'session_cap', message: `Validate can cost up to $${projection.toFixed(2)}, and with $${spent.toFixed(2)} already spent or running this session that would go over your session cap of $${cap.toFixed(2)}. Wait for the running trials to finish, then press Validate again.` } },
+      };
+    }
     heldKey = null;
     const label = `${opts.mock ? 'mock:' : ''}runner:validate`;
-    const projection = validateWorstCaseUsd();
     const { ledger } = openNodeLedger({ transport: opts.mock ? 'offline' : 'live', env, runId: `${session}-key` });
     batchKeys.add(key);
     try {
-      const grant = await ledger.batchStart(projection);
+      const grant = await ledger.batchStart(projection, cap === null ? undefined : ceilingAt(cap));
       try {
         const client = new MessagesClient({ grant, ledger, apiKey: key, fetch: transport(label), trial: label, maxAttempts: 1, log: (l) => say(`${label}: ${l}`), ...(opts.sleep ? { sleep: opts.sleep } : {}) });
         await client.send([...VALIDATE_REQUEST.history], VALIDATE_REQUEST.params);
@@ -645,8 +679,9 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   async function api(req: IncomingMessage, res: ServerResponse, route: string, query: URLSearchParams): Promise<void> {
     const method = req.method ?? '';
+    const template = apiTemplate(route);
     const allowed = (...m: string[]) => {
-      if (!m.includes(method)) throw new HttpError(405, 'method_not_allowed', `${method} is not allowed on api/${shownPath(route)}`);
+      if (!m.includes(method)) throw new HttpError(405, 'method_not_allowed', `${method} is not allowed on api/${template}`);
     };
     if ([...query.keys()].some((k) => !(k === 'dry_run' && route === 'trials' && method === 'POST'))) throw new HttpError(400, 'invalid_request', 'unknown query parameter');
     if (route === 'health') {
@@ -687,9 +722,10 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
       const r = await postTrials(parsed, query.get('dry_run') === '1');
       return json(res, r.status, r.body);
     }
-    const m = /^trials\/([A-Za-z0-9_.-]+)(\/events)?$/.exec(route);
-    const t = m ? trials.get(m[1] as string) : undefined;
-    if (!m || !t) throw new HttpError(404, 'not_found', `no such route or trial: api/${shownPath(route).slice(0, 80)}`);
+    const m = TRIAL_ROUTE.exec(route);
+    if (!m) throw new HttpError(404, 'not_found', 'no such route');
+    const t = trials.get(m[1] as string);
+    if (!t) throw new HttpError(404, 'not_found', `no such trial: api/${template}`);
     if (m[2]) {
       allowed('GET');
       return stream(req, res, t);
@@ -765,9 +801,10 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     const q = raw.indexOf('?');
     const pathname = q < 0 ? raw : raw.slice(0, q);
     const search = q < 0 ? '' : raw.slice(q);
-    res.on('finish', () => say(`${req.method} ${shownPath(pathname)} ${res.statusCode} ${Math.round(performance.now() - started)}ms`));
-    security(res);
     const apiRoute = pathname.startsWith('/api/') ? pathname.slice(5) : pathname.startsWith(`${BASE}api/`) ? pathname.slice(BASE.length + 4) : null;
+    const shown = routeOf(pathname, apiRoute);
+    res.on('finish', () => say(`${req.method} ${shown} ${res.statusCode} ${Math.round(performance.now() - started)}ms`));
+    security(res);
     const isApi = apiRoute !== null;
     try {
       const host = req.headers.host;
@@ -778,7 +815,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
       if (site !== undefined && site !== 'same-origin' && !(site === 'none' && !isApi)) throw new HttpError(403, 'forbidden_origin', 'cross-site request refused');
       if (req.method === 'OPTIONS') throw new HttpError(403, 'forbidden', 'no cross-origin access');
       const query = new URLSearchParams(search);
-      if ([...query.keys()].some((k) => KEYISH.test(k) || keyShaped(k)) || [...query.values()].some(keyShaped)) {
+      if ([...query.keys()].some((k) => KEYISH.test(k)) || keyShaped(fullyDecoded(search))) {
         throw new HttpError(400, 'invalid_request', 'a key never goes in a URL; send it in a POST body');
       }
       if (isApi) await api(req, res, apiRoute, query);

@@ -12,13 +12,19 @@
 //                       instead of a 404.
 //   POST   api/key      KeyRequest in the body, the X-Clinenv-Token header from the token meta
 //                       the runner injects into index.html. 200 KeyState { key_set: true } once
-//                       the runner's one validation call succeeded; else RunnerError with the
-//                       API's status and message.
+//                       the runner's one validation call succeeded; 409 RunnerError session_cap
+//                       (or spend_refused_ceiling, from the ledger) with no call when its worst
+//                       case would take the session past the cap of the last batch posted, the
+//                       held key unchanged; else RunnerError with the API's status and message.
 //   DELETE api/key      the same header. 200 KeyState { key_set: false }.
 // P12b adds the trial, run and SSE contracts, each behind the same header:
-//   POST   api/trials   TrialsRequest. 202 TrialsAccepted; 409 TrialsRefused (the session cap,
-//                       PROJECTED_CAP_USD, or no key), with no call made; 400 RunnerError for a
-//                       body the validator refuses. ?dry_run=1: 200 DryRun, 0 calls.
+//   POST   api/trials   TrialsRequest. 202 TrialsAccepted; 409 TrialsRefused, with no call made:
+//                       no_key, session_cap, projected_cap, batch_refused (the run is locked),
+//                       or spend_refused_<cap> from the ledger's batchStart (projected, actual,
+//                       or ceiling: the session cap, which the ledger also holds at every
+//                       reserve, so a batch that would cross it later stops with RunView.stopped
+//                       spend_refused_ceiling); 400 RunnerError for a body the validator
+//                       refuses. ?dry_run=1: 200 DryRun, 0 calls.
 //   GET    api/trials/:id         200 TrialView.
 //   GET    api/trials/:id/events  text/event-stream: one frame per TrialEvent (`id: <n>`,
 //                       `event: <type>`, `data: <TrialEvent JSON>`, n counting from 0 in the
@@ -165,7 +171,8 @@ export interface TrialsRequest {
   concurrency: number;
   effort: Effort;
   // The UI session's cap: the runner refuses a batch whose projection, with what this runner's
-  // batches have spent, would cross it. Never above PROJECTED_CAP_USD; the ledger checks that.
+  // batches have spent, would cross it, and the batch's grant stops it at the cap after that
+  // (reruns included). Never above PROJECTED_CAP_USD; the ledger checks that.
   session_cap_usd: number;
   // A key for this batch only, held in memory until it ends; else the key POST api/key holds.
   key?: string;
