@@ -13,7 +13,7 @@ Otherwise: apixaban 5 mg by mouth twice daily.
 Decide the apixaban dose on these three criteria only.
 
 §3 Metformin
-Adapted from the KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD and the ADA Standards of Care in Diabetes 2026, section 9.
+Adapted from the ADA–KDIGO 2022 consensus report on diabetes management in CKD, the KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD and the ADA Standards of Care in Diabetes 2026, section 9.
 Estimate GFR with the CKD-EPI 2021 creatinine equation (race-free) from the SCr in §1.
 eGFR 45 mL/min/1.73 m2 or higher: no change.
 eGFR 30 or higher and below 45, in a patient already taking metformin: reduce to 1000 mg per day or less.
