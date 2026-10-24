@@ -289,13 +289,13 @@ async function drive(tool: string, seed: number, target: number): Promise<Run> {
     run.committed++;
     if (tool === 'finish') continue;
     expect(c.session.writeSeq).toBe(seq + 1);
-    const provs = r.written_ids.filter((id) => id.startsWith('Provenance/'));
-    const others = r.written_ids.filter((id) => !id.startsWith('Provenance/'));
+    const provs = (r.written_ids ?? []).filter((id) => id.startsWith('Provenance/'));
+    const others = (r.written_ids ?? []).filter((id) => !id.startsWith('Provenance/'));
     if (provs.length !== 1 || provs[0] !== `Provenance/prov-t${String(seq + 1).padStart(4, '0')}`) run.provenanceDefects.push(`${tool} #${run.calls}: ${provs.join(',')}`);
     const prov = c.world.get<Provenance>('Provenance', tail(provs[0] ?? 'x/x'));
     const targets = (prov?.target ?? []).map((t) => t.reference).sort();
     if (JSON.stringify(targets) !== JSON.stringify(others)) run.provenanceDefects.push(`${tool} #${run.calls}: targets ${targets} != ${others}`);
-    for (const id of r.written_ids) {
+    for (const id of r.written_ids ?? []) {
       const res = c.world.get(id.split('/')[0]!, tail(id))!;
       const bad = medplumValid(res);
       if (bad) run.invalid.push(bad);
@@ -442,7 +442,7 @@ describe('rejections', () => {
             rejected++;
             if (error?.field !== m.field) defects.push(`field ${error?.field} != ${m.field}: ${where}`);
             if (!m.codes.includes(error!.code)) defects.push(`code ${error?.code}: ${where}`);
-            if (r.written_ids.length !== 0 || c.world.size !== size || c.session.writeSeq !== seq || (await stateHash(c.world.resources())) !== before) defects.push(`state changed: ${where}`);
+            if (r.written_ids !== undefined || c.world.size !== size || c.session.writeSeq !== seq || (await stateHash(c.world.resources())) !== before) defects.push(`state changed: ${where}`);
           }
         }
         expect(callTool(TOOLS, tool, seed, c).is_error).toBe(false);
@@ -477,7 +477,7 @@ describe('replay', () => {
     }
     log.push({ name: 'finish', input: { summary: 'done' }, result: callTool(TOOLS, 'finish', { summary: 'done' }, c) });
     const final = await stateHash(c.world.resources());
-    const committed = log.filter((e) => e.result.written_ids.length > 0).length;
+    const committed = log.filter((e) => e.result.written_ids !== undefined).length;
     const rejectedWrites = log.filter((e) => e.result.is_error).length;
     process.stdout.write(`write-gate: replay log=${log.length} committed=${committed} rejected=${rejectedWrites} writeSeq=${c.session.writeSeq}\n`);
     expect(committed).toBe(c.session.writeSeq);

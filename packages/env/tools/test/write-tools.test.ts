@@ -78,7 +78,7 @@ async function rejected(c: WriteContext, name: string, input: unknown): Promise<
   const seq = c.session.writeSeq;
   const r = callTool(TOOLS, name, input, c);
   expect(r.is_error, JSON.stringify(r.content)).toBe(true);
-  expect(r.written_ids).toEqual([]);
+  expect(r.written_ids).toBeUndefined();
   expect(c.world.size).toBe(size);
   expect(c.session.writeSeq).toBe(seq);
   expect(await stateHash(c.world.resources())).toBe(before);
@@ -389,7 +389,7 @@ describe('finish', () => {
     const before = await stateHash(c.world.resources());
     const r = callTool(TOOLS, 'finish', { summary: 'Done: 2 orders.' }, c);
     expect(ok(r)).toEqual({ ok: true });
-    expect(r.written_ids).toEqual([]);
+    expect(r.written_ids).toBeUndefined();
     expect(c.session).toMatchObject({ writeSeq: 0, summary: 'Done: 2 orders.' });
     expect(await stateHash(c.world.resources())).toBe(before);
     expect(await rejected(c, 'finish', {})).toMatchObject({ code: 'INVALID_INPUT', field: 'summary' });
@@ -404,8 +404,8 @@ describe('write sequence', () => {
     expect(r.written_ids).toEqual(['Provenance/prov-t0001', 'Task/task-t0001']);
     expect(get<Task>(c, 'Task/task-t0001').authoredOn).toBe(stamp(1));
   });
-  it('reads report no written ids', () => {
-    expect(callTool(TOOLS, 'get_context', {}, fresh()).written_ids).toEqual([]);
+  it('reads carry no written_ids', () => {
+    expect(callTool(TOOLS, 'get_context', {}, fresh()).written_ids).toBeUndefined();
   });
 });
 

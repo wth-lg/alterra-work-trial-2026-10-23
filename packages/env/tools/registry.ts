@@ -17,7 +17,7 @@
 //
 // A write tool (tools/write/) returns a Committed: its payload plus the ids it put into the
 // store. callTool reports those as written_ids, which is how the grader learns what a call
-// changed; every other result has written_ids [].
+// changed; no other result has the field.
 import { RESOURCE_TYPES } from '../world.ts';
 import { ToolError, type ErrorBody } from './errors.ts';
 
@@ -54,9 +54,10 @@ export interface ToolResult {
   content: unknown;
   exposed_ids: string[];
   referenced_ids: string[];
-  // Every resource the call put into the store, as <Type>/<id>, sorted: the resources a write
-  // created or changed and its Provenance. [] for reads, errors and finish.
-  written_ids: string[];
+  // Present only on a committed write: every resource the call put into the store, as
+  // <Type>/<id>, sorted (the resources it created or changed, and its Provenance). Reads,
+  // errors and finish have none.
+  written_ids?: string[];
 }
 
 // What a write tool returns once its resources are in the store (tools/write/commit.ts).
@@ -175,7 +176,7 @@ export function exposure(payload: unknown): Pick<ToolResult, 'exposed_ids' | 're
   return { exposed_ids: [...exposed].sort(), referenced_ids: [...refs].filter((r) => !exposed.has(r)).sort() };
 }
 
-const failure = (e: ToolError): ToolResult => ({ is_error: true, content: e.body() satisfies ErrorBody, exposed_ids: [], referenced_ids: [], written_ids: [] });
+const failure = (e: ToolError): ToolResult => ({ is_error: true, content: e.body() satisfies ErrorBody, exposed_ids: [], referenced_ids: [] });
 
 // Runs one tool call. A ToolError becomes an error result; any other exception propagates for
 // the caller to record as INTERNAL (see errors.ts).
@@ -191,14 +192,14 @@ export function callTool<C>(tools: readonly Tool<C>[], name: string, input: unkn
     if (e instanceof ToolError) return failure(e);
     throw e;
   }
-  const written = payload instanceof Committed ? [...payload.written].sort() : [];
+  const written = payload instanceof Committed ? [...payload.written].sort() : undefined;
   if (payload instanceof Committed) payload = payload.content;
   const json = JSON.stringify(payload);
   if (!withinCap(json.length)) {
     // The resources are already in the store, so reporting a rejection would be false.
-    if (written.length > 0) throw new Error(`${name}: a committed write's result is over the ${RESULT_TOKEN_CAP}-token cap`);
+    if (written) throw new Error(`${name}: a committed write's result is over the ${RESULT_TOKEN_CAP}-token cap`);
     const message = `the result is about ${approxTokens(json)} tokens, over the ${RESULT_TOKEN_CAP}-token cap; ask for less (a smaller count, narrower filters, or search_notes for passages of a long note)`;
     return failure(new ToolError('NOT_SUPPORTED', message));
   }
-  return { is_error: false, content: payload, ...exposure(payload), written_ids: written };
+  return { is_error: false, content: payload, ...exposure(payload), ...(written ? { written_ids: written } : {}) };
 }
