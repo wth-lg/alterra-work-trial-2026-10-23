@@ -1,6 +1,7 @@
 // One definition (plan phase P14a): the attribution definitions live only in
-// packages/core/outcomes.ts. Every FAULT_DEFINITIONS sentence and criterion text, PASS_DEFINITION
-// and DENOMINATOR_RULE (whole, and each of its sentences) is searched for verbatim in every file
+// packages/core/outcomes.ts. Every FAULT_DEFINITIONS sentence and criterion text, every
+// CONFIRMATION_CRITERIA text, CONFIRMATION_DEFINITIONS, FAULT_PRECEDENCE_RULE, PASS_DEFINITION,
+// DENOMINATOR_RULE and DENOMINATOR_OPERATOR_NOTE (whole, and each of their sentences) is searched for verbatim in every file
 // git tracks or would track (untracked files that .gitignore does not hide count, so a copy
 // planted before it is committed fails too). A surface imports the constant instead. The only
 // copies allowed are outcomes.ts itself and the blocks docs-gen (P24) writes between
@@ -9,7 +10,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DENOMINATOR_RULE, FAULT_DEFINITIONS, PASS_DEFINITION } from '../../packages/core/outcomes.ts';
+import {
+  CONFIRMATION_CRITERIA, CONFIRMATION_DEFINITIONS, DENOMINATOR_OPERATOR_NOTE, DENOMINATOR_RULE, FAULT_DEFINITIONS, FAULT_PRECEDENCE_RULE, PASS_DEFINITION,
+} from '../../packages/core/outcomes.ts';
 import { repoRoot } from './helpers.ts';
 
 const HOME = 'packages/core/outcomes.ts';
@@ -27,7 +30,10 @@ function definitions(): Array<{ name: string; text: string }> {
     out.push({ name: `FAULT_DEFINITIONS.${fault}.sentence`, text: d.sentence });
     for (const c of d.criteria) out.push({ name: `FAULT_DEFINITIONS.${fault} ${c.id}`, text: c.text });
   }
-  for (const [name, text] of [['PASS_DEFINITION', PASS_DEFINITION], ['DENOMINATOR_RULE', DENOMINATOR_RULE]] as const) {
+  for (const c of CONFIRMATION_CRITERIA) out.push({ name: `CONFIRMATION_CRITERIA ${c.id}`, text: c.text });
+  for (const [k, text] of Object.entries(CONFIRMATION_DEFINITIONS)) out.push({ name: `CONFIRMATION_DEFINITIONS.${k}`, text });
+  const rules = [['FAULT_PRECEDENCE_RULE', FAULT_PRECEDENCE_RULE], ['PASS_DEFINITION', PASS_DEFINITION], ['DENOMINATOR_RULE', DENOMINATOR_RULE], ['DENOMINATOR_OPERATOR_NOTE', DENOMINATOR_OPERATOR_NOTE]] as const;
+  for (const [name, text] of rules) {
     out.push({ name, text });
     for (const s of sentences(text)) if (s !== text) out.push({ name: `${name} sentence`, text: s });
   }
@@ -73,7 +79,11 @@ describe('one definition', () => {
   it('a definition sentence, PASS_DEFINITION or DENOMINATOR_RULE planted in apps/web/src is found', () => {
     const planted = (text: string) => restatements([{ path: 'apps/web/src/planted.ts', text: `export const copy = ${JSON.stringify(text)};\n` }]);
     expect(planted(FAULT_DEFINITIONS.env.sentence)).toEqual(['apps/web/src/planted.ts: FAULT_DEFINITIONS.env.sentence']);
-    expect(planted(FAULT_DEFINITIONS.model.criteria[0]!.text)).toEqual(['apps/web/src/planted.ts: FAULT_DEFINITIONS.model M1']);
+    expect(planted(CONFIRMATION_CRITERIA[0]!.text)).toEqual(['apps/web/src/planted.ts: CONFIRMATION_CRITERIA M1']);
+    expect(planted(FAULT_DEFINITIONS.env.criteria[4]!.text)).toEqual(['apps/web/src/planted.ts: FAULT_DEFINITIONS.env E5']);
+    expect(planted(FAULT_PRECEDENCE_RULE)).toContain('apps/web/src/planted.ts: FAULT_PRECEDENCE_RULE');
+    expect(planted(CONFIRMATION_DEFINITIONS.contradicted)).toEqual(['apps/web/src/planted.ts: CONFIRMATION_DEFINITIONS.contradicted']);
+    expect(planted(DENOMINATOR_OPERATOR_NOTE)).toContain('apps/web/src/planted.ts: DENOMINATOR_OPERATOR_NOTE');
     expect(planted(PASS_DEFINITION)).toContain('apps/web/src/planted.ts: PASS_DEFINITION');
     expect(planted(DENOMINATOR_RULE)).toContain('apps/web/src/planted.ts: DENOMINATOR_RULE');
     // One sentence of the rule is enough.

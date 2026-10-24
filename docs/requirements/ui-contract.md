@@ -149,7 +149,8 @@ accessible name or text node, so they share one line of the snapshot.
     model's refusal text.
   One pattern under Patterns matches all three forms.
 - The Attribution tab's criteria table shows, for each criterion, the text `<id>: met` or
-  `<id>: not met` (M1-M5), then its evidence; M5 shows `<id>: pending` on an unaudited trial.
+  `<id>: not met` (M1-M5), then its evidence; M5 shows `<id>: pending` on an unaudited trial, and
+  M1 shows `M1: not applicable` on a trial with no failed gate check (a LIMIT or REFUSAL).
   Criterion sentences come from FAULT_DEFINITIONS and are not copied here, because
   scripts/test/one-definition.test.ts forbids them outside packages/core/outcomes.ts.
 - `not human-audited`: the marker next to the fault label on a trial with no audit row (every

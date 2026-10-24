@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { explainTrial, formatCriterion, NOT_AUDITED_MARKER, type AuditRow, type ExplainContext, type ExplainRecord } from '../explain.ts';
-import { OUTCOMES, type Outcome } from '../outcomes.ts';
+import { CONFIRMATION_CRITERIA, FAULT_DEFINITIONS, FAULT_PRECEDENCE, OUTCOMES, type Fault, type Outcome } from '../outcomes.ts';
 import { TAXONOMY, type Taxonomy } from '../../grader/attribution.ts';
 import { repoRoot } from '../../../scripts/test/helpers.ts';
 
@@ -13,6 +13,7 @@ const MANIFEST = 'h-manifest';
 const V = 'v-1';
 const NOT_IN_WORLD = 'Observation/obs-not-in-world';
 const ctx: ExplainContext = {
+  events: [],
   world_state_hash: MANIFEST,
   exposable: (id) => id !== NOT_IN_WORLD,
   matrix: { task_version: V, oracle_pass: true, alternatives_pass: true },
@@ -167,11 +168,21 @@ describe('explainTrial: criteria', () => {
     expect(x.fault).toBe('model');
   });
 
-  it('an auditor that disagrees needs an adjudication that says model for M5', () => {
+  it('an auditor that disagrees needs adjudicated_label model for M5; the prose in note decides nothing', () => {
+    const m5 = (row: AuditRow) => explainTrial(record('FAIL'), row, ctx).criteria.find((c) => c.id === 'M5')!;
     const disagree = { ...agreeing, llm_auditor_agrees: false };
-    expect(explainTrial(record('FAIL'), disagree, ctx).criteria.find((c) => c.id === 'M5')!.met).toBe(false);
-    expect(explainTrial(record('FAIL'), { ...disagree, adjudication: 'model: the weight was in view at step 6' }, ctx).criteria.find((c) => c.id === 'M5')!.met).toBe(true);
-    expect(explainTrial(record('FAIL'), { ...agreeing, model_fault: 'no' }, ctx).criteria.find((c) => c.id === 'M5')!.met).toBe(false);
+    expect(m5(disagree).met).toBe(false);
+    expect(m5({ ...disagree, adjudicated_label: 'model', note: 'the weight was in view at step 6' }).met).toBe(true);
+    expect(m5({ ...agreeing, model_fault: 'no' }).met).toBe(false);
+    // Probe D: the prose says "model" but the structured label says environment.
+    expect(m5({ ...agreeing, model_fault: 'unclear', llm_auditor_agrees: false, adjudicated_label: 'environment', note: 'not the model; fixture bug' }).met).toBe(false);
+    expect(m5({ ...agreeing, model_fault: 'unclear', llm_auditor_agrees: false, note: 'not the model; fixture bug' }).met).toBe(false);
+  });
+
+  it('a null LLM auditor verdict reads "no LLM auditor verdict" (probe E)', () => {
+    const m5 = explainTrial(record('FAIL'), { ...agreeing, llm_auditor_agrees: null }, ctx).criteria.find((c) => c.id === 'M5')!;
+    expect(m5.evidence).toMatch(/no LLM auditor verdict/);
+    expect(m5.evidence).not.toMatch(/agrees/);
   });
 
   it('an audit GRADER_BUG with evidence makes the fault grader', () => {
@@ -180,6 +191,7 @@ describe('explainTrial: criteria', () => {
     expect(x.label).toBe('grader');
     const noEvidence = explainTrial(record('FAIL'), { ...agreeing, outcome: 'GRADER_BUG', taxonomy: null, model_fault: 'no', evidence_ids: [] }, ctx);
     expect(noEvidence.fault).toBe('model');
+    expect(noEvidence.confirmation).toBe('contradicted');
   });
 
   it('a regrade that ended GRADER_ERROR makes the fault grader', () => {
@@ -258,5 +270,134 @@ describe('explainTrial: the UI contract strings', () => {
     expect(contract).toContain('`not human-audited`');
     const audited = explainTrial(record('FAIL'), { trial: 't/1', outcome: 'FAIL', taxonomy: 'reasoning', model_fault: 'yes', decisive_step: 9, evidence_ids: ['x'], llm_auditor_agrees: true }, ctx);
     for (const c of audited.criteria) expect(formatCriterion(c)).toMatch(new RegExp(`\\b${c.id}: (?:met|not met)\\b`));
+  });
+});
+
+describe('explainTrial: the criteria decide the fault', () => {
+  const crit = (x: ReturnType<typeof explainTrial>, id: string) => x.criteria.find((c) => c.id === id)!;
+
+  it('probe A: a decisive id that is not in the world makes the fault env through E5, with M1 not met', () => {
+    const x = explainTrial(failWith('retrieval', [{ id: NOT_IN_WORLD, first_exposed_step: null }]), undefined, ctx);
+    expect(crit(x, 'M1').met).toBe(false);
+    expect(x).toMatchObject({ fault: 'env', label: 'environment', deciding: { fault: 'env', id: 'E5' } });
+    expect(x.deciding!.evidence).toMatch(new RegExp(`${NOT_IN_WORLD}.*not exposable`));
+    expect(x.reason).toMatch(REASON);
+    expect(x.reason).toMatch(/environment/);
+  });
+
+  it('probe B: an oracle or alternative that fails the matrix on the trial\'s task_version makes the fault grader through GR4, with M4 not met', () => {
+    for (const matrix of [{ task_version: V, oracle_pass: false, alternatives_pass: true }, { task_version: V, oracle_pass: true, alternatives_pass: false }]) {
+      const x = explainTrial(record('FAIL'), undefined, { ...ctx, matrix });
+      expect(crit(x, 'M4').met).toBe(false);
+      expect(x).toMatchObject({ fault: 'grader', label: 'grader', deciding: { fault: 'grader', id: 'GR4' } });
+      expect(x.reason).toMatch(REASON);
+    }
+    // A matrix of another task_version decides nothing: M4 pending, the label provisional.
+    const other = explainTrial(record('FAIL'), undefined, { ...ctx, matrix: { task_version: 'v-0', oracle_pass: false, alternatives_pass: false } });
+    expect(other).toMatchObject({ fault: 'model', confirmation: 'provisional' });
+  });
+
+  it('probe G: a missing final state hash makes the fault env through E4, with M3 not met', () => {
+    const x = explainTrial(record('FAIL', { state_hash: { initial: MANIFEST, final: null, replay_final: null } }), undefined, ctx);
+    expect(crit(x, 'M3').met).toBe(false);
+    expect(x).toMatchObject({ fault: 'env', deciding: { fault: 'env', id: 'E4' } });
+    const noInitial = explainTrial(record('FAIL', { state_hash: { initial: null, final: 'h-final', replay_final: 'h-final' } }), undefined, ctx);
+    expect(noInitial).toMatchObject({ fault: 'env', deciding: { id: 'E2' } });
+  });
+
+  it('when two faults apply, FAULT_PRECEDENCE decides and the other shows as a note', () => {
+    const threwWithInternal = explainTrial(record('GRADER_ERROR', { error: { check: 'G1', message: 'TypeError', stops_batch: false }, tool_errors: { INTERNAL: 1 } }), undefined, ctx);
+    expect(threwWithInternal).toMatchObject({ fault: 'grader', deciding: { fault: 'grader', id: 'GR1' } });
+    expect(threwWithInternal.notes.map((n) => `${n.fault} ${n.id}`)).toEqual(['env E1']);
+    const apiWithInternal = explainTrial(record('INFRA_API', { detail: 'overloaded', tool_errors: { INTERNAL: 2 } }), undefined, ctx);
+    expect(apiWithInternal).toMatchObject({ fault: 'infra', label: null, deciding: { fault: 'infra', id: 'I3' } });
+    expect(apiWithInternal.notes.map((n) => n.id)).toEqual(['E1']);
+    const brokenMatrixAndInternal = explainTrial(record('FAIL', { tool_errors: { INTERNAL: 1 } }), undefined, { ...ctx, matrix: { task_version: V, oracle_pass: false, alternatives_pass: true } });
+    expect(brokenMatrixAndInternal).toMatchObject({ fault: 'grader', deciding: { id: 'GR4' } });
+    expect(brokenMatrixAndInternal.notes.map((n) => n.id)).toEqual(['E1']);
+    expect(FAULT_PRECEDENCE.indexOf('grader')).toBeLessThan(FAULT_PRECEDENCE.indexOf('env'));
+  });
+
+  it('every model criterion that is not met makes a deciding criterion of another fault hold, so a model label never sits next to M1-M4 not met', () => {
+    const variants: Array<{ rec: ExplainRecord; c: ExplainContext }> = [];
+    const states = [
+      { initial: MANIFEST, final: 'h-final', replay_final: 'h-final' }, { initial: 'h-other', final: 'h-final', replay_final: 'h-final' },
+      { initial: MANIFEST, final: 'h-final', replay_final: 'h-other' }, { initial: null, final: 'h-final', replay_final: 'h-final' }, { initial: MANIFEST, final: null, replay_final: null },
+    ];
+    const exposures: Exposure[] = [[{ id: 'Observation/obs-wt-1', first_exposed_step: 6 }], [{ id: 'Observation/obs-wt-1', first_exposed_step: null }], [{ id: NOT_IN_WORLD, first_exposed_step: null }]];
+    const matrices = [ctx.matrix!, { task_version: V, oracle_pass: false, alternatives_pass: true }, { task_version: V, oracle_pass: true, alternatives_pass: false }];
+    for (const state_hash of states) for (const exposure of exposures) for (const matrix of matrices) for (const INTERNAL of [0, 1]) {
+      variants.push({ rec: { ...failWith('reasoning', exposure), state_hash, tool_errors: { INTERNAL } }, c: { ...ctx, matrix } });
+    }
+    for (const { rec, c } of variants) {
+      const x = explainTrial(rec, undefined, c);
+      const notMet = x.criteria.filter((m) => m.met === false).map((m) => m.id);
+      if (notMet.length > 0) expect(x.fault, `${JSON.stringify(rec.state_hash)} ${notMet.join(',')}`).not.toBe('model');
+      else expect(x.fault).toBe('model');
+    }
+  });
+
+  it('confirmation: provisional without an audit or with a criterion pending, confirmed when M1-M5 are met, contradicted by a disagreeing audit', () => {
+    const agreeing: AuditRow = { trial: 'renal-dose-review/3', outcome: 'FAIL', taxonomy: 'reasoning', model_fault: 'yes', decisive_step: 9, evidence_ids: ['Observation/obs-wt-1'], llm_auditor_agrees: true };
+    expect(explainTrial(record('FAIL'), undefined, ctx).confirmation).toBe('provisional');
+    expect(explainTrial(record('FAIL'), agreeing, ctx).confirmation).toBe('confirmed');
+    expect(explainTrial(record('FAIL'), agreeing, { ...ctx, matrix: null }).confirmation).toBe('provisional');
+    // Probe C: the audit says environment; the computed label stays, the disagreement is shown.
+    const c = explainTrial(record('FAIL'), { ...agreeing, taxonomy: 'environment', model_fault: 'no' }, ctx);
+    expect(c).toMatchObject({ fault: 'model', label: 'model', audit_label: 'environment', confirmation: 'contradicted' });
+    // An env fault is confirmed by an audit that says environment, contradicted by one that says model.
+    const env = record('FAIL', { tool_errors: { INTERNAL: 1 } });
+    expect(explainTrial(env, undefined, ctx).confirmation).toBe('provisional');
+    expect(explainTrial(env, { ...agreeing, label: 'environment', model_fault: 'no' }, ctx).confirmation).toBe('confirmed');
+    expect(explainTrial(env, agreeing, ctx).confirmation).toBe('contradicted');
+    // Infra is decided by the record alone; a PASS has no fault and no confirmation.
+    expect(explainTrial(record('INFRA_API'), undefined, ctx).confirmation).toBe('confirmed');
+    expect(explainTrial(record('PASS'), undefined, ctx).confirmation).toBeNull();
+  });
+
+  it('returns every fault\'s criteria with met or not met, and the criterion that decided', () => {
+    const x = explainTrial(record('ENV_ERROR', { detail: 'invariant_broken', status: 'ENV_ERROR' }), undefined, ctx);
+    expect(Object.keys(x.fault_criteria).sort()).toEqual([...FAULT_PRECEDENCE].sort());
+    for (const f of FAULT_PRECEDENCE) expect(x.fault_criteria[f as Fault].map((c) => c.id)).toEqual(FAULT_DEFINITIONS[f as Fault].criteria.map((c) => c.id));
+    expect(x.deciding).toMatchObject({ fault: 'env', id: 'E3' });
+    expect(x.fault_criteria.env.find((c) => c.id === 'E3')!.met).toBe(true);
+    expect(x.criteria.map((c) => c.id)).toEqual(CONFIRMATION_CRITERIA.map((c) => c.id));
+  });
+
+  it('the infra and refusal criteria read the observable record fields, not the outcome', () => {
+    expect(explainTrial(record('INVALID', { status: 'COMPLETED', models_returned: ['claude-other'], model_requested: 'claude-opus-5-5' }), undefined, ctx).deciding).toMatchObject({ id: 'I1', evidence: expect.stringMatching(/claude-other/) });
+    expect(explainTrial(record('INFRA_HARNESS'), undefined, ctx).deciding?.id).toBe('I2');
+    expect(explainTrial(record('INFRA_API'), undefined, ctx).deciding?.id).toBe('I3');
+    expect(explainTrial(record('CANCELLED'), undefined, ctx).deciding?.id).toBe('I4');
+    expect(explainTrial(record('REFUSAL', { stop_reason: 'refusal' }), undefined, ctx).deciding).toMatchObject({ fault: 'refusal', id: 'R1', evidence: expect.stringMatching(/stop_reason refusal/) });
+    expect(explainTrial(record('LIMIT', { detail: 'turns' }), undefined, ctx).deciding).toMatchObject({ fault: 'model', id: 'MF2' });
+    expect(explainTrial(record('FAIL'), undefined, ctx).deciding).toMatchObject({ fault: 'model', id: 'MF1' });
+  });
+
+  it('M1 is not applicable when no gate check failed', () => {
+    const x = explainTrial(record('LIMIT', { detail: 'turns' }), undefined, ctx);
+    expect(crit(x, 'M1').met).toBe('n/a');
+    expect(formatCriterion(crit(x, 'M1'))).toBe('M1: not applicable');
+  });
+});
+
+describe('explainTrial: edge records (verifier P14a-1)', () => {
+  it('an empty expected value reads "none"', () => {
+    const x = explainTrial(record('FAIL', { checks: [gate('G1', false, { expected: '', found: 'x' })] }), undefined, ctx);
+    expect(x.reason).toMatch(/^G1 failed: expected none, found x; /);
+    expect(x.reason).toMatch(REASON);
+  });
+
+  it('a FAIL whose failed check has no kind falls back to the first check not met', () => {
+    const x = explainTrial(record('FAIL', { checks: [{ id: 'G1', met: true }, { id: 'G2', met: false, evidence: { expected: 'a', found: 'b' } }], attribution: null }), undefined, ctx);
+    expect(x.decisive_check?.id).toBe('G2');
+    expect(x.reason).toMatch(REASON);
+  });
+
+  it('a PASS with an INTERNAL error stays a PASS with no fault; the environment criterion is a note', () => {
+    const x = explainTrial(record('PASS', { tool_errors: { INTERNAL: 1 } }), undefined, ctx);
+    expect(x).toMatchObject({ outcome: 'PASS', fault: null, label: null, deciding: null });
+    expect(x.notes).toEqual([expect.objectContaining({ fault: 'env', id: 'E1' })]);
+    expect(x.reason).toMatch(/^PASS: every gate check met; note E1/);
   });
 });

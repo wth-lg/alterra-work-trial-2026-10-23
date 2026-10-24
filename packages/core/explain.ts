@@ -1,15 +1,14 @@
-// Why one trial ended as it did (plan phase P14a): its outcome, fault, audit label, decisive check,
-// reason and the M1-M5 criteria, from its record at the current grade (summary.ts currentGrade:
-// the last regrade, else the recorded grade), its audit row when it has one, and what the caller
-// can say about the world. The UI's "why this failed", cli/audit-check.ts, the auditor prompt and
-// the writeup all call explainTrial, so none of them can disagree with the audit. The definitions
-// it evaluates are outcomes.ts's. Pure: no Node, DOM or file access.
+// Why one trial ended as it did (plan phase P14a): its outcome, fault, audit label, the criterion
+// that decided the fault, the confirmation state, decisive check, reason and the M1-M5 criteria,
+// from its record at the current grade (summary.ts currentGrade: the last regrade, else the
+// recorded grade), its audit row when it has one, and what the caller can say about the world.
+// The UI's "why this failed", cli/audit-check.ts, the auditor prompt and the writeup all call
+// explainTrial, so none of them can disagree with the audit. Pure: no Node, DOM or file access.
 //
-// The fault is decided in this order: an INFRA outcome is infra; a grader criterion that holds
-// (a check threw, a regrade disagrees, an audit GRADER_BUG with evidence) makes it grader; an
-// environment criterion that holds (an INTERNAL tool error, an initial hash that is not the
-// manifest, an invariant, a replay mismatch) makes it env; otherwise the FAULT map's fault of
-// the current outcome. The label is AUDIT_LABEL of the fault.
+// Every criterion of outcomes.ts FAULT_DEFINITIONS is checked; the fault is the first of
+// FAULT_PRECEDENCE with a criterion that holds, and the label is AUDIT_LABEL of it. Criteria of
+// the other faults that hold are returned as notes. A PASS has no fault: whatever holds on it is
+// a note (PASS_DEFINITION). The confirmation state follows CONFIRMATION_DEFINITIONS.
 //
 // The reason is one sentence of at most REASON_WORDS words, in the forms
 // docs/requirements/ui-contract.md fixes for a valid non-pass trial:
@@ -21,7 +20,9 @@
 // them, else a range and the value checked against it, else a list that should be empty.
 import type { TrialEvent } from './events.ts';
 import { PER_TRIAL_CAP_USD } from './cost.ts';
-import { AUDIT_LABEL, AUDIT_LABELS, FAULT, FAULT_DEFINITIONS, type AttributionFacts, type AuditLabelName, type CriterionMet, type Fault, type Outcome } from './outcomes.ts';
+import {
+  AUDIT_LABEL, AUDIT_LABELS, CONFIRMATION_CRITERIA, FAULT_DEFINITIONS, FAULT_PRECEDENCE, type AttributionFacts, type AuditLabelName, type Confirmation, type CriterionMet, type Fault,
+} from './outcomes.ts';
 import { currentGrade, type RegradeGrade } from './summary.ts';
 import { TAXONOMY, type Taxonomy } from '../grader/attribution.ts';
 
@@ -46,6 +47,9 @@ export interface ExplainRecord {
   score?: number | null;
   status?: string | null;
   detail?: string | null;
+  stop_reason?: string | null;
+  model_requested?: string | null;
+  models_returned?: readonly string[];
   turns?: number;
   cost_usd?: number;
   started?: string;
@@ -61,8 +65,10 @@ export interface ExplainRecord {
 }
 
 // One line of <run>/audit.jsonl (design section 5, "Human audit"). label and label_subtype are
-// optional: without them a taxonomy in TAXONOMY reads as model, and environment or grader as
-// itself. criteria is what audit-check writes back: explainTrial's criteria for the trial.
+// optional: without them a taxonomy in TAXONOMY reads as model, environment or grader as itself,
+// and an outcome GRADER_BUG as grader. adjudicated_label settles a row whose model_fault is unclear
+// or whose LLM auditor disagrees; the reasoning goes in note. criteria is what audit-check writes
+// back: explainTrial's criteria for the trial.
 export interface AuditRow {
   trial: string;
   outcome: string;
@@ -73,20 +79,24 @@ export interface AuditRow {
   llm_auditor_agrees: boolean | null;
   label?: string | null;
   label_subtype?: string | null;
-  adjudication?: string;
+  adjudicated_label?: AuditLabelName | null;
   note?: string;
   criteria?: CriterionRow[];
 }
 
 // What the caller knows beyond the record. Each criterion that needs a missing part is pending.
 export interface ExplainContext {
-  // The trial's trajectory: the limit and refusal sentences read it.
-  events?: readonly TrialEvent[];
+  // The trial's trajectory: the limit and refusal sentences read it. Required, so a UI caller
+  // cannot leave it out and get "?" where the limit event has the value.
+  events: readonly TrialEvent[];
   // The manifest's initial state hash (fixtures/manifest.json world.state_hash, or the run
   // manifest's world_hash).
   world_state_hash?: string | null;
   // Whether a resource is in the world, so the tool would have returned it had the model asked.
   exposable?: (id: string) => boolean;
+  // The exposure of the current decisive check's ids, when the caller recomputed it from the
+  // trajectory (a regrade failed another check than the recorded attribution names).
+  exposure?: { check: string; ids: ReadonlyArray<{ id: string; first_exposed_step: number | null }> } | null;
   // The grader validation matrix of the task (pnpm cli matrix).
   matrix?: { task_version: string; oracle_pass: boolean; alternatives_pass: boolean } | null;
   // The task's gate checks, for traces_to.
@@ -99,26 +109,46 @@ export interface CriterionRow {
   evidence: string;
 }
 
+export interface Holding {
+  fault: Fault;
+  id: string;
+  evidence: string;
+}
+
 export interface Explanation {
   outcome: string;
   valid: boolean;
   fault: Fault | null;
   label: AuditLabelName | null;
   label_subtype: 'refusal' | null;
+  // The criterion that decided the fault; null on a PASS.
+  deciding: Holding | null;
+  confirmation: Confirmation | null;
+  // Infra, grader and env criteria that hold but did not decide (lower in FAULT_PRECEDENCE, or on a PASS).
+  notes: Holding[];
   audited: boolean;
+  // The label the audit row gives (its adjudicated_label when it has one), next to the computed one.
+  audit_label: AuditLabelName | null;
   decisive_check: { id: string; traces_to: string | null; expected: string; found: string } | null;
   decisive_step: number | null;
   taxonomy: Taxonomy | null;
   reason: string;
+  // CONFIRMATION_CRITERIA, M1-M5.
   criteria: CriterionRow[];
+  // Every criterion of every fault, met or not.
+  fault_criteria: Record<Fault, CriterionRow[]>;
 }
 
-export const formatCriterion = (c: Pick<CriterionRow, 'id' | 'met'>): string => `${c.id}: ${c.met === true ? 'met' : c.met === false ? 'not met' : 'pending'}`;
+const MET_TEXT: Record<string, string> = { true: 'met', false: 'not met', pending: 'pending', 'n/a': 'not applicable' };
+export const formatCriterion = (c: Pick<CriterionRow, 'id' | 'met'>): string => `${c.id}: ${MET_TEXT[String(c.met)]}`;
 
-// The audit label a row gives: its label, else the one its taxonomy implies.
+const isLabel = (l: unknown): l is AuditLabelName => (AUDIT_LABELS as readonly unknown[]).includes(l);
+
+// The audit label a row gives: its label, else the one its taxonomy or a GRADER_BUG outcome implies.
 export function auditLabelOf(row: Pick<AuditRow, 'label' | 'taxonomy' | 'outcome'>): string | null {
   if (row.label !== undefined && row.label !== null) return row.label;
   if ((AUDIT_LABELS as readonly (string | null)[]).includes(row.taxonomy)) return row.taxonomy;
+  if (row.outcome === 'GRADER_BUG') return 'grader';
   if ((TAXONOMY as readonly (string | null)[]).includes(row.taxonomy) || row.outcome === 'REFUSAL') return 'model';
   return null;
 }
@@ -132,7 +162,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 
 function show(v: unknown): string {
   if (v === null || v === undefined) return 'none';
-  if (typeof v === 'string') return v;
+  if (typeof v === 'string') return v.trim() === '' ? 'none' : v;
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   if (Array.isArray(v)) return v.length === 0 ? 'none' : v.map(show).join(', ');
   if (isObj(v) && typeof v.min === 'number' && typeof v.max === 'number') return v.min === v.max ? String(v.min) : `${v.min}-${v.max}`;
@@ -209,45 +239,59 @@ function refusalText(r: ExplainRecord, events: readonly TrialEvent[] | undefined
 
 const capWords = (s: string, max = REASON_WORDS) => firstWords(s, max);
 
-export function explainTrial(record: ExplainRecord, audit?: AuditRow | null, ctx: ExplainContext = {}): Explanation {
+export function explainTrial(record: ExplainRecord, audit: AuditRow | null | undefined, ctx: ExplainContext): Explanation {
   const grade = currentGrade(record);
   const outcome = grade.outcome;
   const checks = (grade.checks ?? []) as ReadonlyArray<ExplainCheck>;
-  const failed = checks.find((c) => c.kind === 'gate' && c.met === false) ?? null;
+  // The first failed gate check; a check with no kind (a hand-built record) counts as a gate.
+  const failed = checks.find((c) => c.kind === 'gate' && c.met === false) ?? (outcome === 'FAIL' ? checks.find((c) => c.kind === undefined && c.met === false) : undefined) ?? null;
   const att = record.attribution ?? null;
   // The recorded attribution speaks for the current grade only when it names the same check.
   const attFits = att !== null && att.first_failed === (failed?.id ?? null);
+  const recomputed = failed !== null && !attFits && ctx.exposure?.check === failed.id ? ctx.exposure.ids : null;
+  const exposure = attFits ? att.exposure : recomputed;
   const row = audit ?? null;
+  const rowLabel = row === null ? null : auditLabelOf(row);
   const facts: AttributionFacts = {
     outcome,
     regraded: grade.regraded,
     status: record.status ?? null,
     detail: record.detail ?? null,
+    stop_reason: record.stop_reason ?? null,
+    model_requested: record.model_requested ?? null,
+    models_returned: record.models_returned ?? [],
     internal_errors: record.tool_errors?.INTERNAL ?? 0,
     state_hash: record.state_hash,
     manifest_hash: ctx.world_state_hash ?? null,
     task_version: record.task_version,
     decisive: failed === null ? null : {
       id: failed.id,
-      exposure: attFits ? att.exposure.map((e) => ({ ...e, exposable: e.first_exposed_step === null && ctx.exposable ? ctx.exposable(e.id) : null })) : null,
+      exposure: exposure === null ? null : exposure.map((e) => ({ ...e, exposable: e.first_exposed_step === null && ctx.exposable ? ctx.exposable(e.id) : null })),
     },
     matrix: ctx.matrix ?? null,
     check_error: grade.regraded ? null : (record.error ?? null),
     audit: row === null ? null : {
       outcome: row.outcome,
-      label: (AUDIT_LABELS as readonly (string | null)[]).includes(auditLabelOf(row)) ? (auditLabelOf(row) as AuditLabelName) : null,
+      label: isLabel(rowLabel) ? rowLabel : null,
       model_fault: row.model_fault ?? null,
       llm_auditor_agrees: row.llm_auditor_agrees ?? null,
-      adjudication: typeof row.adjudication === 'string' && row.adjudication.trim() !== '' ? row.adjudication : null,
+      adjudicated_label: isLabel(row.adjudicated_label) ? row.adjudicated_label : null,
       evidence_ids: row.evidence_ids ?? [],
     },
   };
-  const holds = (f: Fault) => FAULT_DEFINITIONS[f].criteria.map((c) => ({ c, r: c.check(facts) })).filter((x) => x.r.met === true);
-  const mapped = FAULT[outcome as Outcome] ?? null;
-  const graderHolds = holds('grader');
-  const envHolds = holds('env');
-  const fault: Fault | null = mapped === 'infra' ? 'infra' : graderHolds.length > 0 ? 'grader' : envHolds.length > 0 ? 'env' : mapped;
+  const fault_criteria = Object.fromEntries(FAULT_PRECEDENCE.map((f) => [f, FAULT_DEFINITIONS[f].criteria.map((c) => ({ id: c.id, ...c.check(facts) }))])) as Record<Fault, CriterionRow[]>;
+  const holding: Holding[] = FAULT_PRECEDENCE.flatMap((f) => fault_criteria[f].filter((c) => c.met === true).map((c) => ({ fault: f, id: c.id, evidence: c.evidence })));
+  const deciding = outcome === 'PASS' ? null : (holding[0] ?? null);
+  const fault = deciding?.fault ?? null;
+  // MF and R criteria restate the outcome, so only infra, grader and env criteria are notes.
+  const notes = holding.filter((h) => h.fault !== fault && h.fault !== 'model' && h.fault !== 'refusal');
   const label = fault === null ? null : AUDIT_LABEL[fault];
+  const criteria = CONFIRMATION_CRITERIA.map((c) => ({ id: c.id, ...c.check(facts) }));
+  const audit_label = facts.audit === null ? null : (facts.audit.adjudicated_label ?? facts.audit.label);
+  const confirmation: Confirmation | null = fault === null ? null
+    : fault === 'infra' ? (audit_label === null ? 'confirmed' : 'contradicted')
+      : fault === 'model' || fault === 'refusal' ? (criteria.some((c) => c.met === false) ? 'contradicted' : criteria.some((c) => c.met === 'pending') ? 'provisional' : 'confirmed')
+        : facts.audit === null ? 'provisional' : audit_label === label!.label ? 'confirmed' : 'contradicted';
   const taxonomy = attFits && (TAXONOMY as readonly string[]).includes(att.auto) ? (att.auto as Taxonomy) : null;
   const ef = failed === null ? null : expectedFound(failed.evidence);
   const decisive_check = failed === null || ef === null ? null : { id: failed.id, traces_to: ctx.checks?.find((c) => c.id === failed.id)?.traces_to ?? null, ...ef };
@@ -255,8 +299,8 @@ export function explainTrial(record: ExplainRecord, audit?: AuditRow | null, ctx
   let reason: string;
   if (grade.valid && outcome !== 'PASS') {
     if (decisive_check !== null) {
-      const clause = fault === 'env' ? `${envHolds[0]!.r.evidence}, so this is environment`
-        : fault === 'grader' ? `${graderHolds[0]!.c.id === 'GR3' ? 'an audit found a grader bug' : graderHolds[0]!.r.evidence}, so this is grader`
+      const clause = fault === 'env' ? `${deciding!.evidence}, so this is environment`
+        : fault === 'grader' ? `${deciding!.id === 'GR3' ? 'an audit found a grader bug' : deciding!.evidence}, so this is grader`
           : taxonomy !== null ? TAXONOMY_CLAUSE[taxonomy](facts) : null;
       const base = checkSentence(decisive_check.id, decisive_check.expected, decisive_check.found, REASON_WORDS);
       const fits = (s: string) => words(s).length <= REASON_WORDS;
@@ -271,14 +315,14 @@ export function explainTrial(record: ExplainRecord, audit?: AuditRow | null, ctx
       reason = `${outcome}: no failed gate check recorded`;
     }
   } else if (outcome === 'PASS') {
-    reason = fault === 'grader' ? 'PASS, but an audit found a grader bug' : fault === 'env' ? `PASS, but ${envHolds[0]!.r.evidence}` : 'PASS: every gate check met';
+    reason = notes.length === 0 ? 'PASS: every gate check met' : `PASS: every gate check met; note ${notes[0]!.id}: ${notes[0]!.evidence}`;
   } else {
     const detail = record.detail ? ` (${record.detail})` : '';
     if (fault === 'grader') {
-      const why = graderHolds.find((x) => x.c.id === 'GR1') ? `check ${facts.check_error!.check} threw ${firstWords(facts.check_error!.message, 6)}` : graderHolds[0]?.c.id === 'GR3' ? 'an audit found a grader bug' : 'a regrade disagrees with the record';
+      const why = deciding!.id === 'GR1' ? `check ${facts.check_error!.check} threw ${firstWords(facts.check_error!.message, 6)}` : deciding!.id === 'GR3' ? 'an audit found a grader bug' : deciding!.id === 'GR4' ? deciding!.evidence : 'a regrade could not grade the record';
       reason = `${outcome}: ${why}; the grader's fault, which blocks the run`;
     } else if (fault === 'env') {
-      reason = `${outcome}${detail}: ${envHolds[0]?.r.evidence ?? 'the environment failed'}; the environment's fault, excluded and rerun`;
+      reason = `${outcome}${detail}: ${deciding!.evidence}; the environment's fault, excluded and rerun`;
     } else if (outcome === 'CANCELLED') {
       reason = 'CANCELLED: stopped from outside; says nothing about the model, excluded and rerun';
     } else {
@@ -292,11 +336,16 @@ export function explainTrial(record: ExplainRecord, audit?: AuditRow | null, ctx
     fault,
     label: label?.label ?? null,
     label_subtype: label?.subtype ?? null,
+    deciding,
+    confirmation,
+    notes,
     audited: row !== null,
+    audit_label,
     decisive_check,
     decisive_step: attFits ? att.decisive_step : (row?.decisive_step ?? null),
     taxonomy,
     reason: capWords(reason),
-    criteria: FAULT_DEFINITIONS.model.criteria.map((c) => ({ id: c.id, ...c.check(facts) })),
+    criteria,
+    fault_criteria,
   };
 }
