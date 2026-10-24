@@ -81,6 +81,10 @@ export interface Step {
   referenced_ids: readonly string[];
   // Empty unless the call committed a write.
   written_ids: readonly string[];
+  // The exact text this call's result showed, per reference ('DocumentReference/<id>'): a
+  // search_notes snippet, a note's text read with fhir_read, a policy's text. Empty for other
+  // results and errors. Derived from the recorded content (env registry shownText).
+  shown: Readonly<Record<string, string>>;
 }
 
 // Null-safe reads: a resource that is not in the state is absent, never an exception.

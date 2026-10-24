@@ -1,7 +1,8 @@
 // Property fuzz over the read tools (plan phase P5): mostly schema-valid calls built from ids,
 // codes, names and words that exist in the committed world, plus mutated calls. A read must
 // never throw (INTERNAL), never change the state hash, and every success must carry exposure
-// tags equal to the ids in its payload, within the 8k-token page cap.
+// tags equal to the ids in its payload, tags that follow the exposure rule (exposure-rule.ts),
+// and stay within the 8k-token page cap.
 import { readFileSync } from 'node:fs';
 import type { DocumentReference, Patient, Resource, Task } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +14,7 @@ import { RESOURCE_TYPES } from '../../world.ts';
 import { ERROR_CODES, internalError, ToolError } from '../errors.ts';
 import { INBOX_QUEUE_SYSTEM, READ_TOOLS, type CatalogEntry, type Policy, type ReadContext } from '../read/index.ts';
 import { approxTokens, callTool, RESULT_TOKEN_CAP, validateInput, type Tool, type ToolResult } from '../registry.ts';
+import { ruleViolations } from './exposure-rule.ts';
 
 const root = new URL('../../../../', import.meta.url);
 const base = await parseNdjson(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
@@ -212,6 +214,9 @@ function payloadIds(content: unknown): { exposed: string[]; referenced: string[]
       const { resourceType, id } = v as { resourceType?: unknown; id?: unknown };
       // A resource whose note text was left out (an attachment naming read_with) is referenced.
       if (typeof resourceType === 'string' && typeof id === 'string') (JSON.stringify(v).includes('"read_with":') ? refs : exposed).add(`${resourceType}/${id}`);
+      // A search_notes row shows its note's text as a snippet, which exposes the note.
+      const { note, snippet } = v as { note?: unknown; snippet?: unknown };
+      if (typeof snippet === 'string' && typeof note === 'string' && REF.test(note)) exposed.add(note);
     }
     return v;
   });
@@ -274,6 +279,7 @@ async function fuzz(tools: readonly Tool<ReadContext>[], perTool: number, seed: 
       s.referenced += referenced.length;
       if (JSON.stringify(exposed) !== JSON.stringify(result.exposed_ids)) defect(`#${n} ${name}: exposed_ids ${result.exposed_ids} != payload ${exposed}`);
       if (JSON.stringify(referenced) !== JSON.stringify(result.referenced_ids)) defect(`#${n} ${name}: referenced_ids differ from payload`);
+      for (const v of ruleViolations(result, (key) => store.get(key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)))) defect(`#${n} ${name}: ${v}`);
       for (const id of exposed) {
         const [type, rid] = id.split('/') as [string, string];
         if (type === 'Policy' ? !POLICIES.some((p) => p.id === rid) : !store.get(type, rid)) defect(`#${n} ${name}: exposed ${id} is not in the world`);

@@ -1,13 +1,14 @@
 // Contract tests for the read tools (design section 3): strict schemas, error codes, stable
 // order, the 8k-token page cap with next_offset, and exposure tags that match the payload.
 import { readFileSync } from 'node:fs';
-import type { DiagnosticReport, DocumentReference, Observation, Procedure, Resource, Task } from '@medplum/fhirtypes';
+import type { DiagnosticReport, DocumentReference, Observation, Patient, Procedure, Resource, Task } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
 import { clock, NOW } from '../../clock.ts';
 import { parseNdjson } from '../../fixture-source.ts';
 import { Store } from '../../store.ts';
 import { INBOX_QUEUE_SYSTEM, READ_TOOLS, type CatalogEntry, type Policy, type ReadContext } from '../read/index.ts';
 import { approxTokens, callTool, definitions, RESULT_TOKEN_CAP, type ToolResult } from '../registry.ts';
+import { ruleViolations } from './exposure-rule.ts';
 
 const root = new URL('../../../../', import.meta.url);
 const base = await parseNdjson(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
@@ -75,6 +76,9 @@ function payloadIds(content: unknown): { exposed: string[]; referenced: string[]
       const { resourceType, id } = v as { resourceType?: unknown; id?: unknown };
       // A resource whose note text was left out (an attachment naming read_with) is referenced.
       if (typeof resourceType === 'string' && typeof id === 'string') (JSON.stringify(v).includes('"read_with":') ? refs : exposed).add(`${resourceType}/${id}`);
+      // A search_notes row shows its note's text as a snippet, which exposes the note.
+      const { note, snippet } = v as { note?: unknown; snippet?: unknown };
+      if (typeof snippet === 'string' && typeof note === 'string' && REF.test(note)) exposed.add(note);
     }
     return v;
   });
@@ -146,17 +150,18 @@ describe('search_patients', () => {
   it('finds by MRN, by name words in any case and by birth date', () => {
     const byMrn = ok(call('search_patients', { mrn: '100001' }));
     expect(byMrn.entries).toEqual([
-      { patient: 'Patient/pt-0001', name: 'Peter Prosacco', birthDate: '1921-06-10', gender: 'male', mrn: '100001', pcp: null },
+      { resourceType: 'Patient', id: 'pt-0001', patient: 'Patient/pt-0001', name: 'Peter Prosacco', birthDate: '1921-06-10', gender: 'male', mrn: '100001', pcp: null },
     ]);
     const byName = ok(call('search_patients', { name: 'prosacco PETER' }));
     expect((byName.entries as Array<{ patient: string }>).map((e) => e.patient)).toEqual(['Patient/pt-0001']);
     const byBirth = ok(call('search_patients', { birthdate: '1921-06-10' }));
     expect((byBirth.entries as Array<{ patient: string }>).map((e) => e.patient)).toContain('Patient/pt-0001');
   });
-  it('tags patients as referenced, not exposed', () => {
+  it('exposes the patients its rows show demographics for (name, birth date, gender, MRN)', () => {
     const r = call('search_patients', { mrn: '100001' });
-    expect(r.exposed_ids).toEqual([]);
-    expect(r.referenced_ids).toEqual(['Patient/pt-0001']);
+    expect(r.exposed_ids).toEqual(['Patient/pt-0001']);
+    expect(r.referenced_ids).toEqual([]);
+    expectTagsMatch(r);
   });
   it('lists every patient in id order across pages', () => {
     const ids: string[] = [];
@@ -301,6 +306,7 @@ describe('note text and exposure', () => {
     }
     expect(r.exposed_ids).not.toEqual(expect.arrayContaining([refs[0]]));
     expect(r.referenced_ids).toEqual(expect.arrayContaining(refs));
+    expect(r.shown).toBeUndefined();
     expectTagsMatch(r);
     // The stored resources keep their data: the tool returned copies.
     expect((attachments as (r: Resource) => Array<{ data?: string }>)(ctx.world.get(type, stored[0]!.id!)!)[0]!.data).toBeDefined();
@@ -314,6 +320,7 @@ describe('note text and exposure', () => {
     expect(body.resource.content[0]!.attachment).not.toHaveProperty('read_with');
     expect(body.resource.content[0]!.attachment.size).toBe(new TextEncoder().encode(body.text).length);
     expect(r.exposed_ids).toEqual(['DocumentReference/doc-00001']);
+    expect(r.shown).toEqual({ 'DocumentReference/doc-00001': body.text });
     expectTagsMatch(r);
   });
 });
@@ -355,8 +362,15 @@ describe('search_notes', () => {
     expect(rows.map((x) => x.note)).toEqual(['DocumentReference/doc-z-a', 'DocumentReference/doc-z-b', 'DocumentReference/doc-z-c']);
     expect(rows[0]).toMatchObject({ type: 'discharge-summary', author: 'Practitioner/pr-reyes', patient: 'Patient/pt-0060', date: '2019-05-02T10:00:00-04:00' });
     expect(rows[0]!.snippet).toContain('iohexol');
-    expect(r.exposed_ids).toEqual([]);
     expectTagsMatch(r);
+  });
+  it('exposes each note for the snippet it shows and records that exact text', () => {
+    const r = call('search_notes', { query: 'iohexol', patient: 'pt-0060' }, small);
+    const rows = ok(r).entries as Array<{ note: string; snippet: string }>;
+    expect(r.exposed_ids).toEqual(['DocumentReference/doc-z-a', 'DocumentReference/doc-z-b', 'DocumentReference/doc-z-c']);
+    expect(r.referenced_ids).toEqual(['Patient/pt-0060', 'Practitioner/pr-reyes']);
+    expect(r.shown).toEqual(Object.fromEntries(rows.map((x) => [x.note, x.snippet])));
+    expect(r.shown!['DocumentReference/doc-z-a']).toBe('iohexol reaction hives. iohexol again.');
   });
   it('filters by type and date', () => {
     const rows = ok(call('search_notes', { query: 'contrast', type: 'discharge-summary', date_ge: '2021-01-01' }, small)).entries as Array<{ note: string }>;
@@ -386,6 +400,7 @@ describe('read_policy', () => {
     const r = call('read_policy', { policy_id: 'RBC-TEST-01' });
     expect(ok(r)).toEqual({ resourceType: 'Policy', id: 'RBC-TEST-01', title: 'First test policy', version: '1', effective: '2026-01-01', source: 'environment-local', text: 'First policy text.' });
     expect(r.exposed_ids).toEqual(['Policy/RBC-TEST-01']);
+    expect(r.shown).toEqual({ 'Policy/RBC-TEST-01': 'First policy text.' });
   });
   it('answers an unknown id with NOT_FOUND', () => {
     expect(err(call('read_policy', { policy_id: 'RBC-NOPE-01' }))).toMatchObject({ code: 'NOT_FOUND', field: 'policy_id' });
@@ -449,6 +464,48 @@ describe('list_inbox', () => {
     const open = ok(call('list_inbox', { queue: 'results', status: 'requested' })).entries as Array<{ task: string }>;
     expect(open.map((x) => x.task)).toEqual(['Task/task-x-1', 'Task/task-x-3']);
     expect((ok(call('list_inbox', { queue: 'messages' })).entries as unknown[]).length).toBe(1);
+  });
+});
+
+// One call per tool, each held to the exposure rule (exposure-rule.ts): exposed exactly when
+// the result shows the fields a clinician acts on, referenced when it shows an id, a title or a
+// pointer. Before P5's fix search_patients showed a birth date while tagging the Patient
+// referenced, which failed T3's birth-date-before-first-write gate on a correct trajectory.
+describe('exposure rule', () => {
+  const stored = (key: string) => ctx.world.get(key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1));
+  it.each([
+    ['get_context', {}, [], []],
+    ['search_patients', { name: 'prosacco' }, ['Patient/pt-0001'], ['Patient']],
+    ['fhir_search', { resource_type: 'Observation', patient: 'pt-0001', count: 5 }, null, ['Observation']],
+    ['fhir_search', { resource_type: 'MedicationRequest', patient: 'pt-0001', count: 5 }, null, ['MedicationRequest']],
+    ['fhir_search', { resource_type: 'DocumentReference', patient: 'pt-0001', count: 5 }, [], []],
+    ['fhir_read', { resource_type: 'Patient', id: 'pt-0001' }, ['Patient/pt-0001'], ['Patient']],
+    ['fhir_read', { resource_type: 'DocumentReference', id: 'doc-00001' }, ['DocumentReference/doc-00001'], ['DocumentReference']],
+    ['search_notes', { query: 'patient', patient: 'pt-0001' }, null, ['DiagnosticReport', 'DocumentReference']],
+    ['read_policy', {}, [], []],
+    ['lookup_catalog', { query: 'metformin', kind: 'medication' }, [], []],
+    ['list_inbox', { queue: 'results' }, [], []],
+    ['calculate', { expression: '1 + 2' }, [], []],
+  ] as const)('%s %j', (name, input, exposed, exposedTypes) => {
+    const r = call(name, input);
+    expect(r.is_error).toBe(false);
+    expect(ruleViolations(r, stored)).toEqual([]);
+    if (exposed !== null) expect(r.exposed_ids).toEqual(exposed);
+    expect([...new Set(r.exposed_ids.map((k) => k.slice(0, k.indexOf('/'))))].sort()).toEqual([...exposedTypes]);
+    expectTagsMatch(r);
+  });
+  it('catches a row that shows a birth date but only references the patient', () => {
+    const p = ctx.world.get<Patient>('Patient', 'pt-0001')!;
+    const row: ToolResult = {
+      is_error: false,
+      content: { entries: [{ patient: 'Patient/pt-0001', birthDate: p.birthDate, gender: p.gender }] },
+      exposed_ids: [],
+      referenced_ids: ['Patient/pt-0001'],
+    };
+    expect(ruleViolations(row, stored)).toEqual(['Patient/pt-0001 shows its decisive fields but is not exposed']);
+    expect(ruleViolations({ ...row, content: { entries: [{ patient: 'Patient/pt-0001' }] }, exposed_ids: ['Patient/pt-0001'], referenced_ids: [] }, stored)).toEqual([
+      'Patient/pt-0001 is exposed without its decisive fields',
+    ]);
   });
 });
 
