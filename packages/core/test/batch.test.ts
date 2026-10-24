@@ -9,13 +9,18 @@ import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { checks as toyChecks } from '../../../tasks/_toy/tests/grader.ts';
 import { MessagesClient, MODEL, type Transport } from '../anthropic.ts';
 import { memorySink, runBatch, type BatchDeps, type BatchSpec, type ResultSink } from '../batch.ts';
-import { admitStore, createLedger, SpendRefused, totals, type LedgerRow, type LedgerStore } from '../ledger.ts';
+import { JUDGE_ALLOWANCE_USD, PER_TRIAL_CAP_USD, PRICE_USD_PER_MTOK, RERUN_FACTOR } from '../cost.ts';
+import { ACTUAL_CAP_USD, admitStore, createLedger, PROJECTED_CAP_USD, SpendRefused, totals, type LedgerRow, type LedgerStore } from '../ledger.ts';
 
 const root = new URL('../../../', import.meta.url);
 const WORLD = new Uint8Array(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
 const WORLD_HASH = (JSON.parse(readFileSync(new URL('fixtures/manifest.json', root), 'utf8')) as { world: { state_hash: string } }).world.state_hash;
 const DEFINITIONS = JSON.parse(readFileSync(new URL('fixtures/definitions-pruned.json', root), 'utf8'));
 const CALLS_PER_TOY_TRIAL = 5; // three loop turns and two judge items
+// What one trial with no cost data adds to a projection, and the fewest trials whose projection
+// crosses the projected cap; the caps come from ledger.ts, never as literals.
+const PER_TRIAL = PER_TRIAL_CAP_USD * RERUN_FACTOR;
+const CROSSING = Math.floor((PROJECTED_CAP_USD - JUDGE_ALLOWANCE_USD) / PER_TRIAL) + 1;
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
@@ -180,38 +185,40 @@ describe('runBatch', { timeout: 480_000 }, () => {
     expect(totals(store.rows).open).toEqual([]);
   });
 
-  it('a projection that would cross $450 refuses the batch with 0 calls', async () => {
+  it('a projection that would cross PROJECTED_CAP_USD refuses the batch with 0 calls', async () => {
     const store = new MemoryStore();
     const sink = memorySink();
     const calls = newCalls();
-    // 66 trials x $6 x 1.15 + $1 judge allowance = $456.40.
-    await expect(runBatch(spec({ trials: 66 }), deps(store, sink, calls))).rejects.toThrow(SpendRefused);
+    expect(CROSSING * PER_TRIAL + JUDGE_ALLOWANCE_USD).toBeGreaterThan(PROJECTED_CAP_USD);
+    await expect(runBatch(spec({ trials: CROSSING }), deps(store, sink, calls))).rejects.toThrow(SpendRefused);
     expect(calls.n).toBe(0);
     expect(store.rows).toEqual([]);
     expect(await sink.settled()).toEqual([]);
   });
 
-  it('mocked actual spend reaching $500 aborts the batch', async () => {
+  it('mocked actual spend reaching ACTUAL_CAP_USD aborts the batch', async () => {
     const store = new MemoryStore();
-    // $430 settled already; 2 trials project $14.80, under $450.
+    // Settled already: as much as leaves room under the projected cap for 2 trials.
+    const seed = PROJECTED_CAP_USD - 2 * PER_TRIAL - JUDGE_ALLOWANCE_USD - 1;
     store.rows.push(
-      { ts: 't', call_id: 'seed', kind: 'reserve', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: 430 },
-      { ts: 't', call_id: 'seed', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: 430 },
+      { ts: 't', call_id: 'seed', kind: 'reserve', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: seed },
+      { ts: 't', call_id: 'seed', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: seed },
     );
     const sink = memorySink();
     const calls = newCalls();
-    // Every answer bills 3.75M output tokens: $75.
+    // Every answer bills enough output tokens to take settled spend to the actual cap.
+    const outputTokens = Math.ceil(((ACTUAL_CAP_USD - seed) / PRICE_USD_PER_MTOK.output) * 1e6);
     const expensive = (): Transport => async (request) => {
       await request.text();
       const events = turnEvents({ tools: [{ id: 'toolu_x', name: 'get_context', input: {} }] }, 1).map((e) =>
-        (e as { type: string }).type === 'message_delta' ? { ...e, usage: { output_tokens: 3_750_000 } } : e,
+        (e as { type: string }).type === 'message_delta' ? { ...e, usage: { output_tokens: outputTokens } } : e,
       );
       return new Response(sse(events), { status: 200, headers: { 'content-type': 'text/event-stream' } });
     };
     const result = await runBatch(spec({ trials: 2, concurrency: 1 }), deps(store, sink, calls, { transport: expensive }));
     expect(result.stopped?.code).toBe('actual_cap');
     expect(calls.n).toBe(1);
-    expect(totals(store.rows).settled).toBeGreaterThanOrEqual(500);
+    expect(totals(store.rows).settled).toBeGreaterThanOrEqual(ACTUAL_CAP_USD);
     expect(store.rows.filter((r) => r.kind === 'close' && r.batch_id === result.batch_id)).toHaveLength(1);
     expect(unsettled(store.rows)).toEqual([]);
   });

@@ -9,7 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { scenarioTransport } from '../../apps/web/src/harness/scenarios.ts';
 import { MessagesClient, MODEL, type Transport } from '../../packages/core/anthropic.ts';
 import { memorySink, runBatch } from '../../packages/core/batch.ts';
-import { admitStore, createLedger, type LedgerRow, type LedgerStore } from '../../packages/core/ledger.ts';
+import { JUDGE_ALLOWANCE_USD, PER_TRIAL_CAP_USD, RERUN_FACTOR } from '../../packages/core/cost.ts';
+import { admitStore, createLedger, PROJECTED_CAP_USD, type LedgerRow, type LedgerStore } from '../../packages/core/ledger.ts';
 import { taskVersion } from '../../packages/core/tasks.ts';
 import { checks as toyChecks } from '../../tasks/_toy/tests/grader.ts';
 import { commitFile, fakeKey, git, repoRoot, tempDir, tempRepo, write } from '../../scripts/test/helpers.ts';
@@ -181,10 +182,12 @@ describe('cli run', { timeout: 480_000 }, () => {
     expect(nope.out.join('\n')).toMatch(/no task 'nope'/);
   });
 
-  it('a projection over $450 refuses the batch with 0 calls', async () => {
+  it('a projection over PROJECTED_CAP_USD refuses the batch with 0 calls', async () => {
+    // The fewest trials with no cost data whose projection crosses the cap.
+    const crossing = Math.floor((PROJECTED_CAP_USD - JUDGE_ALLOWANCE_USD) / (PER_TRIAL_CAP_USD * RERUN_FACTOR)) + 1;
     const h = harness();
     const dir = join(tempDir('run-cap'), 'run-cap');
-    expect(await main(runArgs(dir, '--trials', '66', '--mock', 'toy'), h.deps)).toBe(1);
+    expect(await main(runArgs(dir, '--trials', String(crossing), '--mock', 'toy'), h.deps)).toBe(1);
     expect(h.out.join('\n')).toMatch(/projected cap/);
     expect(h.calls.mock).toBe(0);
     expect(readRows(h.ledger).filter((r) => r.kind !== 'open')).toEqual([]);

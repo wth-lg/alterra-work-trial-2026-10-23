@@ -13,12 +13,12 @@
 //      open row); the ledger refuses a batch whose process is alive, and so does runBatch. The
 //      dead batch's unsettled reservations keep counting, each once, at its worst case;
 //   2. gets the grant from ledger.batchStart(projection), which refuses, before any call, when
-//      the projection would cross $450; every trial's client is built from that grant;
+//      the projection would cross PROJECTED_CAP_USD; every trial's client is built from that grant;
 //   3. runs the remaining keys `concurrency` at a time. A trial ending INFRA_API, INFRA_HARNESS or
 //      ENV_ERROR is re-queued at the end of the batch, up to MAX_RERUNS times, and its record kept
 //      as a re-queued attempt (summary counts ENV_ERROR raw over them). A failure classifyFailure
 //      says stops the batch (a 400, 401, billing, a substituted model, a spend refusal), settled
-//      spend reaching $500 (the ledger aborts the grant), or the caller's signal, stops it: the
+//      spend reaching ACTUAL_CAP_USD (the ledger aborts the grant), or the caller's signal, stops it: the
 //      trials in flight are cancelled, each call in flight settles at its worst case, and nothing
 //      new starts;
 //   4. closes the grant (the batch's close row) and records the batch in the run manifest.

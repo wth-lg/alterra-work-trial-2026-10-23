@@ -13,7 +13,7 @@
 //   --dry-run      prints the projection (trials x per-trial cost x 1.15 + judge allowance) and
 //                  LIVE_PROJECTION_USD=<x>, and opens nothing
 // The client comes only from batchStart(projection), which refuses the batch, with no call, when
-// the projection would cross $450. The manifest records env_git_sha and env_dirty: whether
+// the projection would cross PROJECTED_CAP_USD (packages/core/ledger.ts). The manifest records env_git_sha and env_dirty: whether
 // `git status --porcelain -- tasks fixtures packages/env packages/core packages/grader` is
 // non-empty. A live batch on a dirty tree (or outside git) is refused with no call: a committed
 // run must name the code it ran. Ctrl-C cancels the batch through its AbortSignal. Exit 0 when
