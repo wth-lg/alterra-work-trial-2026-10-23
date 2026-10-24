@@ -4,11 +4,15 @@
 // independently, so policy.ts may not import expected.ts or an overlay module (the constants the
 // task's fixture overlay plants), whether by import, re-export or dynamic import. Type-only
 // imports carry no values and are allowed.
+// This rule sees only the specifiers policy.ts itself writes: the direct case, caught in the
+// editor. The guard is cli/matrix.ts policyImports, run by `pnpm cli matrix` and by
+// eslint-rules/test/no-policy-expected-import.test.ts on every task: it follows policy.ts's whole
+// import graph with the TypeScript compiler's module resolution.
 export const files = ['tasks/**/policy.ts'];
 
 const BANNED = /^(expected|overlay)(\.[cm]?[jt]sx?)?$/;
 
-const basename = (source) => source.split('?')[0].split('/').pop();
+const basename = (source) => source.split(/[?#]/)[0].split('/').pop();
 
 function staticSource(node) {
   if (!node) return null;
@@ -24,6 +28,7 @@ export default {
     schema: [],
     messages: {
       banned: "policy.ts must not import '{{source}}': derive it from the initial world, so the double derivation can disagree with expected.ts",
+      dynamic: 'policy.ts must not import a computed specifier: derive it from the initial world, so the double derivation can disagree with expected.ts',
     },
   },
   create(context) {
@@ -41,7 +46,9 @@ export default {
         if (node.exportKind !== 'type') check(node, staticSource(node.source));
       },
       ImportExpression(node) {
-        check(node, staticSource(node.source));
+        const source = staticSource(node.source);
+        if (source === null) context.report({ node, messageId: 'dynamic' });
+        else check(node, source);
       },
     };
   },

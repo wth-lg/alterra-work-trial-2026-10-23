@@ -8,14 +8,25 @@
 // cache miss included: it names the item and never makes a call), 2 on a usage error.
 // It never builds a Messages client and opens no ledger: `pnpm cli oracle --live-judge` is the
 // only command that asks the judge live and refreshes the cache.
-import { existsSync, readFileSync } from 'node:fs';
+// Two checks need Node and live here, given to the matrix as options:
+//   isolation       each case is graded again in a child process (`node cli/matrix.ts
+//                   --fresh-grade`, the run on stdin), which imports tests/grader.ts afresh;
+//                   the matrix compares every in-process grade with it
+//   policy imports  policyImports follows policy.ts's whole import graph with the TypeScript
+//                   compiler's module resolution and fails on any expected.ts or overlay module
+//                   it reaches, and on any dynamic import whose specifier is not a constant
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { availableParallelism } from 'node:os';
+import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import ts from 'typescript';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import type { Check, Json } from '../packages/grader/check.ts';
+import type { Grade } from '../packages/grader/grade.ts';
 import type { JudgeCacheEntry } from '../packages/grader/judge.ts';
-import { declaresOf, runMatrix, type MatrixEnv } from '../packages/grader/matrix/matrix.ts';
+import { declaresOf, gradeRun, runMatrix, type CaseRun, type FreshGrade, type MatrixEnv, type MatrixOptions } from '../packages/grader/matrix/matrix.ts';
 import type { Agent, Agents, MatrixTask, Mutant, Script, WorldView } from '../packages/grader/matrix/types.ts';
 import { nodeNow } from './adapters/clock-node.ts';
 import { nodeTaskSource, TASKS_DIR } from './adapters/tasks-node.ts';
@@ -34,6 +45,9 @@ export interface Deps {
   out: (line: string) => void;
   // A task's matrix inputs; default loadMatrixTask.
   load?: (task: string) => Promise<MatrixTask>;
+  // Narrows the run (a unit test's subset of cases, one trial, one grade); default the whole
+  // matrix with the isolation check and the policy import graph.
+  options?: MatrixOptions;
 }
 
 // The world, manifest hash and definitions every matrix trial starts from.
@@ -62,12 +76,14 @@ export async function loadMatrixTask(id: string, root: string = TASKS_DIR): Prom
   const task = await nodeTaskSource({ root, testMode: true }).get(id);
   const dir = join(root, id);
   const cacheFile = join(dir, 'tests/judge-cache.json');
+  const checksModule = join(dir, 'tests/grader.ts');
   return {
     id,
     instruction: task.instruction,
     policies: task.policies.map((p) => ({ id: p.id, text: p.text })),
     declares: declaresOf(toml.parse(readFileSync(join(dir, 'task.toml'), 'utf8'))),
     checks: await exported<Check[]>(dir, 'tests/grader.ts', 'checks', []),
+    ...(existsSync(checksModule) ? { checksModule } : {}),
     oracle: await exported<Script | null>(dir, 'solution/solve.ts', 'oracle', null),
     alternatives: await exported<Agent[]>(dir, 'tests/alternatives.ts', 'alternatives', []),
     mutants: await exported<Mutant[]>(dir, 'tests/mutants.ts', 'mutants', []),
@@ -88,9 +104,143 @@ export async function main(args: string[], deps: Deps): Promise<number> {
   } catch (e) {
     return usage(deps, `--task: ${(e as Error).message}`);
   }
-  const result = await runMatrix(matrixEnv(), task);
+  const options: MatrixOptions = {
+    policyImports: () => policyImports(join(TASKS_DIR, id)),
+    ...(task.checksModule ? { fresh: freshGrader(task, task.checksModule) } : {}),
+    ...deps.options,
+  };
+  let result;
+  try {
+    result = await runMatrix(matrixEnv(), task, options);
+  } catch (e) {
+    deps.out(`matrix ${id}: FAIL\n  - ${(e as Error).message}`);
+    return 1;
+  }
   for (const line of result.lines) deps.out(line);
   return result.pass ? 0 : 1;
+}
+
+// What the fresh process reads on stdin.
+interface FreshInput {
+  task: string;
+  checksModule: string;
+  cache: JudgeCacheEntry[];
+  run: CaseRun;
+}
+
+const SELF = fileURLToPath(import.meta.url);
+
+// Grades each case in a child process of its own, a few at a time. The child gets no API key.
+function freshGrader(task: MatrixTask, checksModule: string): FreshGrade {
+  const limit = Math.max(2, Math.min(8, availableParallelism() - 1));
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  const child = (input: FreshInput) =>
+    new Promise<Grade>((resolve, reject) => {
+      const p = spawn(process.execPath, [SELF, '--fresh-grade'], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ANTHROPIC_API_KEY: '' } });
+      const out: Buffer[] = [];
+      const err: Buffer[] = [];
+      p.stdout.on('data', (b: Buffer) => out.push(b));
+      p.stderr.on('data', (b: Buffer) => err.push(b));
+      p.on('error', reject);
+      p.on('close', (code) => {
+        if (code === 0) resolve(JSON.parse(Buffer.concat(out).toString('utf8')) as Grade);
+        else reject(new Error(`fresh-process grade exited ${code}: ${Buffer.concat(err).toString('utf8').trim().split('\n').slice(-3).join(' ')}`));
+      });
+      p.stdin.end(JSON.stringify(input));
+    });
+  return async (_c, run) => {
+    while (active >= limit) await new Promise<void>((r) => waiting.push(r));
+    active++;
+    try {
+      return await child({ task: task.id, checksModule, cache: [...task.cache], run });
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
+}
+
+// The child: imports the checks module in this new process and grades the run once.
+async function freshGrade(): Promise<number> {
+  const chunks: Buffer[] = [];
+  for await (const b of process.stdin) chunks.push(b as Buffer);
+  const input = JSON.parse(Buffer.concat(chunks).toString('utf8')) as FreshInput;
+  const { checks } = (await import(pathToFileURL(input.checksModule).href)) as { checks: Check[] };
+  const grade = await gradeRun(matrixEnv(), { id: input.task, cache: input.cache }, checks, input.run);
+  process.stdout.write(JSON.stringify(grade));
+  return 0;
+}
+
+const COMPILER = (() => {
+  const file = join(REPO, 'tsconfig.json');
+  const { config } = ts.readConfigFile(file, ts.sys.readFile);
+  return ts.parseJsonConfigFileContent(config, ts.sys, REPO, undefined, file).options;
+})();
+const BANNED_BASE = /^(expected|overlay)\.[cm]?[jt]sx?$/i;
+const isBanned = (file: string) => BANNED_BASE.test(basename(file)) || file.split(sep).slice(0, -1).some((d) => d.toLowerCase() === 'overlay');
+
+// The module specifiers a file imports for values, and each dynamic import whose specifier is
+// not a constant. Type-only imports and exports carry no values and are skipped.
+function importsOf(file: string): { specs: string[]; dynamic: number } {
+  const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  const specs: string[] = [];
+  let dynamic = 0;
+  const typeOnly = (names: ts.NamedImportBindings | ts.NamedExportBindings | undefined) => names !== undefined && 'elements' in names && names.elements.length > 0 && names.elements.every((e) => e.isTypeOnly);
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const c = node.importClause;
+      if (!(c && (c.isTypeOnly || (c.name === undefined && typeOnly(c.namedBindings))))) specs.push(node.moduleSpecifier.text);
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (!node.isTypeOnly && !typeOnly(node.exportClause)) specs.push(node.moduleSpecifier.text);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteral(node.moduleReference.expression)) {
+      if (!node.isTypeOnly) specs.push(node.moduleReference.expression.text);
+    } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+      const arg = node.arguments[0];
+      if (arg && (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))) specs.push(arg.text);
+      else dynamic++;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return { specs, dynamic };
+}
+
+// Follows the whole import graph of <taskDir>/policy.ts and reports each expected.ts or overlay
+// module it reaches (by name, path segment 'overlay' included, compared on the real path so a
+// case variant cannot hide one), each import that does not resolve, and each dynamic import with
+// a non-constant specifier. Packages under node_modules are not followed. No policy.ts: nothing.
+export function policyImports(taskDir: string): { modules: number; problems: string[] } {
+  const entry = join(taskDir, 'policy.ts');
+  if (!existsSync(entry)) return { modules: 0, problems: [] };
+  const show = (f: string) => (f.startsWith(taskDir + sep) ? relative(taskDir, f) : relative(REPO, f)).split(sep).join('/');
+  const root = realpathSync.native(entry);
+  const via = new Map<string, string[]>([[root, ['policy.ts']]]);
+  const queue = [root];
+  const problems: string[] = [];
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    const chain = via.get(file)!;
+    const { specs, dynamic } = importsOf(file);
+    if (dynamic > 0) problems.push(`${show(file)}: dynamic import with a non-constant specifier`);
+    for (const spec of specs) {
+      // A '?' query or '#' fragment does not change the file a URL names; a leading '#' is a
+      // package.json subpath import and stays.
+      const bare = spec.startsWith('#') ? spec : spec.split(/[?#]/)[0]!;
+      const resolved = ts.resolveModuleName(bare, file, COMPILER, ts.sys).resolvedModule;
+      if (resolved === undefined) {
+        problems.push(`${show(file)}: cannot resolve '${spec}'`);
+        continue;
+      }
+      if (resolved.isExternalLibraryImport) continue;
+      const target = realpathSync.native(resolved.resolvedFileName);
+      if (isBanned(target)) problems.push(`policy.ts reaches ${show(target)} via ${chain.join(' -> ')}`);
+      else if (!via.has(target)) {
+        via.set(target, [...chain, show(target)]);
+        queue.push(target);
+      }
+    }
+  }
+  return { modules: via.size, problems };
 }
 
 function usage(deps: Deps, problem: string): number {
@@ -109,5 +259,5 @@ export default (args: string[]) => {
 // too); imported by tests, it leaves the importer's globals alone.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   installEgressGuard(globalThis);
-  process.exitCode = await main(process.argv.slice(2), defaults);
+  process.exitCode = process.argv[2] === '--fresh-grade' ? await freshGrade() : await main(process.argv.slice(2), defaults);
 }

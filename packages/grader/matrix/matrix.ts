@@ -8,18 +8,29 @@
 //
 // The matrix passes when:
 //   oracle            PASS, score 1.0, no judge item unknown
-//   alternatives      at least MIN_ALTERNATIVES, each PASS
+//   alternatives      at least MIN_ALTERNATIVES, each PASS with no judge item unknown
 //   mutants           at least MIN_MUTANTS, each FAIL with exactly its declared failed gates;
 //                     every trap task.toml declares has one, and every mutant's trap is declared
 //   null, spray, output-gap, and status-only where the task declares it
 //                     FAIL (a model FAIL: outcome FAIL, fault model)
 //   every case        graded validly (a GRADER_ERROR names its check), no judge cache miss,
-//                     the same grade twice from the record (regrade idempotence), and the same
-//                     trajectory and final hash when run again (replay determinism)
+//                     the same grade each time from the record (regrade idempotence), and the
+//                     same trajectory and final hash when run again (replay determinism)
+//   isolation         every grade in one process equals the same case graded in a fresh module
+//                     graph (a child process, given as MatrixOptions.fresh). The process grades
+//                     the cases in a fixed interleaved order: the oracle, each other case, the
+//                     oracle again, then all of that reversed. A grade that differs means a check
+//                     carried state from an earlier grading: 'cross-trial grader state'. This is
+//                     the real guard; lint (no-grader-module-state) is the cheap first layer,
+//                     blind to aliases, closures, class statics and helper modules
+//   policy imports    policy.ts reaches no expected.ts and no overlay module (given as
+//                     MatrixOptions.policyImports, which follows the whole import graph)
 //   double derivation expected.ts equals policy.ts applied to the initial world
 //   traceability      every check's traces_to resolves to a line of instruction.md
 //                     (instruction.md:<n>) or a policy (<policy id>, optionally ' §<section>'
 //                     found in its text)
+// MatrixOptions narrow a run for a unit test: a subset of cases, one trial, one grade. The CI
+// step runs the whole matrix with the defaults.
 import { MODEL, type CallResult, type ContentBlock, type MessageParam } from '../../core/anthropic.ts';
 import type { TrialEvent } from '../../core/events.ts';
 import type { TrialClient } from '../../core/loop.ts';
@@ -29,9 +40,9 @@ import { stripTimestamps, toJsonl } from '../../core/trajectory.ts';
 import { loadStore, type FixtureSource } from '../../env/fixture-source.ts';
 import { canonicalJson } from '../../env/hash.ts';
 import type { indexDefinitions } from '../../env/validate.ts';
-import type { Check, RubricCheck } from '../check.ts';
+import type { Check, Json, RubricCheck, RubricCtx } from '../check.ts';
 import type { Grade } from '../grade.ts';
-import { JudgeCacheMiss } from '../judge.ts';
+import { JudgeCacheMiss, type Judge } from '../judge.ts';
 import type { Agent, Declares, MatrixTask, Mutant, Script, WorldView } from './types.ts';
 
 export const MIN_ALTERNATIVES = 3;
@@ -136,6 +147,53 @@ function missRecording(checks: readonly Check[], misses: Miss[]): Check[] {
   });
 }
 
+export interface MatrixOptions {
+  // The cases to run, by id ('oracle', 'null', 'spray', 'output-gap', 'status-only' or an
+  // alternative's or mutant's id); default every case. The counts, traps, traceability and
+  // double derivation are checked whatever runs.
+  cases?: readonly string[];
+  // Runs of each case: 2 (default) checks replay determinism, 1 does not.
+  trials?: 1 | 2;
+  // Grades of each case from its record when there is no isolation check: default 2 (regrade
+  // idempotence); 1 skips it.
+  regrades?: number;
+  // The isolation check, on by default when `fresh` is given.
+  isolation?: boolean;
+  // Grades one case's recorded run in a fresh module graph (cli/matrix.ts: a child process).
+  fresh?: FreshGrade;
+  // policy.ts's import graph (cli/matrix.ts policyImports): modules reached, and each problem.
+  policyImports?: () => { modules: number; problems: string[] };
+}
+
+export interface CaseRun {
+  record: TrialRecord;
+  events: readonly TrialEvent[];
+}
+
+export type FreshGrade = (c: Case, run: CaseRun) => Promise<Grade>;
+
+// One grading of a recorded run from the cache, each judge cache miss recorded in `misses`
+// instead of thrown. The matrix and its fresh-process grade both grade through this.
+export function gradeRun(env: Pick<MatrixEnv, 'tasks' | 'world' | 'definitions'>, task: Pick<MatrixTask, 'id' | 'cache'>, checks: readonly Check[], run: CaseRun, misses: Miss[] = []): Promise<Grade> {
+  return gradeTrajectory(task.id, {
+    tasks: env.tasks, world: env.world, events: run.events, checks: missRecording(checks, misses),
+    record: { ...run.record, judge: { cache: [...task.cache] } },
+    ...(env.definitions ? { definitions: env.definitions } : {}),
+  });
+}
+
+// Grades a recorded run with `judge` answering every judge and hybrid item instead of the
+// record's cache. oracle --live-judge passes one Judge across all of a task's cases, so each
+// distinct question is asked once, and the Judge's entries are the task's new cache.
+export function gradeRunWith(env: Pick<MatrixEnv, 'tasks' | 'world' | 'definitions'>, task: Pick<MatrixTask, 'id' | 'checks'>, run: CaseRun, judge: Judge): Promise<Grade> {
+  const checks = task.checks.map((c): Check => (c.kind !== 'rubric' ? c : { ...c, fn: (ctx: RubricCtx) => c.fn({ ...ctx, judge: (q) => judge.judge(q), extract: (q) => judge.extract(q) }) }));
+  return gradeTrajectory(task.id, {
+    tasks: env.tasks, world: env.world, events: run.events, checks,
+    record: { ...run.record, judge: { cache: [] } },
+    ...(env.definitions ? { definitions: env.definitions } : {}),
+  });
+}
+
 export interface CaseResult {
   case: Case;
   grade: Grade;
@@ -143,44 +201,107 @@ export interface CaseResult {
   unknown: number;
   misses: Miss[];
   failed_gates: string[];
-  regrade_same: boolean;
-  replay_same: boolean;
+  // null when not checked (one grade, one trial, no fresh process).
+  regrade_same: boolean | null;
+  replay_same: boolean | null;
+  // In-process grades of the case that equal its fresh-process grade, of how many.
+  isolation: { equal: number; of: number } | null;
   // Why the case fails the matrix; empty when it holds.
   problems: string[];
 }
 
 const expectFail = (c: Case) => c.kind !== 'oracle' && c.kind !== 'alternative';
+const nameOf = (c: Case) => (c.id === c.kind ? c.kind : `${c.kind} ${c.id}`);
+// A grade as JSON carries it (the fresh process sends its grade as JSON), so the two compare.
+const asJson = (g: Grade) => canonicalJson(JSON.parse(JSON.stringify(g)) as Json);
 
-// Runs one case offline: the trial, its grade from the canned cache (twice), and a second run.
-export async function runCase(env: MatrixEnv, task: MatrixTask, c: Case): Promise<CaseResult> {
-  const first = await trial(env, task, c);
-  const misses: Miss[] = [];
-  const regrade = async () =>
-    gradeTrajectory(task.id, {
-      tasks: env.tasks, world: env.world, events: first.events, checks: missRecording(task.checks, misses),
-      record: { ...first.record, judge: { cache: [...task.cache] } },
-      ...(env.definitions ? { definitions: env.definitions } : {}),
-    });
-  const grade = await regrade();
-  const firstMisses = misses.splice(0);
-  const regrade_same = canonicalJson(await regrade()) === canonicalJson(grade);
-  const again = await trial(env, task, c);
-  const replay_same = stripTimestamps(toJsonl(again.events)) === stripTimestamps(toJsonl(first.events)) && again.record.state_hash.final === first.record.state_hash.final;
+// The checks whose results differ between two grades, or 'the grade' when the checks agree.
+function differing(a: Grade, b: Grade): string {
+  const ids = a.checks.filter((r) => canonicalJson(r as unknown as Json) !== canonicalJson((b.checks.find((x) => x.id === r.id) ?? null) as unknown as Json)).map((r) => r.id);
+  return ids.length ? ids.join(', ') : 'the grade';
+}
 
+// The case's verdict problems, from its first grade.
+function verdict(c: Case, run: CaseRun, grade: Grade, misses: Miss[]): Pick<CaseResult, 'unknown' | 'failed_gates' | 'problems'> {
   const unknown = grade.checks.filter((r) => r.method !== 'code' && r.met === 'unknown' && !('judge_cache_miss' in r.evidence)).length;
   const failed_gates = grade.checks.filter((r) => r.kind === 'gate' && r.met === false).map((r) => r.id);
   const problems: string[] = [];
   if (grade.error !== null) problems.push(`${grade.outcome} in ${grade.error.check ?? 'trial'}: ${grade.error.message}`);
-  else if (!grade.valid) problems.push(`outcome ${grade.outcome} (${first.record.status}${first.record.detail ? ` ${first.record.detail}` : ''}), not a graded trial`);
+  else if (!grade.valid) problems.push(`outcome ${grade.outcome} (${run.record.status}${run.record.detail ? ` ${run.record.detail}` : ''}), not a graded trial`);
   else if (expectFail(c) && (grade.outcome !== 'FAIL' || grade.fault !== 'model')) problems.push(`outcome ${grade.outcome}, want a model FAIL`);
   else if (!expectFail(c) && grade.outcome !== 'PASS') problems.push(`outcome ${grade.outcome}, want PASS (failed: ${failed_gates.join(', ') || 'none'})`);
   if (c.kind === 'oracle' && grade.valid && grade.score !== 1) problems.push(`oracle score ${grade.score ?? 'n/a'}, want 1.0`);
   if (c.kind === 'oracle' && unknown > 0) problems.push(`oracle judge.unknown ${unknown}, want 0`);
+  if (c.kind === 'alternative' && unknown > 0) problems.push(`judge.unknown ${unknown}, want 0`);
   if (c.mutant && !sameSet(failed_gates, c.mutant.fails)) problems.push(`failed [${failed_gates.join(', ')}], declared [${c.mutant.fails.join(', ')}]`);
-  for (const m of firstMisses) problems.push(`judge cache miss: ${m.check} (cache key ${m.key})`);
-  if (!regrade_same) problems.push('a second grade from the same record differs');
-  if (!replay_same) problems.push('a second run gives a different trajectory or final hash');
-  return { case: c, grade, unknown, misses: firstMisses, failed_gates, regrade_same, replay_same, problems };
+  for (const m of misses) problems.push(`judge cache miss: ${m.check} (cache key ${m.key})`);
+  return { unknown, failed_gates, problems };
+}
+
+// The cases `ids` names, in report order; every case when absent.
+export function selectCases(task: MatrixTask, ids?: readonly string[]): Case[] {
+  const all = cases(task);
+  if (ids === undefined) return all;
+  for (const id of ids) if (!all.some((c) => c.id === id)) throw new Error(`no case ${id} in task ${task.id} (cases: ${all.map((c) => c.id).join(', ')})`);
+  return all.filter((c) => ids.includes(c.id));
+}
+
+// Runs the cases offline: each trial (twice for replay), then its grades from the canned cache,
+// in the isolation check's interleaved order when there is one, else `regrades` in a row.
+export async function runCases(env: MatrixEnv, task: MatrixTask, selected: readonly Case[], opts: MatrixOptions = {}): Promise<CaseResult[]> {
+  const trials = opts.trials ?? 2;
+  const runs = new Map<Case, CaseRun>();
+  const replays = new Map<Case, boolean | null>();
+  for (const c of selected) {
+    const first = await trial(env, task, c);
+    runs.set(c, first);
+    if (trials < 2) {
+      replays.set(c, null);
+      continue;
+    }
+    const again = await trial(env, task, c);
+    replays.set(c, stripTimestamps(toJsonl(again.events)) === stripTimestamps(toJsonl(first.events)) && again.record.state_hash.final === first.record.state_hash.final);
+  }
+
+  const fresh = opts.isolation !== false ? opts.fresh : undefined;
+  // The order the process grades in, each with the case graded just before it.
+  let order: Case[];
+  if (fresh) {
+    const oracle = selected.filter((c) => c.kind === 'oracle');
+    const forward = [...oracle, ...selected.filter((c) => c.kind !== 'oracle'), ...(selected.length > 1 ? oracle : [])];
+    order = [...forward, ...[...forward].reverse()];
+  } else {
+    order = selected.flatMap((c) => Array.from({ length: Math.max(1, opts.regrades ?? 2) }, () => c));
+  }
+  const grades = new Map<Case, Array<{ grade: Grade; misses: Miss[]; after: Case | null }>>();
+  for (const [i, c] of order.entries()) {
+    const misses: Miss[] = [];
+    const grade = await gradeRun(env, task, task.checks, runs.get(c)!, misses);
+    grades.set(c, [...(grades.get(c) ?? []), { grade, misses, after: order[i - 1] ?? null }]);
+  }
+  const freshGrades = new Map<Case, Grade>();
+  if (fresh) await Promise.all(selected.map(async (c) => freshGrades.set(c, await fresh(c, runs.get(c)!))));
+
+  return selected.map((c) => {
+    const run = runs.get(c)!;
+    const graded = grades.get(c)!;
+    const { grade, misses } = graded[0]!;
+    const v = verdict(c, run, grade, misses);
+    const regrade_same = graded.length > 1 ? graded.every((g) => asJson(g.grade) === asJson(grade)) : null;
+    const replay_same = replays.get(c)!;
+    let isolation: CaseResult['isolation'] = null;
+    if (fresh) {
+      const want = freshGrades.get(c)!;
+      const equal = graded.filter((g) => asJson(g.grade) === asJson(want)).length;
+      isolation = { equal, of: graded.length };
+      graded.forEach((g, k) => {
+        if (asJson(g.grade) !== asJson(want)) v.problems.push(`cross-trial grader state: in-process grade ${k + 1} of ${graded.length} (after ${g.after ? nameOf(g.after) : 'nothing'}) differs from a fresh process in ${differing(g.grade, want)}`);
+      });
+    }
+    if (regrade_same === false) v.problems.push('a second grade from the same record differs');
+    if (replay_same === false) v.problems.push('a second run gives a different trajectory or final hash');
+    return { case: c, grade, misses, regrade_same, replay_same, isolation, ...v };
+  });
 }
 
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().join('\n') === [...b].sort().join('\n');
@@ -221,37 +342,40 @@ export interface MatrixResult {
 
 const score = (g: Grade) => (g.score === null ? 'n/a' : g.score.toFixed(3));
 
-// Runs the whole matrix and reports it, one line per fact, the failures last.
-export async function runMatrix(env: MatrixEnv, task: MatrixTask): Promise<MatrixResult> {
-  const results: CaseResult[] = [];
-  for (const c of cases(task)) results.push(await runCase(env, task, c));
+// Runs the matrix and reports it, one line per fact, the failures last.
+export async function runMatrix(env: MatrixEnv, task: MatrixTask, opts: MatrixOptions = {}): Promise<MatrixResult> {
+  const all = cases(task);
+  const selected = selectCases(task, opts.cases);
+  const results = await runCases(env, task, selected, opts);
   const failures: string[] = [];
   const lines: string[] = [`matrix ${task.id}`];
   const fail = (what: string) => failures.push(what);
   const byKind = (k: CaseKind) => results.filter((r) => r.case.kind === k);
-  const nameOf = (c: Case) => (c.id === c.kind ? c.kind : `${c.kind} ${c.id}`);
   const noteProblems = (r: CaseResult) => r.problems.forEach((p) => fail(`${nameOf(r.case)}: ${p}`));
 
   const oracle = byKind('oracle')[0];
-  if (oracle === undefined) {
+  if (task.oracle === null) {
     lines.push('oracle: missing (solution/solve.ts exports no oracle)');
     fail('no oracle');
+  } else if (oracle === undefined) {
+    lines.push('oracle: not run');
   } else {
-    lines.push(`oracle: ${oracle.grade.outcome} score ${score(oracle.grade)} judge.unknown ${oracle.unknown}`);
+    const missed = [...new Set(oracle.misses.map((m) => m.check))];
+    lines.push(missed.length ? `oracle: MISS judge cache misses ${missed.join(', ')}` : `oracle: ${oracle.grade.outcome} score ${score(oracle.grade)} judge.unknown ${oracle.unknown}`);
     noteProblems(oracle);
   }
 
   const alternatives = byKind('alternative');
-  lines.push(`alternatives: n=${alternatives.length} (min ${MIN_ALTERNATIVES})`);
-  if (alternatives.length < MIN_ALTERNATIVES) fail(`${alternatives.length} alternatives, need ${MIN_ALTERNATIVES}`);
+  lines.push(`alternatives: n=${task.alternatives.length} (min ${MIN_ALTERNATIVES})${alternatives.length < task.alternatives.length ? `, ${alternatives.length} run` : ''}`);
+  if (task.alternatives.length < MIN_ALTERNATIVES) fail(`${task.alternatives.length} alternatives, need ${MIN_ALTERNATIVES}`);
   for (const r of alternatives) {
-    lines.push(`  alternative ${r.case.id}: ${r.grade.outcome} score ${score(r.grade)}${r.problems.length ? ` (${r.problems.join('; ')})` : ''}`);
+    lines.push(`  alternative ${r.case.id}: ${r.grade.outcome} score ${score(r.grade)} judge.unknown ${r.unknown}${r.problems.length ? ` (${r.problems.join('; ')})` : ''}`);
     noteProblems(r);
   }
 
   const mutants = byKind('mutant');
-  lines.push(`mutants: n=${mutants.length} (min ${MIN_MUTANTS})`);
-  if (mutants.length < MIN_MUTANTS) fail(`${mutants.length} mutants, need ${MIN_MUTANTS}`);
+  lines.push(`mutants: n=${task.mutants.length} (min ${MIN_MUTANTS})${mutants.length < task.mutants.length ? `, ${mutants.length} run` : ''}`);
+  if (task.mutants.length < MIN_MUTANTS) fail(`${task.mutants.length} mutants, need ${MIN_MUTANTS}`);
   for (const r of mutants) {
     const m = r.case.mutant!;
     const verdict = r.grade.outcome !== 'FAIL' ? 'not FAIL' : sameSet(r.failed_gates, m.fails) ? 'ok' : 'MISMATCH';
@@ -262,7 +386,8 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask): Promise<Matri
   for (const kind of ['null', 'spray', 'output-gap', 'status-only'] as const) {
     const r = byKind(kind)[0];
     if (r === undefined) {
-      if (kind === 'status-only') {
+      if (all.some((c) => c.kind === kind)) lines.push(`${kind}: not run`);
+      else if (kind === 'status-only') {
         lines.push(`status-only: ${task.declares.status_only ? 'MISSING, declared in task.toml' : 'not declared'}`);
         if (task.declares.status_only) fail('task.toml declares a status-only case and tests/agents.ts exports no status_only');
       } else {
@@ -281,12 +406,21 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask): Promise<Matri
   if (derivation !== null) fail(`double derivation: ${derivation}`);
 
   const n = results.length;
-  lines.push(`regrade idempotence: ${results.filter((r) => r.regrade_same).length}/${n} same grade`);
-  lines.push(`replay determinism: ${results.filter((r) => r.replay_same).length}/${n} same trajectory and final hash`);
+  const counted = (pick: (r: CaseResult) => boolean | null) => results.filter((r) => pick(r) === true).length;
+  lines.push(results.some((r) => r.regrade_same !== null) ? `regrade idempotence: ${counted((r) => r.regrade_same)}/${n} same grade` : 'regrade idempotence: not run (1 grade per case)');
+  lines.push(results.some((r) => r.replay_same !== null) ? `replay determinism: ${counted((r) => r.replay_same)}/${n} same trajectory and final hash` : 'replay determinism: not run (1 trial per case)');
+  const iso = results.flatMap((r) => (r.isolation ? [r.isolation] : []));
+  lines.push(iso.length ? `isolation: ${iso.reduce((s, x) => s + x.equal, 0)}/${iso.reduce((s, x) => s + x.of, 0)} grades equal a fresh process` : 'isolation: not run');
 
   const untraced = traceability(task);
   lines.push(`traceability: ${task.checks.length - untraced.length}/${task.checks.length} checks resolve${untraced.length ? ` (unresolved: ${untraced.map((u) => u.check).join(', ')})` : ''}`);
   for (const u of untraced) fail(`traceability: ${u.check}: ${u.reason}`);
+
+  if (opts.policyImports) {
+    const p = opts.policyImports();
+    lines.push(p.problems.length ? `policy imports: ${p.problems.length} problem${p.problems.length === 1 ? '' : 's'}` : `policy imports: clean (${p.modules} modules reached)`);
+    for (const x of p.problems) fail(`policy imports: ${x}`);
+  } else lines.push('policy imports: not checked');
 
   const covered = new Set(task.mutants.map((m) => m.trap));
   const uncovered = task.declares.traps.filter((t) => !covered.has(t));
@@ -295,7 +429,10 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask): Promise<Matri
   for (const m of task.mutants) if (!task.declares.traps.includes(m.trap)) fail(`mutant ${m.id} names trap ${m.trap}, which task.toml [matrix] traps does not declare`);
 
   const misses = results.flatMap((r) => r.misses.map((m) => ({ ...m, case: nameOf(r.case) })));
-  lines.push(`judge cache: ${misses.length} miss${misses.length === 1 ? '' : 'es'}`);
+  const sources = new Map<string, number>();
+  for (const e of task.cache) sources.set(e.provenance?.source ?? 'unrecorded', (sources.get(e.provenance?.source ?? 'unrecorded') ?? 0) + 1);
+  const source = [...sources].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty';
+  lines.push(`judge cache: ${misses.length} miss${misses.length === 1 ? '' : 'es'}; source ${source}`);
   for (const m of misses) lines.push(`  miss ${m.case}: ${m.check} (cache key ${m.key})`);
 
   lines.push(`matrix ${task.id}: ${failures.length === 0 ? 'PASS' : 'FAIL'}`);

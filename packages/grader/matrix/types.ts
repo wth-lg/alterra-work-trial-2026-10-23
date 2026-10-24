@@ -5,7 +5,8 @@
 //   tests/mutants.ts       `mutants`: near misses, one trap each, each expected to FAIL on
 //                          exactly the gate checks it declares
 //   tests/agents.ts        `spray`, `output_gap` and, where the task declares it, `status_only`
-//   tests/grader.ts        `checks`
+//   tests/grader.ts        `checks` (its path is `checksModule`, which the matrix's isolation
+//                          check imports again in a fresh process)
 //   expected.ts            `expected`: the expected end state, written by hand
 //   policy.ts              `derive(world)`: the same, computed from the initial world
 //   tests/judge-cache.json the canned judge and extractor answers the matrix grades with
@@ -68,6 +69,9 @@ export interface MatrixTask {
   policies: ReadonlyArray<{ id: string; text: string }>;
   declares: Declares;
   checks: readonly Check[];
+  // The file `checks` was imported from; absent when the checks were built in memory, which
+  // turns the isolation check off.
+  checksModule?: string;
   oracle: Script | null;
   alternatives: readonly Agent[];
   mutants: readonly Mutant[];
