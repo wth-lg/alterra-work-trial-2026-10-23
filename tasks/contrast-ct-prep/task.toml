@@ -1,0 +1,103 @@
+# T5 (design section 4, "T5 contrast-ct-prep"): a contrast CT order with premedication for Daniel Ferreira
+# (pt-0015, overlay.ts) under RBC-RAD-07. The traps are the shellfish and povidone-iodine allergies
+# beside the real contrast reaction, the overnight dose times, the 2025 creatinine, the 2023
+# premedication orders timed for another scan, and the link to the appointment.
+[task]
+id = "contrast-ct-prep"
+title = "Contrast CT order and premedication for Daniel Ferreira under RBC-RAD-07"
+max_turns = 80
+
+[[policy]]
+id = "RBC-RAD-07"
+title = "Contrast CT preparation"
+version = "1"
+effective = "2025-01-01"
+source = "Environment-local policy. §2 adapted from the ACR Manual on Contrast Media, Version 2026 (acr.org, https://www.acr.org/Clinical-Resources/Clinical-Tools-and-Reference/Contrast-Manual, captured 2026-10-24; Chapter 4 'Patient Selection and Preparation Strategies Before Contrast Medium Administration' unchanged since 2017 per the Manual's version history), 'Specific Recommended Premedication Regimens', Elective Premedication option 1: '50 mg prednisone by mouth at 13 hours, 7 hours, and 1 hour before contrast medium administration, plus 50 mg diphenhydramine intravenously, intramuscularly, or by mouth 1 hour before' (verified); adapted: the clinic uses option 1 only, by mouth, and keeps diphenhydramine, which the Manual calls optional. The 2025 ACR-AAAAI consensus (Wang et al., Radiology 2025;315(2) and J Allergy Clin Immunol Pract 2025;13:1029-1047) recommends no premedication after a mild reaction, says premedication may be considered after a moderate one, and recommends switching to a different contrast agent when feasible; the clinic keeps the Manual's premedication for mild and moderate reactions and does not require a switch, and the task's reaction is moderate. §1 from the same chapter: 'Patients with shellfish or povidone-iodine (e.g., Betadine) allergies are at no greater risk from iodinated contrast medium than are patients with other allergies' (verified). §3 stricter than the Manual, which calls a prior severe reaction 'a relative contraindication' (verified). §4 environment-local: the Manual's Post-Contrast AKI chapter lists diabetes as an optional reason to check renal function and says 'Some accept a 30-day interval in outpatients' (verified); the age 60 trigger is local. §5 environment-local."
+file = "rbc-rad-07.md"
+
+# The orderables the prep can need, and the ones a wrong path reaches for: the non-contrast CT,
+# the IV steroids of the accelerated regimen.
+[[catalog]]
+kind = "medication"
+code = "198148"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "prednisone 50 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "312615"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "prednisone 20 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "198145"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "prednisone 10 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "1049909"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "diphenhydramine hydrochloride 25 MG Oral Capsule"
+[[catalog]]
+kind = "medication"
+code = "1020477"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "diphenhydramine hydrochloride 50 MG Oral Capsule"
+[[catalog]]
+kind = "medication"
+code = "238755"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "hydrocortisone 100 MG Injection"
+[[catalog]]
+kind = "medication"
+code = "311659"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "methylprednisolone 40 MG Injection"
+[[catalog]]
+kind = "medication"
+code = "861004"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "metformin hydrochloride 1000 MG Oral Tablet"
+[[catalog]]
+kind = "imaging"
+code = "IMG-CT-AP-WC"
+system = "urn:riverbend:orders"
+display = "CT abdomen and pelvis with IV contrast"
+[[catalog]]
+kind = "imaging"
+code = "IMG-CT-AP-WO"
+system = "urn:riverbend:orders"
+display = "CT abdomen and pelvis without contrast"
+[[catalog]]
+kind = "imaging"
+code = "IMG-CT-CHEST-WO"
+system = "urn:riverbend:orders"
+display = "CT chest without contrast"
+[[catalog]]
+kind = "lab"
+code = "2160-0"
+system = "http://loinc.org"
+display = "Creatinine [Mass/volume] in Serum or Plasma"
+[[catalog]]
+kind = "lab"
+code = "24321-2"
+system = "http://loinc.org"
+display = "Basic metabolic 2000 panel - Serum or Plasma"
+[[catalog]]
+kind = "lab"
+code = "24323-8"
+system = "http://loinc.org"
+display = "Comprehensive metabolic 2000 panel - Serum or Plasma"
+[[catalog]]
+kind = "lab"
+code = "4548-4"
+system = "http://loinc.org"
+display = "Hemoglobin A1c/Hemoglobin.total in Blood"
+
+# Each trap needs a mutant in tests/mutants.ts. No status-only case: T5 has no inbox items.
+[matrix]
+traps = ["allergy_disambiguation", "overnight_timing", "stale_creatinine", "copy_forward", "linkage", "iv_regimen", "creatinine_after_scan", "prednisone_dose", "antihistamine_timing", "ct_occurrence", "evidence_before_orders", "patient_instruction"]
+status_only = false
+
+# The judge items read one note or one message and quote it; medium as in T1, checked by the live judge pass.
+[judge]
+effort = "medium"

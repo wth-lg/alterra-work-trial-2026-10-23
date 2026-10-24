@@ -2,24 +2,25 @@
   "now": "2026-10-23T08:00:00-04:00",
   "world": {
     "file": "fixtures/world.ndjson.gz",
-    "state_hash": "cafdf95e89a30a94c1e5898e1dd2c3e9bf936beebce06eb7ee5e1f286c4cb525",
-    "ndjson_sha256": "d77d968677d9593cedb66542e76319232b375aa94f22a38486b149de324ba5c7",
-    "resources": 7435,
+    "state_hash": "1bec3f0ffa79b0ad1226bf5a07b9a274dd64fa15ac46b252cd604709a34d253d",
+    "ndjson_sha256": "b7d6dc561e6ffa896d44047cce34d002a99406103eeb4ceeaa69180bc8ea72f1",
+    "resources": 7447,
     "by_type": {
-      "AllergyIntolerance": 40,
+      "AllergyIntolerance": 42,
+      "Appointment": 1,
       "Condition": 980,
-      "DiagnosticReport": 493,
-      "DocumentReference": 275,
-      "Encounter": 368,
+      "DiagnosticReport": 492,
+      "DocumentReference": 273,
+      "Encounter": 372,
       "EpisodeOfCare": 1,
       "Group": 4,
-      "MedicationRequest": 388,
-      "Observation": 3480,
+      "MedicationRequest": 390,
+      "Observation": 3484,
       "Organization": 2,
       "Patient": 60,
-      "Practitioner": 8,
+      "Practitioner": 9,
       "Procedure": 1326,
-      "ServiceRequest": 2,
+      "ServiceRequest": 3,
       "Task": 8
     }
   },
@@ -62,7 +63,8 @@
   "overlays": [
     "T1",
     "T2",
-    "T3"
+    "T3",
+    "T5"
   ],
   "inputs": {
     "fixtures/synthea/generate.sh": "9c20f04e81cd71443b418aaa2c2782b47d3f20fffccdce06959da03b40c33fed",
@@ -70,6 +72,7 @@
     "packages/env/overlay.ts": "79ddb1445970e7a1a567e2db0cf778e2b9bfa8ede2ae016e39a04ad0cd18454f",
     "packages/env/world.ts": "cc7dd7c88d47251d63bc5290d7b2faa76ac0f0305aa5f1d94d01384570e8b678",
     "scripts/fixtures-synthea.ts": "44162b65dc576e507b526132164eda54cb14000936331d48b575f46d9c49d752",
+    "tasks/contrast-ct-prep/overlay.ts": "93bf390e70455316c3156f41a8aa392bca3cb39e834bb7df7bdb629f17a21303",
     "tasks/crc-care-gap/overlay.ts": "e5afb2b8d7b3924d040f4f895387d49fa84cddc9934dc8d9bc574cf919d48408",
     "tasks/renal-dose-review/overlay.ts": "cfa199c93268ab0e956cbdc64959154d2733ce9846b997bf5552c7082ccf6a65",
     "tasks/results-inbox/overlay.ts": "c42296718e46abd60a81ee1b3ad1ba926e7fc2a9e5c4ec8ed97807c276d5e33d"

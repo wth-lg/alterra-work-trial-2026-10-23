@@ -1,0 +1,686 @@
+[
+  {
+    "key": "03c860d8cbee356c6a561391a0d0ee3d5beb5f443a240cc4cfa57248a7ba5c08",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "08f852ee21e861b60b29dc0883209513d21707d0c6b65d23fbc9046ed7a21fb9",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "098639e95e5c4ed1a3496cde7557db1b0bd9d405976f10abf0e69f75cbda1d56",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "14b8482e1582e12c8b9cab912d6f047674e99ccfecdf8402003678e64badf66a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "16867bb2995b86d18f5dded2031e79df51516ef819dd2af0899bb793d8ab028c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "25bb0ab4deebbcce547f95a59d14c9f7281fb11294e303c54429c87cdb64e669",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "310102827f3f2c5a25b779d81b797f26a4232087e680de08501757f88260b198",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "3594bf74735d8bf7d7eaa93fb2268951dc7d42c3d80761a40da1cdecf736d380",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "36d3c58b7169076881c3cae42c6da62f3ab08cd8c741397a3092fc4563ea221a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "3b9a93ab703ff826ea561798331165470a2731a2c2c4da5429dcf52cf4e8bece",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "3dda0bd11af22c51af6cddf13277296d29515eef85cb3206d62d655388ebbd86",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "40e779417d4a1d8baa23e332244a0621ededdcee1221d3d485d4832919ee3045",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "45ae5e14a76510187082a21912f734d6f4c226b6ca24957a592c42fcf15deef3",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "53e3aa721725f33963e6561afcbeafe92bd7b64070cdb5d262ea3cf0d0a63723",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "Do not drive after taking it:"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "5db47cceb184500e777e943a9d1e65227c2892d340dd0274d3b10c0d5dfc04ef",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "63275652f817e12a68caf7e9e641cf02648e8c965c66cb0effff144b54c7a6b9",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "You must not drive after the diphenhydramine; bring someone to drive you."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "648604956655eed726cf817a6b5d8d662bcdf9b00fb889741461a3e7c7c135d8",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "- prednisone 50 mg at eight o'clock Sunday evening (10/25),"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "6d9c10c42244de2c215ad571ff544db1eb1c8f5bb7ee0cc692535e0ba75be479",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "With three iodine allergies, iodinated contrast is avoided."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "740a9559b42d3546c65092c4dd6f01036c9be8715afdf41ef118d4fe8099d316",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "86ec79c3add177843f7dfaba9bb0ae629e81665f2288c4106d194993836725b8",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "95038337ee36973fc8be4f4712e7a7c4d0ee3ae12b3f285537a965c5f89b66fe",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "Do not drive after taking it:"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "977aced2244346f30f8d5404e6c5ebd071186ef1f2ecb52ceab946c183144f7c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The diphenhydramine will make you sleepy, so someone else needs to drive you that day."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "99a9299243f6b271e85b3835a1af7250abfdf97572c73e177f065b59baffe6cb",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "Do not drive after diphenhydramine; bring a driver."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "aebca0f454c69b3c4a826e9f5a1a1885df3b00f939f1385fea9b464fd4178aa7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "af0738a7e62049ce7e510a0223fe516d91bbd83e401cf1677726b19dd3eac5a4",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "b3fbd9c261aded78680f09ed00b4ce290b3187ff2d1ecc24109efebecd3d26c4",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "c38e03c61b6ffab3cae0cfafc23c8d24b5611d65336f85612fe88c43d1f88b9d",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "c4c01e82a02966d0923ef376323687e9ef4aef013d8eeb1f1b38e9a5be3b5823",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "ca2264e0424506265344c5ce8275b24d0be26f22fd11b1d873772ac0930715d0",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "d3c39f53711891dd866fda413d592b8df8a9cdf7096b8ef83af8f46e7354effc",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "d3d72cba94867608129adf66a53be46426ab3ff55524e0dd434513b6c4e5cb98",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "d5f69eb82e8661a6f450d4f0a7935c5564deba653a6a7ecea2eab1135284f80a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "Do not drive after taking it:"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "e1300b02bb0881d87fdf3d928112b6e7655f5501fd111b031996485db2874e3a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "ece4659411f00e05ac17b7232ebef6d6d581cf8df634cd9e9ee823511e77eb55",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "Do not drive after taking it:"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-48)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "f9070a40aada5593ce81db2f3cca290f3653474b93332046d98dd8687c2861d7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "f998224b54f43332db33adc38f9cd8edb1fe485c8ea2e7c19cc1574b174885d5",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "Do not drive after taking it:"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "fc13463f14bd180b268c9d8c64916d3a36b651da747411e09546e084219e4d27",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  },
+  {
+    "key": "ffa664d397ee3ea8a5f022ae65478e1670c82c5ccb9aac39e3a95c5a25517e45",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-60)",
+      "at": "2026-10-24T00:00:00Z"
+    }
+  }
+]
