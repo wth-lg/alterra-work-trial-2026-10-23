@@ -1,13 +1,15 @@
 // Normalisation (design section 5): done once, here, so number formatting, unit spelling, code
 // display text or the way a dose is written never changes a grade. Checks compare through
 // these functions, never through strings:
-//   - canonical numbers: '25' = '25.0' = 25;
+//   - canonical numbers: '25' = '25.0' = '25.' = 25, and trailing punctuation ('42,') is not
+//     part of the number;
 //   - units: case-insensitive UCUM and the labels US EHRs show (mcg = ug, units = [iU]), mass
 //     converted through mg and body weight through kg (lb = [lb_av]);
 //   - frequency: BID = Q12H = 2/day, from a code, a phrase or a FHIR Timing.repeat;
 //   - total daily dose: dose x doses per day, or the explicit timing events per clinic day;
 //   - RxNorm: SCD, SBD and ingredient forms of one drug are the same drug (brand and alias
-//     names map to the ingredient), optionally at one strength;
+//     names map to the ingredient), optionally at one strength; a combination product is its
+//     whole ingredient set, so amoxicillin alone is not amoxicillin / clavulanate;
 //   - LOINC and other coded concepts: the code decides; display text only when there is no code,
 //     compared without case, punctuation or spacing;
 //   - status sets: only 'active' is active;
@@ -51,10 +53,12 @@ export type Num = number | string;
 
 const NUMBER = /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?$/;
 
-// The number a value states, or null: '25.0' -> 25, '1,000' -> 1000, '25 mg' -> null.
+// The number a value states, or null: '25.0' -> 25, '25.' -> 25, '42,' -> 42, '1,000' -> 1000,
+// '25 mg' -> null. One trailing mark of punctuation (a sentence's period, comma, semicolon or
+// colon) is not part of the number.
 export function canonicalNumber(x: Num): number | null {
   if (typeof x === 'number') return Number.isFinite(x) ? x : null;
-  const s = x.trim();
+  const s = x.trim().replace(/(?<=\d)[.,;:]$/, '');
   if (s === '' || !NUMBER.test(s) || !/\d/.test(s)) return null;
   const n = Number(s.replace(/,/g, ''));
   return Number.isFinite(n) ? n : null;
@@ -121,11 +125,12 @@ export function within(value: number, truth: number, tolerance: { rel?: number; 
 
 // Frequency codes and phrases -> doses per day.
 const PER_DAY: Record<string, number> = {
-  QD: 1, DAILY: 1, 'ONCE DAILY': 1, QAM: 1, QPM: 1, QHS: 1, HS: 1, AM: 1, BED: 1,
-  BID: 2, 'TWICE DAILY': 2, Q12H: 2,
-  TID: 3, 'THREE TIMES DAILY': 3, Q8H: 3,
-  QID: 4, 'FOUR TIMES DAILY': 4, Q6H: 4,
-  Q4H: 6, Q48H: 0.5, Q72H: 1 / 3, QWK: 1 / 7, WK: 1 / 7, 'ONCE WEEKLY': 1 / 7,
+  QD: 1, DAILY: 1, 'ONCE DAILY': 1, 'ONCE A DAY': 1, QAM: 1, QPM: 1, QHS: 1, HS: 1, AM: 1, BED: 1, Q24H: 1,
+  BID: 2, 'TWICE DAILY': 2, 'TWICE A DAY': 2, Q12H: 2,
+  TID: 3, 'THREE TIMES DAILY': 3, 'THREE TIMES A DAY': 3, Q8H: 3,
+  QID: 4, 'FOUR TIMES DAILY': 4, 'FOUR TIMES A DAY': 4, Q6H: 4,
+  Q4H: 6, Q3H: 8, Q2H: 12, Q1H: 24, QH: 24,
+  QOD: 0.5, 'EVERY OTHER DAY': 0.5, Q48H: 0.5, Q72H: 1 / 3, QWK: 1 / 7, WK: 1 / 7, 'ONCE WEEKLY': 1 / 7, 'ONCE A WEEK': 1 / 7,
 };
 const PERIOD_DAYS: Record<string, number> = { s: 1 / 86_400, min: 1 / 1440, h: 1 / 24, d: 1, wk: 7, mo: 30, a: 365 };
 
@@ -167,14 +172,24 @@ export function dailyDose(mr: Pick<MedicationRequest, 'dosageInstruction'>, unit
     const events = d.timing?.event;
     let perDay: number | null;
     if (events && events.length > 0) perDay = events.length / new Set(events.map(clinicDate)).size;
-    else perDay = d.timing?.repeat ? dosesPerDay(d.timing.repeat) : d.timing?.code?.text ? dosesPerDay(d.timing.code.text) : null;
+    else if (d.timing?.repeat) perDay = dosesPerDay(d.timing.repeat);
+    else perDay = timingCode(d.timing?.code);
     if (perDay === null) return null;
     total += q.value * perDay;
   }
   return { value: Math.round(total * 1e9) / 1e9, unit: quantity({ value: 1, unit }, unit)!.unit };
 }
 
-// Brand and alias names -> the ingredient, lower case.
+// Doses per day from a timing code: its first coding code that names a frequency, else its text.
+function timingCode(c: CodeableConcept | undefined): number | null {
+  for (const x of c?.coding ?? []) {
+    const n = x.code === undefined ? null : dosesPerDay(x.code);
+    if (n !== null) return n;
+  }
+  return c?.text ? dosesPerDay(c.text) : null;
+}
+
+// Brand and alias names -> the ingredient (or ingredients, joined by ' / '), lower case.
 const ALIASES: Array<[RegExp, string]> = [
   [/\bmetoprolol (?:xl|er|succinate(?: er| xl)?)\b|\btoprol(?: xl)?\b/, 'metoprolol succinate'],
   [/\bmetoprolol tartrate\b|\blopressor\b/, 'metoprolol tartrate'],
@@ -184,45 +199,83 @@ const ALIASES: Array<[RegExp, string]> = [
   [/\bneurontin\b/, 'gabapentin'],
   [/\blipitor\b/, 'atorvastatin'],
   [/\baldactone\b/, 'spironolactone'],
-  [/\baugmentin\b|\bamoxicillin[ /-]+clavulanate\b/, 'amoxicillin / clavulanate'],
+  [/\baugmentin\b|\bamoxicillin[ -]+clavulanate\b/, 'amoxicillin / clavulanate'],
+  [/\bzestoretic\b|\bprinzide\b/, 'hydrochlorothiazide / lisinopril'],
+  [/\bpercocet\b/, 'acetaminophen / oxycodone'],
+  [/\bbactrim\b/, 'sulfamethoxazole / trimethoprim'],
 ];
 // Words in an RxNorm or EHR name that describe the form, not the drug.
 const FORM_WORDS = /\b(?:\d+ hr|extended release|delayed release|sustained release|oral|tablet|tablets|capsule|capsules|tab|cap|solution|suspension|injection|xl|er|xr|sr|dr|hcl|hydrochloride)\b/g;
+// Salt words after an ingredient name ('clavulanate potassium', 'hydrocodone bitartrate'); the
+// first word of a name is never one ('potassium chloride' stays).
+const SALT_WORDS = /(?<=\S )(?:potassium|sodium|bitartrate|phosphate|sulfate|maleate|mesylate|besylate)\b/g;
+// Separators between the ingredients of a combination name.
+const COMBINATION = /\s+\/\s+|\s*\/\s*(?=[a-z])|\s+and\s+|\s*\+\s*/;
 const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm';
 
-export interface Drug {
-  ingredient: string;
+export interface Ingredient {
+  name: string;
   strength_mg: number | null;
 }
 
-// The ingredient and unit strength a drug name or concept states: 'Eliquis 5 MG Oral Tablet' ->
-// apixaban 5 mg. Reads the RxNorm coding's display, then any other display, then the text.
+export interface Drug {
+  // The ingredient, or a combination's ingredients sorted and joined by ' / '.
+  ingredient: string;
+  // The unit strength of a single-ingredient drug; null for a combination (see ingredients).
+  strength_mg: number | null;
+  // Every ingredient with its strength, sorted by name.
+  ingredients: Ingredient[];
+}
+
+function ingredientOf(part: string): Ingredient | null {
+  const strength = /(\d+(?:\.\d+)?) ?(mg|mcg|ug|g)\b/.exec(part);
+  const strength_mg = strength ? quantity({ value: strength[1]!, unit: strength[2]! }, 'mg')!.value : null;
+  const head = strength ? part.slice(0, strength.index) : part;
+  const name = head.replace(FORM_WORDS, ' ').replace(/\s+/g, ' ').trim().replace(SALT_WORDS, '').replace(/\s+/g, ' ').trim();
+  return name === '' ? null : { name, strength_mg };
+}
+
+// The ingredients and unit strengths a drug name or concept states: 'Eliquis 5 MG Oral Tablet'
+// -> apixaban 5 mg; 'Amoxicillin 875 MG / Clavulanate potassium 125 MG Oral Tablet' ->
+// amoxicillin 875 mg + clavulanate 125 mg. Reads the RxNorm coding's display, then any other
+// display, then the text. A pack ({...} Pack) is not one drug: null.
 export function drugOf(c: CodeableConcept | string | undefined): Drug | null {
   const names = typeof c === 'string' ? [c] : [...(c?.coding ?? []).filter((x) => x.system === RXNORM).map((x) => x.display), ...(c?.coding ?? []).map((x) => x.display), c?.text];
   const name = names.find((n): n is string => typeof n === 'string' && n.trim() !== '');
   if (name === undefined) return null;
-  let s = name.toLowerCase().replace(/\s+/g, ' ').trim();
+  // A branded name repeats its ingredients before the brand in brackets: the brand adds nothing.
+  let s = name.toLowerCase().replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (s.startsWith('{')) return null;
   for (const [re, ingredient] of ALIASES) if (re.test(s)) s = s.replace(re, ingredient);
-  const strength = /(\d+(?:\.\d+)?) ?(mg|mcg|ug|g)\b/.exec(s);
-  const strength_mg = strength ? quantity({ value: strength[1]!, unit: strength[2]! }, 'mg')!.value : null;
-  const head = strength ? s.slice(0, strength.index) : s;
-  const ingredient = head.replace(FORM_WORDS, ' ').replace(/\s+/g, ' ').trim();
-  return ingredient === '' ? null : { ingredient, strength_mg };
+  const parts = s.split(COMBINATION).map(ingredientOf);
+  if (parts.length === 0 || parts.some((p) => p === null)) return null;
+  const ingredients = (parts as Ingredient[]).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  if (new Set(ingredients.map((i) => i.name)).size !== ingredients.length) return null;
+  return { ingredient: ingredients.map((i) => i.name).join(' / '), strength_mg: ingredients.length === 1 ? ingredients[0]!.strength_mg : null, ingredients };
 }
 
 export interface DrugAccept {
+  // An ingredient, an ingredient set ('amoxicillin / clavulanate', 'amoxicillin-clavulanate') or
+  // a brand; strengths written in it ('amoxicillin 875 MG / clavulanate 125 MG') must match too.
   ingredient: string;
   // RxNorm codes accepted outright (the task's accept set: SCD, SBD and ingredient forms).
   rxcuis?: readonly string[];
-  // Only this unit strength, when given.
+  // Only this unit strength of a single-ingredient drug, when given.
   strength_mg?: number;
 }
 
+// Whether the concept is the accepted drug: the same ingredient set (a combination matches only
+// its whole set), and each strength the accepted name or strength_mg states.
 export function isDrug(c: CodeableConcept | undefined, accept: DrugAccept): boolean {
   if (accept.rxcuis && (c?.coding ?? []).some((x) => x.system === RXNORM && x.code !== undefined && accept.rxcuis!.includes(x.code))) return true;
   const d = drugOf(c);
   const want = drugOf(accept.ingredient);
   if (d === null || want === null || d.ingredient !== want.ingredient) return false;
+  const strengths = d.ingredients.every((x, i) => {
+    const w = want.ingredients[i]!.strength_mg;
+    return w === null || (x.strength_mg !== null && close(x.strength_mg, w));
+  });
+  if (!strengths) return false;
   return accept.strength_mg === undefined || (d.strength_mg !== null && close(d.strength_mg, accept.strength_mg));
 }
 
