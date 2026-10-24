@@ -1,5 +1,6 @@
 // Cost model: prices, the worst case a call reserves, and batch projections. Pure: run
 // directories are read by cli/adapters/ledger-node.ts and passed in as observations.
+import { isValid } from './outcomes.ts';
 
 // USD per million tokens for claude-opus-5-5. Source: the bundled claude-api skill (model
 // table cached 2026-10-06, and shared/prompt-caching.md: 5-minute writes 1.25x input, 1-hour
@@ -33,9 +34,6 @@ export const AUDITOR_ALLOWANCE_USD = 10;
 // The final run: 10 trials of each of the 6 planned tasks.
 export const PLANNED_TASKS = 6;
 export const FINAL_TRIALS_PER_TASK = 10;
-
-// Outcomes that do not count toward the final run's 10 valid trials per task.
-const INVALID_OUTCOMES = new Set(['ENV_ERROR', 'INFRA']);
 
 // The usage block of a Messages response.
 export interface Usage {
@@ -174,9 +172,8 @@ export function projectBatch(
   );
 }
 
-export function isValidTrial(outcome: string | undefined): boolean {
-  return outcome !== undefined && !INVALID_OUTCOMES.has(outcome);
-}
+// Whether a final trial counts toward its task's 10 valid trials: outcomes.ts decides.
+export const isValidTrial = (outcome: string | undefined): boolean => isValid(outcome);
 
 // What the rest of the final run will cost: per planned task, (10 - valid final trials) x its
 // per-trial cost x 1.15; planned tasks not written yet (up to 6) at the cap; plus the auditor
