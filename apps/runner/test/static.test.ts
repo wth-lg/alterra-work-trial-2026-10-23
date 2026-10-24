@@ -20,6 +20,8 @@ describe('static serving (gate case 7)', () => {
         '/../package.json', `${BASE}../package.json`, `${BASE}..%2fpackage.json`, `${BASE}%2e%2e%2fpackage.json`, `${BASE}%2e%2e/%2e%2e/package.json`,
         `${BASE}%2E%2E%2F%2E%2E%2Fpackage.json`, `${BASE}assets/%2e%2e/%2e%2e/%2e%2e/package.json`, `${BASE}assets/leak.txt`, `${BASE}linked/dir/secret.txt`,
         `${BASE}probe.html`, `${BASE}harness.html`, '/probe.html', '/harness.html', `${BASE}assets/..%5c..%5cpackage.json`, `${BASE}%00index.html`,
+        // A case-insensitive filesystem (macOS APFS) finds these too.
+        `${BASE}PROBE.HTML`, `${BASE}Harness.html`, `${BASE}harness.HTML`, `${BASE}Probe.Html`, `${BASE}%50robe.html`, '/PROBE.HTML',
       ]) {
         const r = await l.http('GET', path);
         expect(r.status, path).toBe(404);

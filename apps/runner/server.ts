@@ -5,8 +5,9 @@
 //
 // Static: apps/web/dist under BASE. / (and BASE without its slash) redirects to BASE keeping the
 // query, so the UI contract's `/?view=...` routes land on the same screen; a path with no
-// extension falls back to index.html (an app route); probe.html, harness.html and any path
-// that resolves outside dist (`..`, encoded dots or slashes, a symlink out of dist) get 404.
+// extension falls back to index.html (an app route); probe.html, harness.html in any letter case
+// and any path that resolves outside dist (`..`, encoded dots or slashes, a symlink out of dist)
+// get 404.
 // index.html is served with its built CSP meta unchanged plus a token meta holding this
 // process's 256-bit random token. The API answers at /api/* and at BASE + api/* (the UI
 // resolves api paths against its base), ahead of the static files.
@@ -15,7 +16,8 @@
 // rebinding); an Origin, when present, must be http://<that Host>; Sec-Fetch-Site, when present,
 // must be same-origin (the page itself may also be opened from the address bar, `none`); OPTIONS
 // gets 403 and no response carries an Access-Control-* header; a query parameter whose name
-// looks like a key gets 400, and an /api query may hold only dry_run. Every /api route but
+// looks like a key, or whose value is shaped like an sk-ant key, gets 400, and an /api query may
+// hold only dry_run. Every /api route but
 // GET /api/health needs X-Clinenv-Token equal to the token, which only a page this process
 // served can read; a POST body must be application/json.
 //
@@ -26,12 +28,20 @@
 // it is never written to a record, ledger row, log line or response, and every error text passes
 // through redactText. The runner reads only ENV_KEYS from its environment, never
 // ANTHROPIC_API_KEY. The request log is method, path, status and duration; never a body,
-// header or query.
+// header or query. Every log line and API error message also has any sk-ant-shaped string
+// replaced, held or not, so a key pasted into a path is not echoed.
+//
+// The server drops a client that takes over HEADERS_TIMEOUT_MS to send its headers or
+// REQUEST_TIMEOUT_MS to send its whole request, and holds at most MAX_CONNECTIONS sockets.
 //
 // Batches: POST api/trials plans the batch (planBatch), refuses it with 409 and no call when no
-// key is held, when its projection with what this runner's batches have spent would cross the
+// key is held, when its projection with what this session has committed would cross the
 // session cap, or when the ledger's exposure plus the projection would cross PROJECTED_CAP_USD,
 // and otherwise answers 202 and runs it with runBatch, which gets its grant from batchStart.
+// What a session has committed is its ledger rows' settled and reserved spend plus, for each of
+// this runner's batches not yet done, the part of its projection its rows do not hold yet: a
+// batch counts in full from the moment it is accepted, so two batches posted back to back cannot
+// both pass. A batch's term is dropped when it is done (closed, cancelled or failed).
 // Records go to CLINENV_RUNS_DIR, else ~/.clinenv/runs, under <run_id>/ (cli/adapters/
 // result-sink-node.ts), and the ledger is the CLI's (cli/adapters/ledger-node.ts: the own-run
 // marker, else SPEND_LEDGER, else ~/.clinenv/spend.jsonl). --mock answers every call from the
@@ -41,7 +51,8 @@
 // Cancel: DELETE api/trials/:id aborts that trial's signal. The call in flight stops, settles at
 // its worst case and is not retried; the trial ends CANCELLED, a re-queued attempt the batch keeps,
 // and the batch goes on with its other trials. shutdown() (SIGINT, SIGTERM) cancels every batch,
-// waits for each to write its close row, and closes the server.
+// waits up to SHUTDOWN_WAIT_MS for each to write its close row, closes the server, and resolves
+// whether every batch closed in that time.
 //
 // The forced-fail smoke trial (docs/requirements/ui-contract.md, P25c): with CLINENV_FORCED_FAIL=1
 // a POST api/trials with smoke: true runs each trial through run() with a scripted client that
@@ -54,16 +65,16 @@ import { homedir } from 'node:os';
 import { basename, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { okResponse, scenarioTransport } from '../web/src/harness/scenarios.ts';
-import { ApiError, MessagesClient, MODEL, reserveRequest, type MessageParam, type MessageParams, type Transport } from '../../packages/core/anthropic.ts';
+import { ApiError, MessagesClient, MODEL, type Transport } from '../../packages/core/anthropic.ts';
 import { BatchRefused, planBatch, runBatch, trialKey, type BatchRecord, type BatchSpec, type ResultSink, type TrialKey } from '../../packages/core/batch.ts';
-import { worstCaseUsd, type Projection, type TrialObservation } from '../../packages/core/cost.ts';
+import type { Projection, TrialObservation } from '../../packages/core/cost.ts';
 import type { TrialEvent } from '../../packages/core/events.ts';
 import { checkProjected, PROJECTED_CAP_USD, SpendRefused, totals, type LedgerRow } from '../../packages/core/ledger.ts';
 import type { TrialClient } from '../../packages/core/loop.ts';
-import { redactText } from '../../packages/core/redact.ts';
+import { REDACTED, redactText } from '../../packages/core/redact.ts';
 import { run, type RunOptions } from '../../packages/core/run.ts';
 import {
-  ContractError, parseKeyRequest, parseTrialsRequest, RUNNER_APP, sseFrame, SSE_END, TOKEN_HEADER, TOKEN_META,
+  ContractError, parseKeyRequest, parseTrialsRequest, RUNNER_APP, sseFrame, SSE_END, TOKEN_HEADER, TOKEN_META, VALIDATE_REQUEST, validateWorstCaseUsd,
   type Health, type ProjectionTerms, type RunView, type SseEnd, type TrialsRequest, type TrialState, type TrialView,
 } from '../../packages/core/runner-api.ts';
 import { nodeNow } from '../../cli/adapters/clock-node.ts';
@@ -82,10 +93,16 @@ export const ENV_KEYS = ['HOME', 'SPEND_LEDGER', 'CLINENV_CANONICAL_LEDGER', 'CL
 const MAX_BODY_BYTES = 64 * 1024;
 const PING_MS = 15_000;
 const SHUTDOWN_WAIT_MS = 8_000;
+const HEADERS_TIMEOUT_MS = 10_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+// Room for one event stream per trial of the largest batch (MAX_TASKS x MAX_TRIALS_PER_TASK)
+// plus the page's other requests.
+const MAX_CONNECTIONS = 256;
+// Lower case: compared with the lowercased basename, as APFS and NTFS match names in any case.
 const TEST_PAGES = new Set(['probe.html', 'harness.html']);
 const KEYISH = /key|token|secret|auth|password/i;
-const VALIDATE_HISTORY: MessageParam[] = [{ role: 'user', content: 'Reply with OK.' }];
-const VALIDATE_PARAMS: MessageParams = { max_tokens: 16, output_config: { effort: 'low' } };
+// The shape keyscan looks for, held or not.
+const KEY_SHAPE = /sk-ant-[A-Za-z0-9_-]*/gi;
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
@@ -108,6 +125,8 @@ export interface RunnerOptions {
   // Request log and batch lines; default nothing.
   log?: (line: string) => void;
   pingMs?: number;
+  // How long shutdown() waits for the batches to close; default SHUTDOWN_WAIT_MS.
+  shutdownWaitMs?: number;
   // The client's retry wait; default a timer.
   sleep?: (ms: number) => Promise<void>;
 }
@@ -117,8 +136,9 @@ export interface Runner {
   port: number;
   url: string;
   token: string;
-  // Cancels every batch, waits for each to close, then closes the server.
-  shutdown(): Promise<void>;
+  // Cancels every batch, waits for each to close, then closes the server. False when a batch
+  // had not closed by the end of the wait.
+  shutdown(): Promise<boolean>;
 }
 
 interface TrialEntry {
@@ -216,6 +236,11 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   const runsDir = resolve(env.CLINENV_RUNS_DIR ?? join(env.HOME || homedir(), '.clinenv', 'runs'));
   const forcedFail = env.CLINENV_FORCED_FAIL === '1';
   const pingMs = opts.pingMs ?? PING_MS;
+  // The token proves a request came from a page this process served; it is not a secret from
+  // this machine. Accepted residual (P12b security review S2): any local user or process can GET
+  // index.html and read it, then drive the runner with the held key up to the session cap, though
+  // it can never read the key back. Local users and processes are outside the threat model; the
+  // token stops other web origins, which can neither read the page nor send the header.
   const token = randomBytes(32).toString('hex');
   const session = `ui-${stamp()}-${randomBytes(2).toString('hex')}`;
   const mockToy = (label: string): Transport => (label.includes('validate') ? async () => okResponse({ text: 'OK' }, 1) : scenarioTransport('toy').transport);
@@ -229,7 +254,9 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   // Keys of batches running now: redacted from every line too.
   const batchKeys = new Set<string>();
   const secrets = () => [...(heldKey === null ? [] : [heldKey]), ...batchKeys];
-  const say = (line: string) => opts.log?.(redactText(line, secrets()));
+  // Held keys first, then any other key-shaped string.
+  const scrub = (text: string) => redactText(text, secrets()).replace(KEY_SHAPE, REDACTED);
+  const say = (line: string) => opts.log?.(scrub(line));
 
   const runs: RunEntry[] = [];
   const trials = new Map<string, TrialEntry>();
@@ -239,6 +266,17 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   const ledgerMode = ledgerPlace.mode;
   const ledgerPath = ledgerPlace.path;
   const sessionRows = (rows: readonly LedgerRow[]) => rows.filter((r) => r.run_id !== null && r.run_id.startsWith(session));
+  // The projection of each of this runner's batches that is not done, by run id (see the header).
+  const pending = new Map<string, number>();
+  const committed = (rows: readonly LedgerRow[]) => {
+    const mine = totals(sessionRows(rows));
+    let ahead = 0;
+    for (const [runId, projected] of pending) {
+      const held = totals(rows.filter((r) => r.run_id === runId));
+      ahead += Math.max(0, projected - held.settled - held.reserved);
+    }
+    return mine.settled + mine.reserved + ahead;
+  };
 
   // ---- trials and their streams ----
 
@@ -268,7 +306,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     if (t.ended) return;
     t.ended = true;
     t.state = state;
-    if (message !== null) t.error = redactText(message, secrets());
+    if (message !== null) t.error = scrub(message);
     // A stream that carried a graded event ends with it; any other ends with an end frame.
     if (t.frames.at(-1)?.event !== 'graded') t.end = { state, message: t.error };
     closeStreams(t);
@@ -311,7 +349,6 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   function terms(projection: Projection, rows: readonly LedgerRow[], sessionCap: number): ProjectionTerms {
     const t = totals(rows);
-    const mine = totals(sessionRows(rows));
     return {
       total_usd: projection.total,
       lines: projection.lines.map((l) => ({ task_id: l.task_id, trials: l.trials, per_trial_usd: l.per_trial.usd, basis: l.per_trial.basis, usd: l.usd })),
@@ -319,12 +356,12 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
       ledger: { mode: ledgerMode, settled_usd: t.settled, reserved_usd: t.reserved, open_usd: t.openExcess, exposure_usd: t.exposure },
       projected_cap_usd: PROJECTED_CAP_USD,
       session_cap_usd: sessionCap,
-      session_spent_usd: mine.settled + mine.reserved,
+      session_spent_usd: committed(rows),
     };
   }
 
   async function postTrials(body: TrialsRequest, dryRun: boolean): Promise<{ status: number; body: unknown }> {
-    if (body.session_cap_usd > PROJECTED_CAP_USD) throw new HttpError(400, 'invalid_request', `session_cap_usd must be at most PROJECTED_CAP_USD (${PROJECTED_CAP_USD})`);
+    if (body.session_cap_usd > PROJECTED_CAP_USD) throw new HttpError(400, 'invalid_request', `the session cap can be at most $${PROJECTED_CAP_USD}`);
     if (body.smoke) return startSmoke(body);
     const key = opts.mock ? 'mock-key-not-sent' : (body.key ?? heldKey);
     world ??= repoWorld();
@@ -343,22 +380,24 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     const rows = readRows(ledgerPath);
     const projection = terms(plan.projection, rows, body.session_cap_usd);
     if (dryRun) return { status: 200, body: { dry_run: true, calls: 0, projection } };
-    if (key === null) return { status: 409, body: { error: { type: 'no_key', message: 'no API key: add one (POST api/key) before running a trial' }, projection: null } };
+    if (key === null) return { status: 409, body: { error: { type: 'no_key', message: 'No API key yet: paste your Anthropic API key and press Validate, then start the trial again.' }, projection: null } };
     if (projection.session_spent_usd + projection.total_usd > body.session_cap_usd) {
       return {
         status: 409,
-        body: { error: { type: 'session_cap', message: `projection $${projection.total_usd.toFixed(2)} with $${projection.session_spent_usd.toFixed(2)} spent this session would cross the session cap $${body.session_cap_usd.toFixed(2)}` }, projection },
+        body: { error: { type: 'session_cap', message: `This batch's estimate of $${projection.total_usd.toFixed(2)}, with $${projection.session_spent_usd.toFixed(2)} already spent or running this session, would go over your session cap of $${body.session_cap_usd.toFixed(2)}.` }, projection },
       };
     }
     const check = checkProjected(totals(rows), plan.projection.total);
     if (check.over) {
       return {
         status: 409,
-        body: { error: { type: 'projected_cap', message: `projected cap: exposure $${projection.ledger.exposure_usd.toFixed(2)} + projection $${projection.total_usd.toFixed(2)} = $${check.total.toFixed(2)} > PROJECTED_CAP_USD $${PROJECTED_CAP_USD}` }, projection },
+        body: { error: { type: 'projected_cap', message: `This batch's estimate of $${projection.total_usd.toFixed(2)}, with $${projection.ledger.exposure_usd.toFixed(2)} already in the spend ledger, would go over the project's $${PROJECTED_CAP_USD} spending limit.` }, projection },
       };
     }
 
     runCount++;
+    // Counted from here, before any await, so a batch posted next sees it.
+    pending.set(runId, plan.projection.total);
     const controller = new AbortController();
     const byKey = new Map<string, TrialEntry>();
     const entries = plan.keys.map((k) => {
@@ -395,6 +434,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
       },
     ).finally(() => {
       view.done = true;
+      pending.delete(runId);
       batchKeys.delete(key);
     });
     runs.push({ view, controller, done });
@@ -402,7 +442,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   }
 
   async function startSmoke(body: TrialsRequest): Promise<{ status: number; body: unknown }> {
-    if (!forcedFail) throw new HttpError(400, 'invalid_request', 'smoke trials need a runner started with CLINENV_FORCED_FAIL=1');
+    if (!forcedFail) throw new HttpError(400, 'invalid_request', 'Smoke trials are turned off in this runner.');
     for (const id of body.tasks) await tasks.get(id).catch((e: unknown) => {
       throw new HttpError(400, 'invalid_request', `tasks: ${(e as Error).message}`);
     });
@@ -453,14 +493,14 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   async function postKey(key: string): Promise<{ status: number; body: unknown }> {
     heldKey = null;
     const label = `${opts.mock ? 'mock:' : ''}runner:validate`;
-    const projection = worstCaseUsd(reserveRequest(VALIDATE_HISTORY, VALIDATE_PARAMS));
+    const projection = validateWorstCaseUsd();
     const { ledger } = openNodeLedger({ transport: opts.mock ? 'offline' : 'live', env, runId: `${session}-key` });
     batchKeys.add(key);
     try {
       const grant = await ledger.batchStart(projection);
       try {
         const client = new MessagesClient({ grant, ledger, apiKey: key, fetch: transport(label), trial: label, maxAttempts: 1, log: (l) => say(`${label}: ${l}`), ...(opts.sleep ? { sleep: opts.sleep } : {}) });
-        await client.send([...VALIDATE_HISTORY], VALIDATE_PARAMS);
+        await client.send([...VALIDATE_REQUEST.history], VALIDATE_REQUEST.params);
       } finally {
         await grant.close();
       }
@@ -495,7 +535,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   };
 
   const fail = (res: ServerResponse, status: number, type: string, message: string, api: boolean) => {
-    if (api) json(res, status, { error: { type, message: redactText(message, secrets()) } });
+    if (api) json(res, status, { error: { type, message: scrub(message) } });
     else {
       res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(`${status} ${message}\n`);
@@ -559,7 +599,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
       allowed('GET', 'HEAD');
       return json(res, 200, health());
     }
-    if (!tokenOk(req)) throw new HttpError(403, 'forbidden', `missing or wrong ${TOKEN_HEADER}`);
+    if (!tokenOk(req)) throw new HttpError(403, 'forbidden', `Reload the page: it was not served by this runner, or the runner restarted (missing or wrong ${TOKEN_HEADER}).`);
     if (route === 'key') {
       allowed('POST', 'DELETE');
       if (method === 'DELETE') {
@@ -627,7 +667,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     if (segments.some((s) => s === '..' || s === '.' || /[/\\\0]/.test(s))) return fail(res, 404, 'not_found', 'Not Found', false);
     const rel = segments.filter((s) => s !== '').join('/');
     const name = basename(rel);
-    if (TEST_PAGES.has(name)) return fail(res, 404, 'not_found', 'Not Found', false);
+    if (TEST_PAGES.has(name.toLowerCase())) return fail(res, 404, 'not_found', 'Not Found', false);
     if (rel === '' || rel === 'index.html') return serveIndex(res, method);
     let root: string;
     try {
@@ -638,7 +678,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     let file: string | null = null;
     try {
       const real = realpathSync(join(root, rel));
-      if (real.startsWith(root + sep) && statSync(real).isFile() && !TEST_PAGES.has(basename(real))) file = real;
+      if (real.startsWith(root + sep) && statSync(real).isFile() && !TEST_PAGES.has(basename(real).toLowerCase())) file = real;
     } catch {
       file = null;
     }
@@ -684,7 +724,9 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
       if (site !== undefined && site !== 'same-origin' && !(site === 'none' && !isApi)) throw new HttpError(403, 'forbidden_origin', 'cross-site request refused');
       if (req.method === 'OPTIONS') throw new HttpError(403, 'forbidden', 'no cross-origin access');
       const query = new URLSearchParams(search);
-      if ([...query.keys()].some((k) => KEYISH.test(k))) throw new HttpError(400, 'invalid_request', 'a key never goes in a URL; send it in a POST body');
+      if ([...query.keys()].some((k) => KEYISH.test(k)) || [...query.values()].some((v) => new RegExp(KEY_SHAPE.source, 'i').test(v))) {
+        throw new HttpError(400, 'invalid_request', 'a key never goes in a URL; send it in a POST body');
+      }
       if (isApi) await api(req, res, apiRoute, query);
       else serveStatic(req, res, pathname, search);
     } catch (e) {
@@ -697,19 +739,24 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     }
   }
 
-  const server = createServer((req, res) => void handle(req, res));
+  const server = createServer({ headersTimeout: HEADERS_TIMEOUT_MS, requestTimeout: REQUEST_TIMEOUT_MS }, (req, res) => void handle(req, res));
+  server.maxConnections = MAX_CONNECTIONS;
   port = await listen(server, opts.port ?? DEFAULT_PORT);
 
-  async function shutdown(): Promise<void> {
+  async function shutdown(): Promise<boolean> {
     stopping = true;
     for (const r of runs) r.controller.abort(cancelReason('the runner is shutting down'));
     for (const t of trials.values()) if (!t.ended) t.controller.abort(cancelReason('the runner is shutting down'));
-    await Promise.race([Promise.all(runs.map((r) => r.done)), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS).unref())]);
+    const closed = await Promise.race([
+      Promise.all(runs.map((r) => r.done)).then(() => true),
+      new Promise<false>((r) => setTimeout(() => r(false), opts.shutdownWaitMs ?? SHUTDOWN_WAIT_MS).unref()),
+    ]);
     for (const t of trials.values()) closeStreams(t);
     await new Promise<void>((r) => {
       server.close(() => r());
       server.closeAllConnections();
     });
+    return closed;
   }
 
   return { server, port, url: `http://127.0.0.1:${port}${BASE}`, token, shutdown };

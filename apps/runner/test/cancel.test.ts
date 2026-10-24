@@ -79,7 +79,7 @@ describe('cancel (gate case 6)', () => {
 
   it('SIGINT mid-trial cancels it, closes the batch and exits 0 within 10 s', async () => {
     const home = tempDir('runner-sigint');
-    const c = spawnRunner(['--mock', '--port', '0'], { HOME: home, CLINENV_RUNS_DIR: join(home, 'runs'), NODE_ENV: 'test', CLINENV_RUNNER_TEST_TRANSPORT: 'stall', CLINENV_WEB_DIST: fakeDist() });
+    const c = spawnRunner(['--mock', '--port', '0'], { HOME: home, CLINENV_RUNS_DIR: join(home, 'runs'), NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_RUNNER_TEST_TRANSPORT: 'stall', CLINENV_WEB_DIST: fakeDist() });
     const port = portOf(await c.url);
     const token = tokenMeta((await http(port, 'GET', '/clinical-agent-env/')).text) as string;
     const a = (await http(port, 'POST', '/api/trials', { token, body: toyTrial() })).json() as { run_id: string };

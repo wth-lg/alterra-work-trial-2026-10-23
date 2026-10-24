@@ -29,7 +29,8 @@
 //   GET    api/runs     200 RunsList: the runs this runner process started, in start order.
 // The key travels only in the POST body. No response, error or validator message carries it.
 // No Node or DOM imports: this file is checked by the isomorphism lint.
-import { FINAL_TRIALS_PER_TASK } from './cost.ts';
+import { reserveRequest, type MessageParam, type MessageParams } from './anthropic.ts';
+import { FINAL_TRIALS_PER_TASK, worstCaseUsd } from './cost.ts';
 import { PROJECTED_CAP_USD } from './ledger.ts';
 import { EFFORTS, type Effort } from './run.ts';
 
@@ -49,6 +50,15 @@ export const MAX_CONCURRENCY = 4;
 export const MAX_TASKS = 16;
 // The frame that ends a trial's stream when no graded event will come.
 export const SSE_END = 'end';
+
+// POST api/key's one Validate call, and its worst case: what the ledger reserves for it and what
+// a live check adds to a trial's projection.
+export const VALIDATE_REQUEST: { readonly history: readonly MessageParam[]; readonly params: MessageParams } = {
+  history: [{ role: 'user', content: 'Reply with OK.' }],
+  params: { max_tokens: 16, output_config: { effort: 'low' } },
+};
+
+export const validateWorstCaseUsd = (): number => worstCaseUsd(reserveRequest(VALIDATE_REQUEST.history, VALIDATE_REQUEST.params));
 
 export type LedgerMode = 'own-run' | 'default';
 const LEDGER_MODES: readonly LedgerMode[] = ['own-run', 'default'];
@@ -204,6 +214,8 @@ export interface ProjectionTerms {
   ledger: { mode: LedgerMode; settled_usd: number; reserved_usd: number; open_usd: number; exposure_usd: number };
   projected_cap_usd: number;
   session_cap_usd: number;
+  // What this runner session has committed: its ledger rows' settled and reserved spend plus the
+  // not-yet-reserved projection of each of its batches still running.
   session_spent_usd: number;
 }
 

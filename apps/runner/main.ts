@@ -1,13 +1,17 @@
 // node apps/runner/main.ts [--port N] [--mock]
 // The local runner behind the UI (plan phase P12b; server.ts has the contract). `pnpm start`
 // builds the UI and runs this. It listens on 127.0.0.1 only, on --port, else CLINENV_PORT, else
-// 5180, and on a free port the OS picks when that one is taken, and prints one line:
+// 5180, and on a free port the OS picks when that one is taken, saying so:
+//   runner: port <asked> is in use; using port <port>
+// then prints the URL it serves:
 //   clinenv local runner: http://127.0.0.1:<port>/clinical-agent-env/
 // then one line per request (method, path, status, duration). --mock answers every call from the
 // toy scenario of `run-one --mock toy`: no network call. SIGINT or SIGTERM cancels every trial,
-// waits for every batch to write its close row and exits 0; exit 1 if that takes over 9 s.
+// waits for every batch to write its close row and exits 0; it exits 1 when a batch has not
+// closed within the runner's 8 s wait, or when closing takes over 9 s in all.
 //
-// Test hooks, honored only when NODE_ENV=test: CLINENV_WEB_DIST replaces apps/web/dist;
+// Test hooks, honored only when NODE_ENV=test and CLINENV_TEST_HOOKS=1 (NODE_ENV alone is not
+// enough: other tools set it): CLINENV_WEB_DIST replaces apps/web/dist;
 // CLINENV_RUNNER_TEST_TRANSPORT=toy answers every call from the toy scenario on the live code
 // path (the key goes in x-api-key, nothing leaves the process), =stall holds every trial call
 // until it is aborted.
@@ -49,7 +53,7 @@ export async function main(args: string[], env: Record<string, string | undefine
     process.stderr.write(`runner: the port must be a whole number from 0 to 65535\n${USAGE}\n`);
     return 2;
   }
-  const test = env.NODE_ENV === 'test';
+  const test = env.NODE_ENV === 'test' && env.CLINENV_TEST_HOOKS === '1';
   const dist = test && env.CLINENV_WEB_DIST ? env.CLINENV_WEB_DIST : DIST;
   const transport = test ? testTransport(env.CLINENV_RUNNER_TEST_TRANSPORT) : undefined;
   let runner;
@@ -73,9 +77,10 @@ export async function main(args: string[], env: Record<string, string | undefine
       }, EXIT_WAIT_MS);
       late.unref();
       r.shutdown().then(
-        () => {
+        (closed) => {
           clearTimeout(late);
-          resolveExit(0);
+          if (!closed) process.stderr.write('runner: a batch did not close in time; its ledger may show it still open\n');
+          resolveExit(closed ? 0 : 1);
         },
         (e: unknown) => {
           clearTimeout(late);
@@ -88,6 +93,7 @@ export async function main(args: string[], env: Record<string, string | undefine
     process.once('SIGTERM', () => stop('SIGTERM'));
   });
   if (!existsSync(join(dist, 'index.html'))) process.stderr.write(`runner: ${dist} has no index.html; build the UI first (pnpm build)\n`);
+  if (port !== 0 && runner.port !== port) process.stdout.write(`runner: port ${port} is in use; using port ${runner.port}\n`);
   process.stdout.write(`clinenv local runner: ${runner.url}\n`);
   return exited;
 }

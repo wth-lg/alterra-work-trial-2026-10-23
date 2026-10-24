@@ -56,6 +56,49 @@ describe('ledger caps and default mode (gate case 5)', () => {
     }
   });
 
+  it('counts a running batch against the session cap: a second batch that would cross it gets 409 with 0 calls', async () => {
+    // Each trial call stalls until it is aborted, so batch A is still running when B is posted.
+    const l = await launch({
+      answer: (label, _n, call) =>
+        label.includes('validate') ? undefined : new Promise<Response>((_, reject) => call.signal.addEventListener('abort', () => reject(call.signal.reason), { once: true })),
+    });
+    const ledger = join(l.home, '.clinenv', 'spend.jsonl');
+    try {
+      await l.http('POST', '/api/key', { body: { key: KEY } });
+      const before = parseDryRun((await l.http('POST', '/api/trials?dry_run=1', { body: toyTrial() })).json()).projection;
+      const p = before.total_usd;
+      const cap = before.session_spent_usd + 1.5 * p;
+      // Back to back, before A has reserved anything.
+      const [ra, rb] = await Promise.all([
+        l.http('POST', '/api/trials', { body: toyTrial({ session_cap_usd: cap }) }),
+        l.http('POST', '/api/trials', { body: toyTrial({ session_cap_usd: cap }) }),
+      ]);
+      expect([ra.status, rb.status].sort()).toEqual([202, 409]);
+      const [accepted, refused] = ra.status === 202 ? [ra, rb] : [rb, ra];
+      expect(parseTrialsRefused(refused.json()).error.type).toBe('session_cap');
+      const a = accepted.json() as { run_id: string; trial_ids: string[] };
+      await until('the trial call in flight', () => l.calls.some((c) => !c.label.includes('validate')));
+      // A third batch while A's call is in flight and reserved is refused too.
+      const c = await l.http('POST', '/api/trials', { body: toyTrial({ session_cap_usd: cap }) });
+      expect(c.status).toBe(409);
+      expect(parseTrialsRefused(c.json()).projection?.session_spent_usd).toBeGreaterThanOrEqual(before.session_spent_usd + p - 1e-9);
+      expect(parseRunsList((await l.http('GET', '/api/runs')).json()).runs.map((r) => r.run_id)).toEqual([a.run_id]);
+      expect(l.calls.filter((x) => !x.label.includes('validate'))).toHaveLength(1);
+      expect(l.calls.every((x) => x.label.includes('validate') || x.label.includes(a.run_id))).toBe(true);
+      // Once A closes, only what its rows hold counts: the commitment is released.
+      await l.http('DELETE', `/api/trials/${a.trial_ids[0]}`);
+      await until('batch A to close', () => rows(ledger).some((r) => r.kind === 'close' && r.run_id === a.run_id));
+      await until('batch A done', async () => parseRunsList((await l.http('GET', '/api/runs')).json()).runs[0]?.done === true);
+      const session = a.run_id.slice(0, a.run_id.lastIndexOf('-'));
+      const mine = rows(ledger).filter((r) => r.run_id?.startsWith(session));
+      const settled = mine.filter((r) => r.kind === 'settle').reduce((s, r) => s + (r.cost_usd ?? 0), 0);
+      const after = parseDryRun((await l.http('POST', '/api/trials?dry_run=1', { body: toyTrial() })).json()).projection;
+      expect(after.session_spent_usd).toBeCloseTo(settled, 6);
+    } finally {
+      await l.runner.shutdown();
+    }
+  });
+
   it('stops the batch once settled spend reaches ACTUAL_CAP_USD', async () => {
     let ledger = '';
     const l = await launch({

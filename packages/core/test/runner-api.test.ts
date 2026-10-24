@@ -1,11 +1,12 @@
 // The local runner's health, key, trial, run and SSE contracts: every sample the UI specs route-mock with
 // passes its validator, and a body with a field missing or mistyped is rejected.
 import { describe, expect, it } from 'vitest';
-import { FINAL_TRIALS_PER_TASK } from '../cost.ts';
+import { reserveRequest } from '../anthropic.ts';
+import { FINAL_TRIALS_PER_TASK, worstCaseUsd } from '../cost.ts';
 import {
   ContractError, HEALTH_PATH, KEY_PATH, MAX_CONCURRENCY, MAX_TRIALS_PER_TASK, parseDryRun, parseHealth, parseKeyRequest, parseKeyState,
   parseRunnerError, parseRunsList, parseSse, parseSseEnd, parseTrialsAccepted, parseTrialsRefused, parseTrialsRequest, parseTrialView,
-  RUNNER_APP, RUNS_PATH, SAMPLES, sseFrame, SSE_END, TOKEN_HEADER, TOKEN_META, TRIALS_PATH,
+  RUNNER_APP, RUNS_PATH, SAMPLES, sseFrame, SSE_END, TOKEN_HEADER, TOKEN_META, TRIALS_PATH, VALIDATE_REQUEST, validateWorstCaseUsd,
 } from '../runner-api.ts';
 
 const without = (o: object, k: string) => Object.fromEntries(Object.entries(o).filter(([name]) => name !== k));
@@ -145,5 +146,14 @@ describe('runner-api trial, run and SSE contracts (P12b)', () => {
     expect(() => parseSseEnd({ state: 'graded' })).toThrow(ContractError);
     expect(() => parseDryRun({ ...SAMPLES.dryRun, calls: 1 })).toThrow(ContractError);
     expect(() => parseTrialsAccepted({ ...SAMPLES.trialsAccepted, trial_ids: [] })).toThrow(ContractError);
+  });
+});
+
+describe('the Validate call', () => {
+  it('is one low-effort call of at most 16 output tokens, and its worst case is what the ledger reserves for it', () => {
+    expect(VALIDATE_REQUEST.params).toEqual({ max_tokens: 16, output_config: { effort: 'low' } });
+    expect(validateWorstCaseUsd()).toBe(worstCaseUsd(reserveRequest(VALIDATE_REQUEST.history, VALIDATE_REQUEST.params)));
+    expect(validateWorstCaseUsd()).toBeGreaterThan(0);
+    expect(validateWorstCaseUsd()).toBeLessThan(0.1);
   });
 });

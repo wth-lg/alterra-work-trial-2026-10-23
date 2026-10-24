@@ -142,7 +142,7 @@ describe('key secrecy (gate case 2)', () => {
     const home = tempDir('runner-secrecy');
     const runs = join(home, 'runs');
     const c = spawnRunner(['--port', '0'], {
-      HOME: home, CLINENV_RUNS_DIR: runs, NODE_ENV: 'test', CLINENV_RUNNER_TEST_TRANSPORT: 'toy', ANTHROPIC_API_KEY: key,
+      HOME: home, CLINENV_RUNS_DIR: runs, NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_RUNNER_TEST_TRANSPORT: 'toy', ANTHROPIC_API_KEY: key,
       CLINENV_WEB_DIST: join(home, 'no-dist'),
     });
     const port = Number(new URL(await c.url).port);
@@ -150,7 +150,7 @@ describe('key secrecy (gate case 2)', () => {
     expect((await http(port, 'GET', '/api/health')).json()).toMatchObject({ key_loaded: false });
     c.child.kill('SIGINT');
     expect((await c.exit).code).toBe(0);
-    const d = spawnRunner(['--port', '0'], { HOME: home, CLINENV_RUNS_DIR: runs, NODE_ENV: 'test', CLINENV_RUNNER_TEST_TRANSPORT: 'toy', CLINENV_WEB_DIST: fakeDist() });
+    const d = spawnRunner(['--port', '0'], { HOME: home, CLINENV_RUNS_DIR: runs, NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_RUNNER_TEST_TRANSPORT: 'toy', CLINENV_WEB_DIST: fakeDist() });
     const p2 = Number(new URL(await d.url).port);
     const token = tokenMeta((await http(p2, 'GET', '/clinical-agent-env/')).text) as string;
     expect((await http(p2, 'POST', '/api/key', { token, body: { key } })).status).toBe(200);

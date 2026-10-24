@@ -44,10 +44,11 @@ describe('bind (gate case 1)', () => {
     const held = await occupy(5180);
     const home = tempDir('runner-bind');
     try {
-      const c = spawnRunner(['--mock'], { HOME: home, CLINENV_RUNS_DIR: join(home, 'runs'), NODE_ENV: 'test', CLINENV_WEB_DIST: fakeDist() });
+      const c = spawnRunner(['--mock'], { HOME: home, CLINENV_RUNS_DIR: join(home, 'runs'), NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_WEB_DIST: fakeDist() });
       const url = await c.url;
       expect(portOf(url)).not.toBe(5180);
       expect(c.stdout()).toMatch(/^clinenv local runner: http:\/\/127\.0\.0\.1:\d+\/clinical-agent-env\/$/m);
+      expect(c.stdout()).toContain(`runner: port 5180 is in use; using port ${portOf(url)}\n`);
       expect((await http(portOf(url), 'GET', '/api/health')).status).toBe(200);
       c.child.kill('SIGINT');
       expect((await c.exit).code).toBe(0);
@@ -64,9 +65,10 @@ describe('bind (gate case 1)', () => {
       });
     });
     const home = tempDir('runner-port');
-    const env = { HOME: home, CLINENV_RUNS_DIR: join(home, 'runs'), NODE_ENV: 'test', CLINENV_WEB_DIST: fakeDist() };
+    const env = { HOME: home, CLINENV_RUNS_DIR: join(home, 'runs'), NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_WEB_DIST: fakeDist() };
     const a = spawnRunner(['--mock', '--port', String(free)], env);
     expect(portOf(await a.url)).toBe(free);
+    expect(a.stdout()).not.toContain('is in use');
     a.child.kill('SIGINT');
     expect((await a.exit).code).toBe(0);
     const b = spawnRunner(['--mock'], { ...env, CLINENV_PORT: String(free) });
