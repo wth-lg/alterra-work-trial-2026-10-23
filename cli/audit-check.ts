@@ -8,6 +8,9 @@
 //   - every failure (a valid trial that is not a PASS) has exactly one label, whose outcome is the
 //     record's and whose taxonomy is in the label set (packages/grader/attribution.ts TAXONOMY);
 //     a taxonomy of environment or grader is counted and is a violation;
+//   - no failure label contradicts itself: on an outcome that is the model's fault
+//     (packages/core/outcomes.ts FAULT: FAIL, LIMIT), a model taxonomy (TAXONOMY) says
+//     model_fault yes or unclear, never no, and an environment or grader taxonomy never says yes;
 //   - each failure label names a decisive step that is a step of the trajectory;
 //   - every evidence id of every label appears in the trajectory (exposed, referenced or written);
 //   - every decisive id of a failure was exposed, or is exposable: it is in the world, so the tool
@@ -24,7 +27,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BatchRecord } from '../packages/core/batch.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
-import { isValid } from '../packages/core/outcomes.ts';
+import { FAULT, isValid, type Outcome } from '../packages/core/outcomes.ts';
 import { parseTrajectory } from '../packages/core/trajectory.ts';
 import { loadStore } from '../packages/env/fixture-source.ts';
 import { TAXONOMY, type Attribution } from '../packages/grader/attribution.ts';
@@ -136,6 +139,11 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     if (l.taxonomy !== null && NOT_MODEL.has(l.taxonomy)) v.push(`${l.trial}: labelled ${l.taxonomy}: a failure that is the ${l.taxonomy}'s fault, not the model's`);
     else if (!(TAXONOMY as readonly (string | null)[]).includes(l.taxonomy)) v.push(`${l.trial}: taxonomy ${l.taxonomy} is not in the label set (${TAXONOMY.join(', ')})`);
     if (!['yes', 'no', 'unclear'].includes(l.model_fault as string)) v.push(`${l.trial}: model_fault must be yes, no or unclear`);
+    else if (FAULT[r.outcome as Outcome] === 'model') {
+      const modelLabel = (TAXONOMY as readonly (string | null)[]).includes(l.taxonomy);
+      if (modelLabel && l.model_fault === 'no') v.push(`${l.trial}: labelled ${l.taxonomy}, a model failure, with model_fault no`);
+      if (l.taxonomy !== null && NOT_MODEL.has(l.taxonomy) && l.model_fault === 'yes') v.push(`${l.trial}: labelled ${l.taxonomy}, not the model's fault, with model_fault yes`);
+    }
     const n = stepsFor(r).length;
     if (!Number.isSafeInteger(l.decisive_step) || (l.decisive_step as number) < 1 || (l.decisive_step as number) > n) {
       v.push(`${l.trial}: decisive step ${l.decisive_step} is not a step of the trajectory (1-${n})`);

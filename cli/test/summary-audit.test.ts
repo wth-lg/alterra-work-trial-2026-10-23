@@ -13,7 +13,7 @@ import { main as taskHash } from '../task-hash.ts';
 import { repoRoot, tempDir } from '../../scripts/test/helpers.ts';
 import { AUDIT_FIXTURES, SUMMARY_FIXTURES, writeFixtureRun, type Fixture } from './run-fixtures.ts';
 
-const REQUIRE = `valid=10,band=2-7,env_error_raw=0,model=${MODEL},replay=all`;
+const REQUIRE = `valid=10,band=2-7,env_error_raw=0,grader_error=0,model=${MODEL},replay=all`;
 
 function run(fixture: Fixture): string {
   const dir = tempDir(`run-${fixture}`);
@@ -51,8 +51,34 @@ describe('summary --require', () => {
   it.each(SUMMARY_FIXTURES)('exits 1 on %s, naming the violation', async (fixture) => {
     const r = await cli(summary, [run(fixture), '--require', REQUIRE]);
     expect(r.code, r.out + r.err).toBe(1);
-    const why = { 'nine-trials': /t-alpha.*9 valid trials.*10/, 'model-mismatch': /claude-other-model/, 'requeued-env-error': /ENV_ERROR.*1.*0/, 'replay-mismatch': /replay.*t-alpha\/2/, 'eight-of-ten': /t-alpha.*8\/10.*2-7/ }[fixture];
+    const why = { 'nine-trials': /t-alpha.*9 valid trials.*10/, 'model-mismatch': /claude-other-model/, 'requeued-env-error': /ENV_ERROR.*1.*0/, 'replay-mismatch': /replay.*t-alpha\/2/, 'eight-of-ten': /t-alpha.*8\/10.*2-7/,
+      'missing-task': /t-beta.*expected.*no records/, 'mock-mode': /mock-fixture.*--allow-mock/, 'grader-error': /GRADER_ERROR raw count 1/,
+    }[fixture];
     expect(r.out + r.err).toMatch(why);
+  });
+
+  it('a mock run meets --require only with --allow-mock; mode=live refuses it even then', async () => {
+    const dir = run('mock-mode');
+    expect((await cli(summary, [dir, '--require', REQUIRE, '--allow-mock'])).code).toBe(0);
+    const live = await cli(summary, [dir, '--require', `${REQUIRE},mode=live`, '--allow-mock']);
+    expect(live.code).toBe(1);
+    expect(live.out).toMatch(/mode mock-fixture.*required live/);
+    expect((await cli(summary, [run('clean'), '--require', `${REQUIRE},mode=live`])).code).toBe(0);
+  });
+
+  it('--task names the tasks the run must hold: one with no records is a violation', async () => {
+    const dir = run('clean');
+    expect((await cli(summary, [dir, '--require', REQUIRE, '--task', 't-alpha,t-beta'])).code).toBe(0);
+    const r = await cli(summary, [dir, '--require', REQUIRE, '--task', 't-alpha,t-gamma']);
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/t-gamma: expected by --task, no records/);
+  });
+
+  it('grader_error counts a GRADER_ERROR record a later regrade passed, and says GRADER_ERROR is never re-queued', async () => {
+    const r = await cli(summary, [run('grader-error'), '--require', 'grader_error=0', '--json']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/GRADER_ERROR raw 1 .*never re-queued/);
+    expect(JSON.parse(r.out).totals.grader_error_raw).toBe(1);
   });
 
   it('exits 2 on an unknown requirement and 1 on a missing run', async () => {
@@ -78,6 +104,7 @@ describe('audit-check', () => {
       'unadjudicated': /t-beta\/5.*adjudicat/,
       'never-exposable': /t-beta\/9.*Observation\/never-in-world.*never exposed.*not exposable/,
       'one-audited-pass': /t-beta.*1 audited PASS/,
+      'model-fault-no': /t-alpha\/7.*reasoning.*model_fault no/,
     }[fixture];
     expect(r.out + r.err).toMatch(why);
   });
@@ -100,5 +127,28 @@ describe('task-hash', () => {
     const b = await hash();
     expect(b.files_hash).not.toBe(a.files_hash);
     expect(b.task_version).not.toBe(a.task_version);
+  });
+
+  it('takes --task <id|all|id,id> as matrix, oracle and run do, and the positional form', async () => {
+    const root = tempDir('task-hash-flag');
+    for (const id of ['_toy', 'renal-dose-review']) {
+      cpSync(join(repoRoot, 'tasks/_toy'), join(root, id), { recursive: true });
+      const toml = join(root, id, 'task.toml');
+      writeFileSync(toml, readFileSync(toml, 'utf8').replace(/^id = "_toy"$/m, `id = "${id}"`));
+    }
+    const tasks = nodeTaskSource({ root, testMode: false });
+    const hash = async (args: string[]) => {
+      const out: string[] = [];
+      const code = await taskHash([...args, '--json'], { out: (l) => out.push(l), err: (l) => out.push(l), tasks });
+      return { code, out: out.join('\n') };
+    };
+    const positional = await hash(['_toy']);
+    expect(positional.code).toBe(0);
+    expect(await hash(['--task', '_toy'])).toEqual(positional);
+    expect((await hash(['--task'])).code).toBe(2);
+    expect((await hash(['--task', '_toy', 'renal-dose-review'])).code).toBe(2);
+    const listed = JSON.parse((await hash(['--task', '_toy,renal-dose-review'])).out).tasks.map((t: { id: string }) => t.id);
+    expect(listed).toEqual(['_toy', 'renal-dose-review']);
+    expect(JSON.parse((await hash(['--task', 'all'])).out).tasks.map((t: { id: string }) => t.id)).toEqual(['renal-dose-review']);
   });
 });

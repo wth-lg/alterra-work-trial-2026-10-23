@@ -75,8 +75,24 @@ describe('--require', () => {
   it('a clean run meets every requirement; 8/10 breaks the band', () => {
     const req = parseRequire(`valid=10,band=2-7,env_error_raw=0,model=${MODEL},replay=all`);
     const clean = [...tenOf('t-a', 5), ...tenOf('t-b', 3)];
-    expect(checkRequirements(summarize({ run_id: 'r', trials: clean, requeued: [], replay: replayAll(clean) }), req)).toEqual([]);
+    expect(checkRequirements(summarize({ run_id: 'r', trials: clean, requeued: [], replay: replayAll(clean), mode: 'live' }), req)).toEqual([]);
     const high = [...tenOf('t-a', 8), ...tenOf('t-b', 3)];
-    expect(checkRequirements(summarize({ run_id: 'r', trials: high, requeued: [], replay: replayAll(high) }), req)).toEqual([expect.stringMatching(/t-a.*8\/10.*2-7/)]);
+    expect(checkRequirements(summarize({ run_id: 'r', trials: high, requeued: [], replay: replayAll(high), mode: 'live' }), req)).toEqual([expect.stringMatching(/t-a.*8\/10.*2-7/)]);
+  });
+
+  it('with any requirement, an expected task without records, a mock run and a GRADER_ERROR record are violations', () => {
+    const clean = [...tenOf('t-a', 5), ...tenOf('t-b', 3)];
+    const base = { run_id: 'r', trials: clean, requeued: [], replay: replayAll(clean) };
+    const missing = summarize({ ...base, mode: 'live', expected: { tasks: ['t-a', 't-b', 't-c'], from: 'the run manifest' } });
+    expect(checkRequirements(missing, parseRequire('valid=10'))).toEqual(['t-c: expected by the run manifest, no records', 't-c: 0 valid trials, required 10']);
+    expect(checkRequirements(missing, {})).toEqual([]);
+    const mock = summarize({ ...base, mode: 'mock-toy' });
+    expect(checkRequirements(mock, parseRequire('valid=10'))).toEqual([expect.stringMatching(/mode mock-toy: not a live run; pass --allow-mock/)]);
+    expect(checkRequirements(mock, { ...parseRequire('valid=10'), allow_mock: true })).toEqual([]);
+    expect(checkRequirements(mock, { ...parseRequire('valid=10,mode=live'), allow_mock: true })).toEqual(['mode mock-toy, required live']);
+    const graderError = summarize({ ...base, mode: 'live', trials: [...clean, trial('t-a', 10, 'GRADER_ERROR')] });
+    expect(graderError.totals.grader_error_raw).toBe(1);
+    expect(checkRequirements(graderError, parseRequire('valid=10,grader_error=0'))).toEqual([expect.stringMatching(/GRADER_ERROR raw count 1/)]);
+    expect(() => assertSummary(JSON.parse(JSON.stringify(graderError)))).not.toThrow();
   });
 });
