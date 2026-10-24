@@ -1,0 +1,2 @@
+heading "renal-dose-review trial 3"
+text "FAIL model order_dose_adjusted failed: expected an order for 250 mg, every 12 h, found 500 mg every 8 h"

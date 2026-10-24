@@ -1,0 +1,193 @@
+{
+  "pdf_block_sha256": "be77ec35f4c37962ec79a41ac2a9f9a1ec10a260d880a14342613571a4aa89ca",
+  "done_when_clauses": 2,
+  "rows": [
+    {
+      "id": "A1",
+      "text_sha256": "088646f36749855c2615abd20b332e173a06e1852cc5804b08a2ee7f14aa4735",
+      "kind": "scope",
+      "code": [
+        "src/store.txt"
+      ],
+      "tests": [
+        "test/store.check.txt"
+      ],
+      "ui_required": false,
+      "evidence": [
+        "verifier-phase-P25c-1/A1-build.txt"
+      ],
+      "expect": {
+        "command": {
+          "cmd": "node -e \"process.exit(0)\"",
+          "exit": 0
+        }
+      },
+      "phase": "P1",
+      "done_when": [
+        1
+      ]
+    },
+    {
+      "id": "N1",
+      "text_sha256": "da8beba89e11e0e8068a3bfd2c6b4417748d2399f15be209304bd3e333c349a4",
+      "kind": "need",
+      "code": [
+        "src/store.txt",
+        "src/ui.txt"
+      ],
+      "tests": [
+        "test/store.check.txt"
+      ],
+      "ui_required": true,
+      "ui": {
+        "route": "/?view=environment",
+        "action": "press Try on fhir_search",
+        "surface": "any"
+      },
+      "evidence": [
+        "verifier-phase-P25c-1/N1-environment-try.png",
+        "verifier-phase-P25c-1/N1-environment-try.ax.txt"
+      ],
+      "expect": {
+        "ax_text": {
+          "file": "verifier-phase-P25c-1/N1-environment-try.ax.txt",
+          "text": "hash unchanged"
+        }
+      },
+      "phase": "P2"
+    },
+    {
+      "id": "N2",
+      "text_sha256": "05ed451492618c81c6cd4ac2c9f5ad3283141ad3c8083b710eec9e280f36470d",
+      "kind": "need",
+      "code": [
+        "src/store.txt"
+      ],
+      "tests": [
+        "test/store.check.txt"
+      ],
+      "ui_required": true,
+      "ui": {
+        "route": "/?view=environment",
+        "action": "read the tool catalogue",
+        "surface": "any"
+      },
+      "evidence": [
+        "verifier-phase-P25c-1/N2-environment-catalogue.png",
+        "verifier-phase-P25c-1/N2-environment-catalogue.ax.txt",
+        "verifier-phase-P25c-1/N2-write-check.txt"
+      ],
+      "expect": [
+        {
+          "command": {
+            "cmd": "node -e \"process.exit(3)\"",
+            "exit": 3
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/N2-environment-catalogue.ax.txt",
+            "text": "fhir_search"
+          }
+        }
+      ],
+      "phase": "P1"
+    },
+    {
+      "id": "W1",
+      "text_sha256": "f2be48a45ff22af1e922d3fa4dbe7d1a4ab5d981eab50953b9eb4142e4973b5d",
+      "kind": "want",
+      "code": [
+        "src/ui.txt"
+      ],
+      "tests": [
+        "test/store.check.txt"
+      ],
+      "ui_required": true,
+      "ui": {
+        "route": "/?view=runs",
+        "action": "read the pass rate",
+        "surface": "any"
+      },
+      "evidence": [
+        "verifier-phase-P25c-1/W1-runs-pass-rate.png",
+        "verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt"
+      ],
+      "expect": [
+        {
+          "command": {
+            "cmd": "node -e \"process.exit(0)\"",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt",
+            "text": "1 of 1 tasks in band"
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt",
+            "pattern": "\\b([0-9]|1[0-9]|20)/20 passed\\b",
+            "min_matches": 1
+          }
+        }
+      ],
+      "phase": "P2",
+      "done_when": [
+        2
+      ]
+    },
+    {
+      "id": "H1",
+      "text_sha256": "cded7462de401f6f6ff7bc664a346d51d4255d62aa56d2de8b84a9131948a3cf",
+      "kind": "handover",
+      "code": [
+        "src/store.txt"
+      ],
+      "tests": [
+        "test/store.check.txt"
+      ],
+      "ui_required": false,
+      "evidence": [
+        "verifier-phase-P25c-1/H1-writeup.txt"
+      ],
+      "expect": {
+        "command": {
+          "cmd": "node -e \"process.exit(0)\"",
+          "exit": 0
+        }
+      },
+      "phase": "P1"
+    },
+    {
+      "id": "U1",
+      "text_sha256": "f6e0cbe7c843f4a59b6f8f20ab09f0d5917b029597fff0abb18659eabe10b778",
+      "kind": "user",
+      "code": [
+        "src/ui.txt"
+      ],
+      "tests": [
+        "test/store.check.txt"
+      ],
+      "ui_required": true,
+      "ui": {
+        "route": "/",
+        "action": "open the app",
+        "surface": "local"
+      },
+      "evidence": [
+        "verifier-phase-P25c-1/U1-overview-surface.png",
+        "verifier-phase-P25c-1/U1-overview-surface.ax.txt"
+      ],
+      "expect": {
+        "ax_text": {
+          "file": "verifier-phase-P25c-1/U1-overview-surface.ax.txt",
+          "text": "local runner"
+        }
+      },
+      "phase": "P2"
+    }
+  ]
+}

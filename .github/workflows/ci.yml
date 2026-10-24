@@ -40,6 +40,10 @@ jobs:
       # judge outputs, no key, no live call; a judge cache miss or any failing task fails the step.
       - name: grader validation matrix
         run: pnpm cli matrix --task all
+      # The requirement-trace matrix (plan phase P9t): every assignment sentence and user
+      # modification has a row with code, tests, a UI screen and action, evidence and an expect.
+      - name: requirement trace
+        run: pnpm cli trace-check
       - run: pnpm build
       - run: pnpm fixtures:verify
       - run: pnpm fixtures:lint
