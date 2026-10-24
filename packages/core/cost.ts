@@ -31,9 +31,12 @@ export const JUDGE_ALLOWANCE_USD = 1;
 // Added to the final-run reserve until results/runs/final-1/auditor/ holds outputs: one
 // blinded auditor pass over ~40 audited trajectories of the final run.
 export const AUDITOR_ALLOWANCE_USD = 10;
-// The final run: 10 trials of each of the 6 planned tasks.
+// The final run (user decision, 2026-10-24): FINAL_TRIALS_PER_TASK trials of each planned
+// task, and the pass band a task's final pass rate is calibrated into, inclusive. Every
+// final-run count in the code reads these.
 export const PLANNED_TASKS = 6;
-export const FINAL_TRIALS_PER_TASK = 10;
+export const FINAL_TRIALS_PER_TASK = 20;
+export const FINAL_PASS_BAND = [0.2, 0.7] as const;
 
 // The usage block of a Messages response.
 export interface Usage {
@@ -88,7 +91,7 @@ export function worstCaseUsd(req: { bodyBytes: number; maxTokens: number; fast?:
 }
 
 // One trial record from a --cost-from run. run_order is the run's position in the
-// --cost-from list: a later run is newer.
+// --cost-from list: a later run is newer. cost_usd is the trial's loop cost plus its judge cost.
 export interface TrialObservation {
   run: string;
   run_order: number;
@@ -172,22 +175,25 @@ export function projectBatch(
   );
 }
 
-// Whether a final trial counts toward its task's 10 valid trials: outcomes.ts decides.
+// Whether a final trial counts toward its task's FINAL_TRIALS_PER_TASK valid trials:
+// outcomes.ts decides.
 export const isValidTrial = (outcome: string | undefined): boolean => isValid(outcome);
 
-// What the rest of the final run will cost: per planned task, (10 - valid final trials) x its
-// per-trial cost x 1.15; planned tasks not written yet (up to 6) at the cap; plus the auditor
-// allowance until the auditor has run. Observed task ids outside the plan are ignored, so a
-// stray id cannot stand in for a planned task. Ids starting with '_' are not real tasks.
+// What the rest of the final run will cost: per planned task, (FINAL_TRIALS_PER_TASK - valid
+// final trials) x its per-trial cost x RERUN_FACTOR; planned tasks not written yet (up to
+// PLANNED_TASKS) at the cap; plus the auditor allowance until the auditor has run. A final
+// trial's valid flag, when given, is its current grade's (summary.ts currentGrade) and wins
+// over its recorded outcome. Observed task ids outside the plan are ignored, so a stray id
+// cannot stand in for a planned task. Ids starting with '_' are not real tasks.
 export function finalReserve(input: {
   plannedTasks: readonly string[];
   observations: readonly TrialObservation[];
-  finalTrials: ReadonlyArray<{ task_id: string; outcome?: string }>;
+  finalTrials: ReadonlyArray<{ task_id: string; outcome?: string; valid?: boolean }>;
   auditorDone: boolean;
 }): Projection {
   const ids = [...new Set(input.plannedTasks)].filter((id) => !id.startsWith('_')).sort();
   const lines = ids.map((id) => {
-    const valid = input.finalTrials.filter((t) => t.task_id === id && isValidTrial(t.outcome)).length;
+    const valid = input.finalTrials.filter((t) => t.task_id === id && (t.valid ?? isValidTrial(t.outcome))).length;
     return line(id, 1, Math.max(0, FINAL_TRIALS_PER_TASK - valid), perTrialCost(id, null, input.observations));
   });
   const missing = Math.max(0, PLANNED_TASKS - ids.length);

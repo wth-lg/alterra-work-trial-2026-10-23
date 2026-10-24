@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUDITOR_ALLOWANCE_USD,
+  FINAL_PASS_BAND,
+  FINAL_TRIALS_PER_TASK,
   finalReserve,
   formatProjection,
   JUDGE_ALLOWANCE_USD,
   p90,
   PER_TRIAL_CAP_USD,
   perTrialCost,
+  PLANNED_TASKS,
   projectBatch,
   RERUN_FACTOR,
   type TrialObservation,
@@ -61,12 +64,21 @@ describe('batch projection (case 14)', () => {
   });
 });
 
+// The final run's size, from the constants only.
+const N = FINAL_TRIALS_PER_TASK;
+
 describe('final-run reserve', () => {
-  it('with no runs is 60 x $6 x 1.15 plus the auditor allowance', () => {
+  it('holds the decided final run: 20 trials per task, 120 in all, pass band 0.20-0.70 (user, 2026-10-24)', () => {
+    expect(FINAL_TRIALS_PER_TASK).toBe(20);
+    expect(FINAL_TRIALS_PER_TASK * PLANNED_TASKS).toBe(120);
+    expect(FINAL_PASS_BAND).toEqual([0.2, 0.7]);
+  });
+
+  it('with no runs is every final trial x $6 x 1.15 plus the auditor allowance', () => {
     const r = finalReserve({ plannedTasks: [], observations: [], finalTrials: [], auditorDone: false });
-    expect(r.total).toBeCloseTo(60 * 6 * 1.15 + AUDITOR_ALLOWANCE_USD, 9);
+    expect(r.total).toBeCloseTo(N * PLANNED_TASKS * PER_TRIAL_CAP_USD * RERUN_FACTOR + AUDITOR_ALLOWANCE_USD, 9);
     const text = formatProjection(r).join('\n');
-    expect(text).toContain('6 tasks without data x 10 trials x $6.00');
+    expect(text).toContain(`${PLANNED_TASKS} tasks without data x ${N} trials x $6.00`);
     expect(text).toContain(`auditor allowance $${AUDITOR_ALLOWANCE_USD.toFixed(2)}`);
   });
 
@@ -80,11 +92,23 @@ describe('final-run reserve', () => {
       { task_id: 'T2', outcome: 'INFRA' },
     ];
     const r = finalReserve({ plannedTasks: tasks, observations: data, finalTrials, auditorDone: true });
-    // T1 has 2 valid final trials, so 8 remain; every other task has 10 remaining.
-    const expected = (8 * 1.3 + tasks.slice(1).reduce((s, _t, i) => s + 10 * (1.3 + i + 1), 0)) * RERUN_FACTOR;
+    // T1 has 2 valid final trials, so N - 2 remain; every other task has N remaining.
+    const expected = ((N - 2) * 1.3 + tasks.slice(1).reduce((s, _t, i) => s + N * (1.3 + i + 1), 0)) * RERUN_FACTOR;
     expect(r.total).toBeCloseTo(expected, 9);
     expect(r.allowance).toEqual({ name: 'auditor', usd: 0 });
-    expect(r.lines.find((l) => l.task_id === 'T1')?.trials).toBe(8);
+    expect(r.lines.find((l) => l.task_id === 'T1')?.trials).toBe(N - 2);
+  });
+
+  it('a final trial’s valid flag (its current grade) wins over its recorded outcome', () => {
+    const finalTrials = [
+      { task_id: 'T1', outcome: 'PASS', valid: false },
+      { task_id: 'T1', outcome: 'GRADER_ERROR', valid: true },
+      { task_id: 'T1', outcome: 'GRADER_ERROR', valid: true },
+      { task_id: 'T1', outcome: 'FAIL' },
+    ];
+    // By the flags 3 are valid; by the recorded outcomes alone it would be 2.
+    const r = finalReserve({ plannedTasks: ['T1'], observations: [], finalTrials, auditorDone: true });
+    expect(r.lines.find((l) => l.task_id === 'T1')?.trials).toBe(N - 3);
   });
 });
 
@@ -117,12 +141,12 @@ describe('final-run reserve counts the planned task list', () => {
     const data = [...planned.slice(0, 5), 'scratch'].flatMap((t) => obs('results/pilot-2', 2, t, `${t}-v1`, TEN));
     const r = finalReserve({ plannedTasks: planned, observations: data, finalTrials: [], auditorDone: true });
     expect(r.lines.map((l) => l.task_id)).toEqual(planned);
-    expect(r.total).toBeCloseTo((5 * 10 * 1.3 + 10 * PER_TRIAL_CAP_USD) * RERUN_FACTOR, 9);
+    expect(r.total).toBeCloseTo((5 * N * 1.3 + N * PER_TRIAL_CAP_USD) * RERUN_FACTOR, 9);
   });
 
   it('counts planned tasks not written yet at the cap, up to the 6 planned', () => {
     const r = finalReserve({ plannedTasks: ['T1', 'T2'], observations: obs('p', 0, 'T1', 'v1', [1]), finalTrials: [], auditorDone: true });
-    expect(r.total).toBeCloseTo((10 * 1 + 10 * 6 + 4 * 10 * 6) * RERUN_FACTOR, 9);
-    expect(formatProjection(r).join('\n')).toContain('4 tasks without data x 10 trials x $6.00');
+    expect(r.total).toBeCloseTo((N * 1 + N * PER_TRIAL_CAP_USD + (PLANNED_TASKS - 2) * N * PER_TRIAL_CAP_USD) * RERUN_FACTOR, 9);
+    expect(formatProjection(r).join('\n')).toContain(`${PLANNED_TASKS - 2} tasks without data x ${N} trials x $6.00`);
   });
 });
