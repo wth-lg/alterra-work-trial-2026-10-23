@@ -2,8 +2,9 @@
 // batchStart is given and opens nothing; a ledger whose exposure plus that projection crosses
 // $450 refuses before any call; a mocked trial writes the record and the trajectory JSONL,
 // meters through the ledger and closes its batch; a rerun of a recorded trial key sends nothing.
-// The toy has a grader (tasks/_toy/tests/grader.ts), so the projection is the per-trial cap plus
-// its judge allowance, and the mocked trial makes three model calls and two judge calls and PASSes.
+// The toy has a grader (tasks/_toy/tests/grader.ts), so the dry-run projection is the per-trial
+// cap plus its judge allowance (bounded by the judge's body cap), and the mocked trial makes three
+// model calls and two judge calls, each judge call on its own right-sized grant, and PASSes.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -12,6 +13,7 @@ import { scenarioTransport } from '../../../apps/web/src/harness/scenarios.ts';
 import { main, projection, type Deps } from '../../../cli/run-one.ts';
 import { checks as TOY_CHECKS } from '../../../tasks/_toy/tests/grader.ts';
 import type { Transport } from '../anthropic.ts';
+import { PER_TRIAL_CAP_USD } from '../cost.ts';
 import { parseTrajectory } from '../trajectory.ts';
 
 function harness(env: Record<string, string>) {
@@ -45,9 +47,11 @@ describe('cli run-one', () => {
     expect(existsSync(join(dir, 'spend.jsonl'))).toBe(false);
   });
 
-  it('refuses with 0 calls when ledger + projection = $450.01', async () => {
+  // The loop's grant is the per-trial cap; the dry run's larger projection is the upper bound
+  // spend --check takes, and each judge call is checked against $450 on its own grant.
+  it('refuses with 0 calls when ledger + the per-trial cap = $450.01', async () => {
     const dir = tempDir('run-one');
-    write(dir, 'spend.jsonl', seed(Number((450.01 - projection(TOY_CHECKS)).toFixed(6))));
+    write(dir, 'spend.jsonl', seed(Number((450.01 - PER_TRIAL_CAP_USD).toFixed(6))));
     const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
     expect(h.calls()).toBe(0);
@@ -68,8 +72,18 @@ describe('cli run-one', () => {
     expect(events.filter((e) => e.type === 'request')).toHaveLength(3);
     const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     expect(rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed')).toHaveLength(5);
-    expect(rows.filter((r) => r.kind === 'open')).toHaveLength(1);
-    expect(rows.filter((r) => r.kind === 'close')).toHaveLength(1);
+    // The loop's grant holds the per-trial cap; each judge call has its own grant, opened at
+    // that call's worst case from its real request body (no 64,000-byte bound) and closed after.
+    const opens = rows.filter((r) => r.kind === 'open');
+    expect(opens.map((r) => r.projection)).toEqual([6, expect.any(Number), expect.any(Number)]);
+    const judgeReserves = rows.filter((r) => r.kind === 'reserve' && opens.slice(1).some((o) => o.batch_id === r.batch_id));
+    expect(judgeReserves.map((r) => r.cost_usd)).toEqual(opens.slice(1).map((o) => o.projection));
+    for (const o of opens.slice(1)) expect(o.projection).toBeLessThan(0.07);
+    expect(rows.filter((r) => r.kind === 'close')).toHaveLength(3);
+    // The record carries every settled dollar of the trial: the loop's and the judge's.
+    const settled = rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed').reduce((s, r) => s + r.cost_usd, 0);
+    expect(record.cost_usd + record.judge_cost_usd).toBeCloseTo(settled, 9);
+    expect(h.lines.join('\n')).toMatch(/^spend: projected \$\S+ \(loop cap \$6\.00 \+ 2 judge grants \$\S+\), settled \$\S+ \(loop \$\S+ \+ judge \$\S+\)$/m);
     expect(rows.filter((r) => r.kind === 'reserve' && r.call_id !== 'seed').every((r) => r.trial === 'mock:run-one:_toy/claude-opus-5-5/high/mock-toy/0')).toBe(true);
 
     const again = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });

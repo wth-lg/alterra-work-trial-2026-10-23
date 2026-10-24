@@ -24,14 +24,18 @@
 // Allowance: a trial's judge calls are bounded by its projection, two calls (the schema retry)
 // per judge and hybrid item, counted per call, whichever item makes them (a code item that asks
 // ctx.judge included). Past the bound a question is not sent: it is unknown, marked 'judge
-// allowance reached' in the record.
+// allowance reached' in the record. judgeAllowanceUsd prices each call at the body cap, an upper
+// bound for when the graded text is not known yet (a dry run). Once a request is built its real
+// size is known: perCallGrantClient opens each call's grant at that request's worst case.
 //
 // Cache: every answer is kept under sha256 of (model, effort, prompt version, prompt, graded
 // text), with the calls it took, and the entries go into the trial record, so a regrade from
-// them is byte-identical and free. With a cache and no client (regrade, replay), a miss is an
+// them is byte-identical and free. A task's canned cache (tests/judge-cache.json) also says where
+// each answer came from: provenance {source: live | scripted, model, at}. With a cache and no client (regrade, replay), a miss is an
 // error: JudgeCacheMiss. With neither, judge and hybrid-fallback items are unknown.
 import { classifyFailure, MODEL, reserveRequest, type CallResult, type ClientFailure, type MessageParam, type MessageParams, type SendOptions } from '../core/anthropic.ts';
 import { worstCaseUsd } from '../core/cost.ts';
+import type { BatchGrant, Ledger } from '../core/ledger.ts';
 import type { Check, Json, Verdict } from './check.ts';
 import { canonicalNumber } from './normalize.ts';
 
@@ -81,8 +85,20 @@ export interface JudgeCacheEntry {
   // allowance).
   answer: { [k: string]: Json } | null;
   error: string | null;
-  // The API calls the answer took: 0, 1 or 2.
+  // The API calls the answer took: 0, 1 or 2 (0 for a scripted answer).
   calls: number;
+  // Where a canned answer came from; set when a task's cache file is written.
+  provenance?: JudgeProvenance;
+}
+
+export interface JudgeProvenance {
+  [k: string]: Json;
+  // live: the judge model answered it (oracle --live-judge); scripted: a script wrote it.
+  source: 'live' | 'scripted';
+  // The model that answered, or what wrote a scripted answer.
+  model: string;
+  // When, as an ISO 8601 time.
+  at: string;
 }
 
 // A judge or extractor call the client failed: infrastructure, not an answer.
@@ -292,4 +308,23 @@ export const judgeCallBudget = (checks: readonly Check[]): number => JUDGE_CALLS
 // request with JUDGE_MAX_TOKENS of output.
 export function judgeAllowanceUsd(checks: readonly Check[]): number {
   return judgeCallBudget(checks) * worstCaseUsd({ bodyBytes: JUDGE_MAX_BODY_BYTES, maxTokens: JUDGE_MAX_TOKENS });
+}
+
+// A judge client whose every call runs under its own batch grant, opened at that call's worst
+// case from its real request (body bytes and max_tokens, what the client reserves) and closed
+// after it. batchStart checks the $450 projected cap right then, and an open grant never holds
+// more than the one call it covers. `client` builds the call's MessagesClient on the grant.
+export function perCallGrantClient(opts: { ledger: Pick<Ledger, 'batchStart'>; client: (grant: BatchGrant) => JudgeClient; onGrant?: (projection: number) => void }): JudgeClient {
+  return {
+    async send(history, params, sendOpts) {
+      const projection = worstCaseUsd(reserveRequest(history, params));
+      const grant = await opts.ledger.batchStart(projection);
+      opts.onGrant?.(projection);
+      try {
+        return await opts.client(grant).send(history, params, sendOpts);
+      } finally {
+        await grant.close();
+      }
+    },
+  };
 }
