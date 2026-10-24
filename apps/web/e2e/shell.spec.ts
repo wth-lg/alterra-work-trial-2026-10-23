@@ -1,6 +1,8 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Request, type Route } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { MODEL } from '../../../packages/core/anthropic.ts';
 import { HEALTH_PATH, KEY_PATH, SAMPLES, TOKEN_HEADER, TOKEN_META } from '../../../packages/core/runner-api.ts';
 import { admitTrial, DEFAULT_SESSION_CAP_USD } from '../src/spend/cap.ts';
@@ -83,9 +85,10 @@ async function mockBrowserDirect(page: Page) {
 
 const CORS_HEADERS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST' };
 
-function sse(): string {
+// inputTokens 4990 with 2 output tokens prices at $0.02 ($4 and $20 per million).
+function sse(inputTokens = 12): string {
   const events = [
-    { type: 'message_start', message: { id: 'msg_e2e', type: 'message', role: 'assistant', model: MODEL, content: [], stop_reason: null, usage: { input_tokens: 12, output_tokens: 0 } } },
+    { type: 'message_start', message: { id: 'msg_e2e', type: 'message', role: 'assistant', model: MODEL, content: [], stop_reason: null, usage: { input_tokens: inputTokens, output_tokens: 0 } } },
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
     { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } },
     { type: 'content_block_stop', index: 0 },
@@ -96,13 +99,14 @@ function sse(): string {
 }
 
 // The Messages API: a 200 stream, or an HTTP error with the given message.
-async function mockApi(page: Page, reply: { status: 200 } | { status: number; type: string; message: string }) {
+async function mockApi(page: Page, reply: { status: 200; inputTokens?: number; hold?: Promise<void> } | { status: number; type: string; message: string }) {
   const calls: Request[] = [];
-  await page.route((url) => url.origin === API_ORIGIN, (route) => {
+  await page.route((url) => url.origin === API_ORIGIN, async (route) => {
     const r = route.request();
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS_HEADERS });
     calls.push(r);
-    if (reply.status === 200) return route.fulfill({ status: 200, contentType: 'text/event-stream', body: sse(), headers: CORS_HEADERS });
+    if (reply.status === 200 && 'hold' in reply && reply.hold) return reply.hold.then(() => route.abort().catch(() => {}));
+    if (reply.status === 200) return route.fulfill({ status: 200, contentType: 'text/event-stream', body: sse('inputTokens' in reply ? reply.inputTokens : undefined), headers: CORS_HEADERS });
     const { status, type, message } = reply as { status: number; type: string; message: string };
     return json(route, status, { type: 'error', error: { type, message } }, CORS_HEADERS);
   });
@@ -111,6 +115,8 @@ async function mockApi(page: Page, reply: { status: 200 } | { status: number; ty
 
 const keyField = (page: Page) => page.getByLabel('API key', { exact: true });
 const chip = (page: Page) => page.getByTestId('surface-chip');
+const capField = (page: Page) => page.getByLabel('Session spend cap (USD)');
+const validate = (page: Page) => page.getByRole('button', { name: 'Validate' }).click();
 
 test.describe('surface detection', () => {
   test('a chartr-runner health names the local runner', async ({ page }) => {
@@ -304,4 +310,276 @@ test('admitTrial refuses a trial whose estimate crosses the session cap', () => 
   const refused = admitTrial({ cap: 20, spent: 19, estimate: 1.01 });
   expect(refused.ok).toBe(false);
   expect(refused.ok ? '' : refused.reason).toMatch(/session cap \$20\.00/);
+});
+
+test.describe('session cap across a reload (browser-direct)', () => {
+  test('cap $0.05, $0.02 spent: the next Validate is refused, and still refused after a reload', async ({ page }) => {
+    await mockBrowserDirect(page);
+    const calls = await mockApi(page, { status: 200, inputTokens: 4990 });
+    await page.goto('./');
+    await keyField(page).fill(sentinelKey());
+    await capField(page).fill('0.05');
+    await validate(page);
+    await expect(page.getByText('Spend $0.02 of $0.05')).toBeAttached();
+    expect(calls).toHaveLength(1);
+
+    await page.getByRole('button', { name: 'Forget key' }).click();
+    await expect(capField(page)).toHaveValue('0.05');
+    await keyField(page).fill(sentinelKey());
+    await validate(page);
+    await expect(page.getByRole('alert')).toContainText('session cap $0.05');
+
+    await page.reload();
+    await expect(capField(page)).toHaveValue('0.05');
+    await keyField(page).fill(sentinelKey());
+    await validate(page);
+    await expect(page.getByRole('alert')).toContainText('spent $0.02');
+    await expect(page.getByRole('alert')).toContainText('session cap $0.05');
+    expect(calls).toHaveLength(1);
+    const stored = await page.evaluate(() => JSON.stringify(Object.fromEntries(Object.keys(sessionStorage).map((k) => [k, sessionStorage.getItem(k)]))));
+    expect(stored).not.toMatch(/sk-ant|Reply with/);
+  });
+
+  test('a reload during Validate counts the open reservation at its worst case', async ({ page }) => {
+    let release = () => {};
+    const hold = new Promise<void>((r) => (release = r));
+    await mockBrowserDirect(page);
+    const calls = await mockApi(page, { status: 200, hold });
+    await page.goto('./');
+    await keyField(page).fill(sentinelKey());
+    await capField(page).fill('0.05');
+    await validate(page);
+    await expect.poll(() => calls.length).toBe(1);
+    await page.reload();
+    release();
+    await keyField(page).fill(sentinelKey());
+    await validate(page);
+    await expect(page.getByRole('alert')).toContainText('session cap $0.05');
+    expect(calls).toHaveLength(1);
+  });
+
+  test('with Remember on, a reload keeps the cap the user set', async ({ page }) => {
+    await mockBrowserDirect(page);
+    await mockApi(page, { status: 200 });
+    await page.goto('./');
+    await keyField(page).fill(sentinelKey());
+    await capField(page).fill('1');
+    await page.getByLabel('Remember in this tab').check();
+    await validate(page);
+    await expect(page.getByText('Spend $0.00 of $1.00')).toBeAttached();
+    await page.reload();
+    await expect(page.getByTestId('key-chip')).not.toHaveText('No key');
+    await expect(page.getByText('Spend $0.00 of $1.00')).toBeAttached();
+  });
+});
+
+test.describe('the runner\'s own page (token meta present)', () => {
+  test('a runner error that echoes the key is shown redacted', async ({ page }) => {
+    await mockLocalRunner(page, 'stub');
+    const key = sentinelKey();
+    await page.route((url) => isPath(url, KEY_PATH), (route) => json(route, 401, { error: { type: 'authentication_error', message: `invalid x-api-key ${key}` } }));
+    await page.goto('./');
+    await keyField(page).fill(key);
+    await validate(page);
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('invalid x-api-key [redacted]');
+    await expect(alert).not.toContainText(key);
+  });
+
+  test('a slow health never falls back to browser-direct: it shows runner not responding with the command, and retries', async ({ page }) => {
+    let answer = false;
+    await mockLocalRunner(page, 'stub');
+    await page.route((url) => isPath(url, HEALTH_PATH), async (route) => {
+      if (answer) return json(route, 200, SAMPLES.health);
+      await new Promise((r) => setTimeout(r, 4000));
+      return route.abort().catch(() => {});
+    });
+    await page.goto('./');
+    await expect(page.getByRole('heading', { name: /runner not responding/i })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('local-command')).toHaveText(LOCAL_START_COMMAND);
+    await expect(chip(page)).toHaveCount(0);
+    await expect(keyField(page)).toHaveCount(0);
+    answer = true;
+    await expect(chip(page)).toHaveText('Local runner', { timeout: 10_000 });
+  });
+
+  test('a health that does not parse as chartr-runner shows runner not responding, not browser-direct', async ({ page }) => {
+    await mockLocalRunner(page, 'stub');
+    await page.route((url) => isPath(url, HEALTH_PATH), (route) => json(route, 200, { app: 'chartr-runner', api_version: 1, key_set: false }));
+    await page.goto('./');
+    await expect(page.getByRole('heading', { name: /runner not responding/i })).toBeVisible();
+    await expect(page.getByText('Browser-direct')).toHaveCount(0);
+  });
+
+  test('POST api/key does not follow a redirect', async ({ page }) => {
+    await mockLocalRunner(page, 'stub');
+    // A route handler never sees the request a redirect makes, so watch the request events.
+    const followed: string[] = [];
+    page.on('request', (r) => (new URL(r.url()).pathname.endsWith('/elsewhere') ? followed.push(r.method()) : undefined));
+    await page.route((url) => isPath(url, KEY_PATH), (route) => route.fulfill({ status: 307, headers: { location: './elsewhere' } }));
+    await page.goto('./');
+    await keyField(page).fill(sentinelKey());
+    await validate(page);
+    await expect(page.getByRole('alert')).toContainText('local runner');
+    expect(followed).toEqual([]);
+    await expect(page.getByTestId('key-chip')).toHaveCount(0);
+  });
+});
+
+test.describe('gate details', () => {
+  test('after Validate, focus moves to the shell\'s main heading', async ({ page }) => {
+    await mockBrowserDirect(page);
+    await mockApi(page, { status: 200 });
+    await page.goto('./');
+    await keyField(page).fill(sentinelKey());
+    await keyField(page).press('Enter');
+    await expect(page.getByRole('heading', { level: 1 })).toBeFocused();
+  });
+
+  test('the key input is described by its hint and, after a failure, by the error', async ({ page }) => {
+    await mockBrowserDirect(page);
+    await mockApi(page, { status: 401, type: 'authentication_error', message: 'invalid x-api-key' });
+    await page.goto('./');
+    await expect(keyField(page)).toHaveAccessibleDescription(/stays in this tab's memory/);
+    await keyField(page).fill(sentinelKey());
+    await validate(page);
+    await expect(keyField(page)).toHaveAccessibleDescription(/invalid x-api-key/);
+    await expect(keyField(page)).toHaveAccessibleDescription(/stays in this tab's memory/);
+  });
+
+  test('the key input keeps type password and asks password managers to ignore it', async ({ page }) => {
+    await mockBrowserDirect(page);
+    await page.goto('./');
+    const input = keyField(page);
+    await expect(input).toHaveAttribute('type', 'password');
+    await expect(input).toHaveAttribute('autocomplete', 'off');
+    for (const a of ['data-1p-ignore', 'data-lpignore', 'data-bwignore', 'data-form-type']) await expect(input).toHaveAttribute(a, /.*/);
+  });
+
+  test('a cap with more than two decimals rounds to the cent and submits', async ({ page }) => {
+    await mockBrowserDirect(page);
+    const calls = await mockApi(page, { status: 200 });
+    await page.goto('./');
+    await keyField(page).fill(sentinelKey());
+    await capField(page).fill('20.555');
+    await expect(page.getByText('Rounded to $20.56.')).toBeVisible();
+    await validate(page);
+    await expect(page.getByText('Spend $0.00 of $20.56')).toBeAttached();
+    expect(calls).toHaveLength(1);
+  });
+
+  test('org-CORS: the reason first, then the command with a 24px Copy button, the raw API line last', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockBrowserDirect(page);
+    await mockApi(page, { status: 401, type: 'authentication_error', message: ORG_CORS });
+    await page.goto('./');
+    await keyField(page).fill(sentinelKey());
+    await validate(page);
+    const alert = page.getByRole('alert');
+    const text = await alert.innerText();
+    const at = (s: string) => text.indexOf(s);
+    expect(at("This key's organization does not allow browser access.")).toBeGreaterThanOrEqual(0);
+    expect(at("This key's organization does not allow browser access.")).toBeLessThan(at('git clone'));
+    expect(at('git clone')).toBeLessThan(at(ORG_CORS));
+    const box = (await page.getByRole('button', { name: 'Copy command' }).boundingBox())!;
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(24);
+    // Each space- or slash-separated piece of the command sits on one line.
+    const split = await page.getByTestId('local-command').evaluate((el) => {
+      const pieces: string[] = [];
+      for (const span of el.querySelectorAll('[data-piece]')) if (span.getClientRects().length > 1) pieces.push(span.textContent ?? '');
+      return { pieces, wordBreak: getComputedStyle(el).wordBreak, spans: el.querySelectorAll('[data-piece]').length };
+    });
+    expect(split.spans).toBeGreaterThan(3);
+    expect(split.pieces).toEqual([]);
+    expect(split.wordBreak).not.toBe('break-all');
+  });
+});
+
+// The gate (normal, org-CORS, another API error) and the shell, light and dark, at 1440x900
+// and 390x844: no horizontal scroll, the key actions on screen, and axe finds nothing serious
+// or critical. SHOTS_DIR saves a screenshot of each.
+const SIZES = [{ width: 1440, height: 900 }, { width: 390, height: 844 }];
+const STATES = ['gate', 'gate-orgcors', 'gate-error', 'shell'] as const;
+
+async function openState(page: Page, state: (typeof STATES)[number]) {
+  await mockBrowserDirect(page);
+  if (state === 'gate-orgcors') await mockApi(page, { status: 401, type: 'authentication_error', message: ORG_CORS });
+  if (state === 'gate-error') await mockApi(page, { status: 401, type: 'authentication_error', message: 'invalid x-api-key' });
+  await page.goto('./');
+  await expect(keyField(page)).toBeVisible();
+  if (state === 'gate-orgcors' || state === 'gate-error') {
+    await keyField(page).fill(sentinelKey());
+    await validate(page);
+    await expect(page.getByRole('alert')).toBeVisible();
+  }
+  if (state === 'shell') {
+    await page.getByRole('button', { name: 'Browse without a key' }).click();
+    await expect(page.getByRole('navigation', { name: 'Views' })).toBeVisible();
+  }
+}
+
+for (const scheme of ['light', 'dark'] as const) {
+  for (const size of SIZES) {
+    for (const state of STATES) {
+      test(`${state} ${scheme} ${size.width}x${size.height}: no horizontal scroll, axe 0 serious or critical`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: scheme });
+        await page.setViewportSize(size);
+        await openState(page, state);
+        await page.evaluate(() => document.fonts.ready);
+        const { scrollWidth, clientWidth } = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+        expect(scrollWidth, 'document scrollWidth').toBe(clientWidth);
+        if (state === 'shell') {
+          const add = (await page.getByRole('button', { name: 'Add key' }).boundingBox())!;
+          expect(add.x + add.width).toBeLessThanOrEqual(size.width);
+          expect(add.x).toBeGreaterThanOrEqual(0);
+          const header = await page.locator('header').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(header.scrollWidth, 'header scrollWidth').toBe(header.clientWidth);
+        }
+        const results = await new AxeBuilder({ page }).analyze();
+        const bad = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+        expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+        if (process.env.SHOTS_DIR) {
+          mkdirSync(process.env.SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.SHOTS_DIR, `${state}-${size.width}x${size.height}-${scheme}.png`), fullPage: true });
+        }
+      });
+    }
+  }
+}
+
+test('Forget key stays on screen at 390 with a key held', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockBrowserDirect(page);
+  await mockApi(page, { status: 200 });
+  await page.goto('./');
+  await keyField(page).fill(sentinelKey());
+  await validate(page);
+  const forget = (await page.getByRole('button', { name: 'Forget key' }).boundingBox())!;
+  expect(forget.x + forget.width).toBeLessThanOrEqual(390);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
+test('the rail link\'s visible text is its accessible name', async ({ page }) => {
+  await mockBrowserDirect(page);
+  await page.goto('./');
+  await page.getByRole('button', { name: 'Browse without a key' }).click();
+  const link = page.getByRole('navigation', { name: 'Views' }).getByRole('link', { name: 'Environment' });
+  await expect(link).toHaveText('Environment');
+  await expect(link).not.toHaveAttribute('aria-label', /.*/);
+});
+
+test('design: white cards with a stone-200 border on a stone-50 page, 4px controls, active rail stone-200/80', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await mockBrowserDirect(page);
+  await page.goto('./');
+  const style = (sel: string, props: string[]) =>
+    page.locator(sel).first().evaluate((el, ps) => Object.fromEntries(ps.map((p) => [p, getComputedStyle(el).getPropertyValue(p)])), props);
+  // Computed colours come back as oklch() for the stone tokens; compare against Tailwind's values.
+  expect(await style('form', ['background-color', 'border-top-color'])).toEqual({ 'background-color': 'rgb(255, 255, 255)', 'border-top-color': 'oklch(0.923 0.003 48.717)' });
+  expect(await style('main', ['background-color'])).toEqual({ 'background-color': 'oklch(0.985 0.001 106.423)' });
+  for (const sel of ['button[type="submit"]', 'input[type="password"]']) expect((await style(sel, ['border-radius']))['border-radius'], sel).toBe('4px');
+  await page.getByRole('button', { name: 'Browse without a key' }).click();
+  const active = page.getByRole('navigation', { name: 'Views' }).locator('a[aria-current="page"]');
+  // bg-line/80 is a color-mix, which the browser reports in oklab: stone-200's lightness at 80%.
+  expect(await active.evaluate((el) => getComputedStyle(el).backgroundColor)).toMatch(/^oklab\(0\.923 [\d.]+ [\d.]+ \/ 0\.8\)$/);
 });
