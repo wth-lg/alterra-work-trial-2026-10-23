@@ -1,4 +1,4 @@
-// pnpm cli matrix --task <id>
+// pnpm cli matrix --task <id>|all
 // The grader validation matrix of one task (packages/grader/matrix/matrix.ts), offline: the
 // oracle, the alternatives, the mutants and the null, spray, output-gap and status-only agents
 // run as scripted models through run(), graded by tasks/<id>/tests/grader.ts with judge items
@@ -6,6 +6,9 @@
 // judge.unknown, every count and verdict, double derivation, regrade idempotence, replay
 // determinism and traceability, and exits 0 when the matrix holds, 1 when it does not (a judge
 // cache miss included: it names the item and never makes a call), 2 on a usage error.
+// --task all runs the matrix of every directory under tasks/ that has tests/, one after the
+// other, prints a summary line per task and exits 1 when any task fails (a usage error
+// included), 0 when all pass. CI runs this form.
 // It never builds a Messages client and opens no ledger: `pnpm cli oracle --live-judge` is the
 // only command that asks the judge live and refreshes the cache.
 // Two checks need Node and live here, given to the matrix as options:
@@ -16,7 +19,7 @@
 //                   compiler's module resolution and fails on any expected.ts or overlay module
 //                   it reaches, and on any dynamic import whose specifier is not a constant
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { availableParallelism } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
@@ -34,7 +37,7 @@ import { nodeTaskSource, TASKS_DIR } from './adapters/tasks-node.ts';
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 // A task id is a directory name: no path separators, no '..'.
 export const TASK_ID = /^[A-Za-z0-9_-]+$/;
-const USAGE = 'usage: pnpm cli matrix --task <id>';
+const USAGE = 'usage: pnpm cli matrix --task <id>|all';
 
 // The TOML parser is packages/core's dependency (its task parser's); it is resolved from there,
 // so reading [matrix] needs no new dependency.
@@ -48,6 +51,16 @@ export interface Deps {
   // Narrows the run (a unit test's subset of cases, one trial, one grade); default the whole
   // matrix with the isolation check and the policy import graph.
   options?: MatrixOptions;
+  // The task ids --task all runs; default matrixTaskIds.
+  tasks?: () => string[];
+}
+
+// The tasks --task all runs: each directory under tasks/ with a tests/ directory, sorted.
+export function matrixTaskIds(root: string = TASKS_DIR): string[] {
+  return readdirSync(root, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && TASK_ID.test(d.name) && existsSync(join(root, d.name, 'tests')))
+    .map((d) => d.name)
+    .sort();
 }
 
 // The world, manifest hash and definitions every matrix trial starts from.
@@ -98,12 +111,35 @@ export async function loadMatrixTask(id: string, root: string = TASKS_DIR): Prom
 export async function main(args: string[], deps: Deps): Promise<number> {
   if (args.length !== 2 || args[0] !== '--task') return usage(deps, args.length === 0 ? '--task is required' : `unexpected arguments ${args.join(' ')}`);
   const id = args[1]!;
-  if (!TASK_ID.test(id)) return usage(deps, `--task ${JSON.stringify(id)} is not a task id (letters, digits, _ and - only)`);
+  if (id === 'all') return all(deps);
+  const r = await one(id, deps);
+  return r.usage === undefined ? r.code : usage(deps, r.usage);
+}
+
+// Every task's matrix in turn, then one summary line per task.
+async function all(deps: Deps): Promise<number> {
+  const ids = (deps.tasks ?? matrixTaskIds)();
+  const results: Array<{ id: string; pass: boolean; usage?: string }> = [];
+  for (const id of ids) {
+    const r = await one(id, deps);
+    if (r.usage !== undefined) deps.out(`matrix ${id}: ${r.usage}`);
+    results.push({ id, pass: r.code === 0, ...(r.usage !== undefined ? { usage: r.usage } : {}) });
+  }
+  const passed = results.filter((r) => r.pass).length;
+  deps.out(`matrix all: ${ids.length} tasks, ${passed} PASS, ${ids.length - passed} FAIL`);
+  for (const r of results) deps.out(`  ${r.id}: ${r.pass ? 'PASS' : 'FAIL'}${r.usage !== undefined ? ` (usage: ${r.usage})` : ''}`);
+  return ids.length > 0 && passed === ids.length ? 0 : 1;
+}
+
+// One task's matrix, its lines written to deps.out; a usage problem (not a task id, cannot be
+// loaded) is returned for the caller to print.
+async function one(id: string, deps: Deps): Promise<{ code: number; usage?: string }> {
+  if (!TASK_ID.test(id)) return { code: 2, usage: `--task ${JSON.stringify(id)} is not a task id (letters, digits, _ and - only)` };
   let task: MatrixTask;
   try {
     task = await (deps.load ?? loadMatrixTask)(id);
   } catch (e) {
-    return usage(deps, `--task: ${(e as Error).message}`);
+    return { code: 2, usage: `--task: ${(e as Error).message}` };
   }
   const options: MatrixOptions = {
     policyImports: () => policyImports(join(TASKS_DIR, id)),
@@ -115,10 +151,10 @@ export async function main(args: string[], deps: Deps): Promise<number> {
     result = await runMatrix(matrixEnv(), task, options);
   } catch (e) {
     deps.out(`matrix ${id}: FAIL\n  - ${(e as Error).message}`);
-    return 1;
+    return { code: 1 };
   }
   for (const line of result.lines) deps.out(line);
-  return result.pass ? 0 : 1;
+  return { code: result.pass ? 0 : 1 };
 }
 
 // What the fresh process reads on stdin.
