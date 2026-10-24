@@ -1,15 +1,18 @@
 // Which API failures stop the batch (design section 1, "Failure modes"), through both paths that
 // send: the trial loop and the judge. 401, 403, a 404 (the model: /v1/messages is the only
 // endpoint) and a billing 400 are INFRA_API and stop the batch; any other 400 is a request we
-// built wrong, INFRA_HARNESS, and stops it too. Each closes the grant. Retries exhausted (a 529
-// on all 8 attempts) is INFRA_API, rerun, and does not stop the batch (design section 5,
-// "Outcomes"). The loop and the judge read one classification, classifyFailure.
+// built wrong, INFRA_HARNESS, and stops it too, as does every other INFRA_HARNESS: an egress
+// refusal, a spend refusal and a local client error. A substituted model (INVALID) stops it too.
+// A batch stop always closes the grant, and the grant closes only on a batch stop. Retries
+// exhausted (a 429 or 529 on all 8 attempts) is INFRA_API, rerun, and does not stop the batch
+// (design section 5, "Outcomes"), and neither does an abort. The loop and the judge read one
+// classification, classifyFailure.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { okResponse, scriptedTransport, SCENARIOS } from '../../../apps/web/src/harness/scenarios.ts';
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { judged, type Check } from '../../grader/check.ts';
-import { ApiError, classifyFailure, MAX_ATTEMPTS, MessagesClient, type Transport } from '../anthropic.ts';
+import { ApiError, classifyFailure, EgressRefusal, MAX_ATTEMPTS, MessagesClient, type Transport } from '../anthropic.ts';
 import { admitStore, createLedger, SpendRefused, type LedgerRow, type LedgerStore } from '../ledger.ts';
 import { run } from '../run.ts';
 
@@ -19,8 +22,12 @@ const MANIFEST = JSON.parse(readFileSync(new URL('fixtures/manifest.json', root)
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
+  reserves = 0;
+  // Throws this error in place of the n-th reserve: a local fault or a spend refusal.
+  failReserve: { at: number; error: () => Error } | null = null;
   async transact<T>(fn: (rows: readonly LedgerRow[]) => { append: LedgerRow[]; result: T }): Promise<T> {
     const { append, result } = fn(this.rows);
+    if (append.some((r) => r.kind === 'reserve') && ++this.reserves === this.failReserve?.at) throw this.failReserve.error();
     this.rows.push(...append);
     return result;
   }
@@ -48,8 +55,9 @@ const CHECKS: Check[] = [judged({ id: 'J1', points: 1, category: 'documentation'
 
 // The toy trial through a real MessagesClient and an in-memory ledger. Trial requests (they
 // carry tools) go to `trial`, judge requests to `judge`.
-async function trial(t: { trial?: Transport; judge?: () => Response }) {
+async function trial(t: { trial?: Transport; judge?: () => Response; failReserve?: MemoryStore['failReserve']; signal?: AbortSignal }) {
   const store = new MemoryStore();
+  store.failReserve = t.failReserve ?? null;
   admitStore(store);
   let id = 0;
   const ledger = createLedger({ store, clock: { now: () => 't' }, newId: () => `id-${++id}`, source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
@@ -67,6 +75,7 @@ async function trial(t: { trial?: Transport; judge?: () => Response }) {
   const client = new MessagesClient({ grant, ledger, apiKey: 'test-key-not-real', fetch: (q) => ((clock += 4000), transport(q)), sleep: async () => {} });
   const { record } = await run('_toy', 'claude-opus-5-5', {
     tasks: nodeTaskSource({ testMode: true }), client, world: { read: async () => WORLD }, worldHash: MANIFEST.world.state_hash, now: () => clock, checks: CHECKS,
+    ...(t.signal ? { signal: t.signal } : {}),
   });
   const closes = store.rows.filter((r) => r.kind === 'close').length;
   // A closed grant refuses the next call before it sends anything.
@@ -97,9 +106,15 @@ describe('classifyFailure', () => {
     expect(classifyFailure(exhausted)).toEqual({ status: 'INFRA_API', code: 'overloaded_error', stopsBatch: false, message: exhausted.message });
     expect(classifyFailure(new ApiError('network error: reset', { status: null, type: null, retryable: true, stopsBatch: false, partial: true }))).toMatchObject({ status: 'INFRA_API', code: 'network', stopsBatch: false });
     expect(classifyFailure(new ApiError('response model x is not y', { status: 200, type: 'model_mismatch', retryable: false, stopsBatch: true }))).toMatchObject({ status: 'INVALID', code: 'model_mismatch', stopsBatch: true });
-    expect(classifyFailure(new ApiError('refused', { status: null, type: 'egress_refused', retryable: false, stopsBatch: false }))).toMatchObject({ status: 'INFRA_HARNESS', code: 'egress_refused', stopsBatch: false });
+    expect(classifyFailure(new ApiError('refused', { status: null, type: 'egress_refused', retryable: false, stopsBatch: true }))).toMatchObject({ status: 'INFRA_HARNESS', code: 'egress_refused', stopsBatch: true });
     expect(classifyFailure(new SpendRefused('projected', 'over the cap'))).toMatchObject({ status: 'INFRA_HARNESS', code: 'spend_refused_projected', stopsBatch: true });
-    expect(classifyFailure(new TypeError('bad request'))).toEqual({ status: 'INFRA_HARNESS', code: 'client_error', stopsBatch: false, message: 'TypeError: bad request' });
+    expect(classifyFailure(new TypeError('bad request'))).toEqual({ status: 'INFRA_HARNESS', code: 'client_error', stopsBatch: true, message: 'TypeError: bad request' });
+  });
+
+  it('every INFRA_HARNESS stops the batch, whatever the error says', () => {
+    // An ApiError built with stopsBatch false still stops it when it is INFRA_HARNESS.
+    expect(classifyFailure(new ApiError('refused', { status: null, type: 'egress_refused', retryable: false, stopsBatch: false }))).toMatchObject({ status: 'INFRA_HARNESS', stopsBatch: true });
+    expect(classifyFailure(new ApiError('HTTP 400', { status: 400, type: 'invalid_request_error', retryable: false, stopsBatch: false }))).toMatchObject({ status: 'INFRA_HARNESS', stopsBatch: true });
   });
 });
 
@@ -140,6 +155,75 @@ describe('through the judge', () => {
     const r = await trial({ judge: error(529, 'overloaded_error', 'Overloaded') });
     expect(r.judgeSends).toBe(8);
     expect(r.record).toMatchObject({ status: 'COMPLETED', outcome: 'INFRA_API', valid: false, fault: 'infra', error: { check: 'J1', stops_batch: false } });
+    expect(r.closes).toBe(0);
+    expect(r.after).not.toMatch(/closed/);
+  });
+});
+
+// The INFRA_HARNESS failures that are not an HTTP status: [name, outcome code, how it fails on
+// the trial's first model call, how it fails on the judge call]. The toy trial makes two model
+// calls, so the judge's reserve is the third.
+const egress: Transport = async () => {
+  throw new EgressRefusal('egress guard: request to the API host refused');
+};
+const LOCAL = [
+  ['egress refused', 'egress_refused', { trial: egress }, { judge: () => { throw new EgressRefusal('egress guard: request to the API host refused'); } }],
+  ['a local client error', 'client_error', { failReserve: { at: 1, error: () => new Error('ledger lock lost') } }, { failReserve: { at: 3, error: () => new Error('ledger lock lost') } }],
+  ['a spend refusal', 'spend_refused_actual', { failReserve: { at: 1, error: () => new SpendRefused('actual', 'actual spend is at the cap') } }, { failReserve: { at: 3, error: () => new SpendRefused('actual', 'actual spend is at the cap') } }],
+] as const;
+
+describe('every INFRA_HARNESS stops the batch', () => {
+  it.each(LOCAL)('%s on a model call: INFRA_HARNESS, the grant closed, the next call sends nothing', async (_name, code, onTrial) => {
+    const r = await trial(onTrial);
+    expect(r.record).toMatchObject({ status: 'INFRA_HARNESS', outcome: 'INFRA_HARNESS', valid: false, fault: 'infra', detail: code });
+    expect(r.closes).toBe(1);
+    expect(r.after).toMatch(/closed/);
+    expect(r.sent).toBe(0);
+  });
+
+  it.each(LOCAL)('%s on the judge call: INFRA_HARNESS with stops_batch, the grant closed, nothing cached', async (_name, _code, _onTrial, onJudge) => {
+    const r = await trial(onJudge);
+    expect(r.record).toMatchObject({ status: 'COMPLETED', outcome: 'INFRA_HARNESS', valid: false, fault: 'infra', error: { check: 'J1', stops_batch: true } });
+    expect(r.record.judge.cache).toEqual([]);
+    expect(r.closes).toBe(1);
+    expect(r.after).toMatch(/closed/);
+    expect(r.sent).toBe(0);
+  });
+});
+
+// Coordinator decision (P8 fix round 3, 2026-10-23): a substituted model is an API-side fault a
+// rerun does not cure, so it stops the batch. The trial stays INVALID (never counted).
+describe('a substituted model stops the batch', () => {
+  const substituted = () => okResponse({ text: '{"verdict":"met","quote":"Patient/pt-0001"}', model: 'claude-sonnet-5-5' }, 1);
+
+  it('on a model call: INVALID, the grant closed, the next call sends nothing', async () => {
+    const r = await trial({ trial: async () => substituted() });
+    expect(r.record).toMatchObject({ status: 'INVALID', outcome: 'INVALID', valid: false, detail: 'model_mismatch' });
+    expect(r.closes).toBe(1);
+    expect(r.after).toMatch(/closed/);
+    expect(r.sent).toBe(0);
+  });
+
+  it('on the judge call: INVALID with stops_batch, the grant closed, nothing cached', async () => {
+    const r = await trial({ judge: substituted });
+    expect(r.record).toMatchObject({ status: 'COMPLETED', outcome: 'INVALID', valid: false, error: { check: 'J1', stops_batch: true } });
+    expect(r.record.judge.cache).toEqual([]);
+    expect(r.closes).toBe(1);
+    expect(r.after).toMatch(/closed/);
+  });
+});
+
+describe('the grant closes only on a batch stop', () => {
+  it('an abort mid-call: CANCELLED, the grant stays open', async () => {
+    const ac = new AbortController();
+    const r = await trial({
+      signal: ac.signal,
+      trial: async () => {
+        ac.abort();
+        throw new DOMException('This operation was aborted', 'AbortError');
+      },
+    });
+    expect(r.record).toMatchObject({ status: 'CANCELLED', valid: false });
     expect(r.closes).toBe(0);
     expect(r.after).not.toMatch(/closed/);
   });
