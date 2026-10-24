@@ -432,9 +432,12 @@ describe('lookup_catalog', () => {
 });
 
 describe('list_inbox', () => {
+  // Task overlays put their own inbox items in the shared world, so each assertion looks only at
+  // this test's task-x-* rows.
+  const own = <T extends { task?: unknown }>(rows: T[]) => rows.filter((x) => String(x.task).startsWith('Task/task-x-'));
   it('lists a queue by received time, then id, and filters by status', () => {
-    const r = call('list_inbox', { queue: 'results' });
-    const rows = ok(r).entries as Array<Record<string, unknown>>;
+    const r = call('list_inbox', { queue: 'results', count: 50 });
+    const rows = own(ok(r).entries as Array<Record<string, unknown>>);
     expect(rows.map((x) => x.task)).toEqual(['Task/task-x-2', 'Task/task-x-1', 'Task/task-x-3']);
     expect(rows[1]).toEqual({
       task: 'Task/task-x-1',
@@ -446,9 +449,9 @@ describe('list_inbox', () => {
       status: 'requested',
     });
     expectTagsMatch(r);
-    const open = ok(call('list_inbox', { queue: 'results', status: 'requested' })).entries as Array<{ task: string }>;
+    const open = own(ok(call('list_inbox', { queue: 'results', status: 'requested', count: 50 })).entries as Array<{ task: string }>);
     expect(open.map((x) => x.task)).toEqual(['Task/task-x-1', 'Task/task-x-3']);
-    expect((ok(call('list_inbox', { queue: 'messages' })).entries as unknown[]).length).toBe(1);
+    expect(own(ok(call('list_inbox', { queue: 'messages', count: 50 })).entries as Array<{ task: string }>).map((x) => x.task)).toEqual(['Task/task-x-4']);
   });
 });
 
