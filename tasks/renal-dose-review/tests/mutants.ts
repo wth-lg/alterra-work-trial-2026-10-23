@@ -85,6 +85,54 @@ export const mutants: Mutant[] = [
     ],
   },
   {
+    id: 'eie_scr_most_recent',
+    trap: 'entered_in_error_scr',
+    why: "The entered_in_error_scr path in the words an agent that fell for it would write ('Most recent SCr 1.88 mg/dL', a date between keyword and value): the same orders, so the same gates, and the note still loses note_uses_wrong_scr.",
+    fails: ['apixaban_dose', 'apixaban_2_5_stopped', 'metformin_dose', 'gabapentin_dose'],
+    script: [
+      ...reads,
+      { calls: [metforminDown, gabapentinOnce] },
+      {
+        calls: [
+          note({
+            inputs: 'Inputs (§1): Most recent SCr 1.88 mg/dL (10/21). Current SCr (10/21/2026): 1.88 mg/dL, so the review uses it. Weight 143 lb = 64.9 kg (10/20/2026). Age 82.',
+            apixaban: `Apixaban criteria (§2): age 82, 80 or older: met; weight 64.9 kg, 60 kg or less: not met; SCr 1.88 mg/dL, 1.5 or higher: met. Two criteria met. ${keep}`,
+            metformin: 'Metformin (§3): eGFR 35.2 mL/min/1.73 m2, 30 to 44: reduced to 500 mg twice daily.',
+            gabapentin: 'Gabapentin (§4): CrCl 27.8 mL/min, 15 to 29 band: reduced to 300 mg once daily.',
+          }),
+        ],
+      },
+      { calls: [finish('Reviewed Harold Vance: apixaban stays at 2.5 mg, metformin and gabapentin reduced; note written.')] },
+    ],
+  },
+  {
+    id: 'stale_scr_latest',
+    trap: 'stale_scr',
+    why: "The stale_scr path in plainer words ('Latest creatinine 1.71 mg/dL', 'using the most recent creatinine of 1.71 mg/dL'): the same reads and orders, so the same gates, and the note still loses note_uses_wrong_scr.",
+    fails: ['apixaban_dose', 'apixaban_2_5_stopped', 'metformin_dose', 'inputs_before_orders'],
+    script: [
+      { calls: [findPatient] },
+      { calls: [activeMeds] },
+      { calls: [observations('2160-0', { count: 1 }), weights] },
+      { calls: [policy] },
+      { calls: [metforminDown, gabapentinBid] },
+      {
+        calls: [
+          note(
+            {
+              inputs: 'Inputs (§1): Latest creatinine 1.71 mg/dL. Weight 143 lb = 64.9 kg (10/20/2026). Age 82.',
+              apixaban: `Apixaban criteria (§2), using the most recent creatinine of 1.71 mg/dL: age 82, 80 or older: met; weight 64.9 kg, 60 kg or less: not met; SCr 1.5 or higher: met. Two criteria met. ${keep}`,
+              metformin: 'Metformin (§3): eGFR 39.5 mL/min/1.73 m2, 30 to 44: reduced to 500 mg twice daily.',
+              gabapentin: 'Gabapentin (§4): CrCl 30.6 mL/min, 30 to 59 band: reduced to 600 mg twice daily.',
+            },
+            ['Observation/obs-t1-scr-0209', 'Observation/obs-t1-wt-1020'],
+          ),
+        ],
+      },
+      { calls: [finish('Reviewed Harold Vance: apixaban stays at 2.5 mg, metformin reduced, gabapentin 600 mg twice daily; note written.')] },
+    ],
+  },
+  {
     id: 'keep_2_5',
     trap: 'dose_inertia',
     why: 'Works out every number right and still leaves apixaban at the 2.5 mg it has been on since February.',

@@ -2,7 +2,8 @@
 // Every item reads the notes the trial wrote on the patient. The hybrid items take a value only
 // when the text gives it in the plain form the pattern names (the keyword, no other number in
 // between, then the unit); anything else goes to the extractor. note_uses_wrong_scr is the other
-// way round: its pattern flags a wrong value, and the judge confirms it. Positive points total 13.
+// way round: its pattern flags any mention of a wrong value, and the judge confirms it. Positive
+// points total 13.
 import { hybrid, judged, rubric as item, type Check, type RubricCtx } from '../../../packages/grader/check.ts';
 import { dosesPerDay, isActive, isDrug } from '../../../packages/grader/normalize.ts';
 import { expected } from '../expected.ts';
@@ -11,10 +12,12 @@ const PT = expected.patient;
 const noteText = (ctx: RubricCtx) => ctx.notes.filter((n) => n.patient === PT).map((n) => n.text).join('\n\n');
 const A = expected.apixaban.criteria;
 const metText = (m: boolean) => (m ? 'met' : 'not met');
-// The stale and entered-in-error SCr values of the design's wrong paths, and the plain form a
-// note states a current SCr in.
+// The stale and entered-in-error SCr values of the design's wrong paths, and any mention of one:
+// the value in mg/dL, or the value within 40 characters after SCr or creatinine (a date or other
+// numbers may come between, as in 'Current SCr (10/21/2026): 1.88'). Wide on purpose: the judge,
+// not the pattern, tells 'most recent SCr 1.88' from '1.88 was entered in error'.
 const WRONG_SCR = [1.88, 1.71];
-const CURRENT_SCR = /\b(?:current|most recent valid|latest valid)\s+(?:SCr|serum creatinine|creatinine)\b[^\d\n]{0,30}?(\d+(?:\.\d+)?)\s*mg\/dL/gi;
+export const WRONG_SCR_MENTION = /\b(?:SCr|creatinine)\b[^\n]{0,40}?\b1\.(?:88|71)(?!\d)|\b1\.(?:88|71)\s*mg\/dL/gi;
 const WRONG_SCR_CRITERION =
   'The text treats a serum creatinine of 1.88 mg/dL or 1.71 mg/dL as the patient\'s current value, the one the review uses. ' +
   'Naming either value only to say it was entered in error, is stale or was not used does not meet this.';
@@ -104,7 +107,7 @@ export const rubric: Check[] = [
     // matches it too, so the judge decides whether the note treats the value as current.
     fn: async (ctx) => {
       const text = noteText(ctx);
-      const flagged = [...text.matchAll(CURRENT_SCR)].filter((m) => WRONG_SCR.some((w) => Math.abs(Number(m[1]) - w) < 0.005)).map((m) => m[0]);
+      const flagged = [...text.matchAll(WRONG_SCR_MENTION)].map((m) => m[0]);
       if (flagged.length === 0) return { met: false, evidence: { wrong: WRONG_SCR, flagged } };
       const v = await ctx.judge({ criterion: WRONG_SCR_CRITERION, text });
       return { met: v.met, evidence: { wrong: WRONG_SCR, flagged, ...v.evidence } };
