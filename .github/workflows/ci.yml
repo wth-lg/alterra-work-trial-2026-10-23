@@ -36,16 +36,17 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      # The grader validation matrix (plan phase P9), offline: canned judge outputs, no key, no
-      # live call; a judge cache miss fails the step.
+      # The grader validation matrix (plan phase P9) of every task with tests, offline: canned
+      # judge outputs, no key, no live call; a judge cache miss or any failing task fails the step.
       - name: grader validation matrix
-        run: pnpm cli matrix --task _toy
+        run: pnpm cli matrix --task all
       # The requirement-trace matrix (plan phase P9t): every assignment sentence and user
       # modification has a row with code, tests, a UI screen and action, evidence and an expect.
       - name: requirement trace
         run: pnpm cli trace-check
       - run: pnpm build
       - run: pnpm fixtures:verify
+      - run: pnpm fixtures:lint
       - name: keyscan working tree and build output
         run: pnpm keyscan
 

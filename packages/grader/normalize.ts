@@ -6,6 +6,9 @@
 //   - units: case-insensitive UCUM and the labels US EHRs show (mcg = ug, units = [iU]), mass
 //     converted through mg and body weight through kg (lb = [lb_av]);
 //   - frequency: BID = Q12H = 2/day, from a code, a phrase or a FHIR Timing.repeat;
+//   - dose: a mass converted, or a tablet or capsule count times the ordered product's unit
+//     strength (2 x apixaban 2.5 MG tablet = 5 mg), so the clinical quantity is graded, not
+//     the product chosen;
 //   - total daily dose: dose x doses per day, or the explicit timing events per clinic day;
 //   - RxNorm: SCD, SBD and ingredient forms of one drug are the same drug (brand and alias
 //     names map to the ingredient), optionally at one strength; a combination product is its
@@ -159,17 +162,31 @@ export function clinicDate(instant: string): string {
   return eastern(ms).slice(0, 10);
 }
 
-// Total daily dose of a request in `unit` (default mg): each dosage instruction's dose times
-// its doses per day, or times its timing events per clinic day. null when any part is missing
-// or not convertible.
-export function dailyDose(mr: Pick<MedicationRequest, 'dosageInstruction'>, unit = 'mg'): Quantity | null {
+// One administration of a dosage instruction in `unit` (default mg): the dose converted, or,
+// for a tablet or capsule count, the count times the unit strength of the request's product
+// (drugOf; a single ingredient with a mass strength). null when the dose is missing or cannot
+// be converted, a count included when the product states no single mass strength.
+export function doseOf(mr: Pick<MedicationRequest, 'medicationCodeableConcept'>, d: Dosage, unit = 'mg'): Quantity | null {
+  const dose = d.doseAndRate?.[0]?.doseQuantity;
+  if (dose?.value === undefined) return null;
+  const q = { value: dose.value, unit: dose.code ?? dose.unit ?? '' };
+  if (unitOf(q.unit)[1] !== 'count') return quantity(q, unit);
+  const n = canonicalNumber(q.value);
+  const strength = drugOf(mr.medicationCodeableConcept)?.strength_mg ?? null;
+  if (n === null || strength === null) return null;
+  const mg = quantity({ value: n * strength, unit: 'mg' }, unit);
+  return mg && { value: Math.round(mg.value * 1e9) / 1e9, unit: mg.unit };
+}
+
+// Total daily dose of a request in `unit` (default mg): each dosage instruction's dose (doseOf)
+// times its doses per day, or times its timing events per clinic day. null when any part is
+// missing or not convertible.
+export function dailyDose(mr: Pick<MedicationRequest, 'dosageInstruction' | 'medicationCodeableConcept'>, unit = 'mg'): Quantity | null {
   let total = 0;
   const dosages = mr.dosageInstruction ?? [];
   if (dosages.length === 0) return null;
   for (const d of dosages) {
-    const dose = d.doseAndRate?.[0]?.doseQuantity;
-    if (dose?.value === undefined) return null;
-    const q = quantity({ value: dose.value, unit: dose.code ?? dose.unit ?? '' }, unit);
+    const q = doseOf(mr, d, unit);
     if (q === null) return null;
     const events = d.timing?.event;
     let perDay: number | null;

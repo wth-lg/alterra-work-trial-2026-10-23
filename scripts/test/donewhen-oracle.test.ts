@@ -1,17 +1,23 @@
 // Done-when clause (3) against the real oracle command (plan phase P9). Two test-only overrides
-// of scripts/donewhen.ts, honoured only under NODE_ENV=test, make the one task we have count:
+// of scripts/donewhen.ts, honoured only under NODE_ENV=test, let it pass before five tasks exist:
 //   DONEWHEN_MIN_TASKS=1            the minimum of 5 complete tasks becomes 1;
 //   DONEWHEN_INCLUDE_UNDERSCORE=1   clause (3) counts _-prefixed task directories, so tasks/_toy
-//                                   is the task it checks.
+//                                   is checked beside the real tasks.
 // DONEWHEN_CLI is the real `node cli/index.ts`, so `oracle --task all --json` is the shipped
 // command grading the toy oracle from its canned judge cache. The broken case runs the same
 // command from a temp copy of the CLI and tasks/_toy (packages, fixtures and node_modules
 // linked), whose solution/solve.ts reads and writes on the wrong patient; the repo is never
 // changed. Each run gets a temp SPEND_LEDGER and HOME, so the spend command reads no real ledger.
-import { cpSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { repoRoot, runScript, tempDir } from './helpers.ts';
+
+// The task directories clause (3) counts, by its own rule: every directory in tasks/, the
+// _-prefixed ones only under DONEWHEN_INCLUDE_UNDERSCORE. Derived, so adding a task needs no edit.
+const taskDirs = readdirSync(join(repoRoot, 'tasks'), { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name);
+const withToy = taskDirs.length;
+const real = taskDirs.filter((d) => !d.startsWith('_')).length;
 
 function clause3(root: string) {
   const home = tempDir('donewhen-oracle-home');
@@ -47,7 +53,7 @@ describe('done-when clause (3) with the real oracle on _toy', () => {
   it('PASS on the repo, under DONEWHEN_MIN_TASKS=1 and DONEWHEN_INCLUDE_UNDERSCORE=1', () => {
     const line = clause3(repoRoot);
     expect(line).toMatch(/^PASS \(3\)/);
-    expect(line).toContain('1/1 at 1.0');
+    expect(line).toContain(`${withToy}/${withToy} at 1.0`);
   });
 
   it('FAIL when the toy oracle is broken', () => {
@@ -62,6 +68,6 @@ describe('done-when clause (3) with the real oracle on _toy', () => {
       cwd: repoRoot,
       env: { NODE_ENV: 'production', DONEWHEN_MIN_TASKS: '1', DONEWHEN_INCLUDE_UNDERSCORE: '1', DONEWHEN_CLI: 'false', HOME: home, SPEND_LEDGER: join(home, 'spend.jsonl') },
     });
-    expect(r.stdout).toMatch(/^FAIL \(3\) .*0 task\(s\), need 5/m);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL \\(3\\) (?:.* )?${real} (?:complete )?task\\(s\\)`, 'm'));
   });
 });

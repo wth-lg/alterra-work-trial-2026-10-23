@@ -27,7 +27,7 @@ import { Judge, JudgeCacheMiss, JudgeClientError, judgeCallBudget, type JudgeCac
 import { FAULT, isValid, trialOutcome, type Fault, type Outcome, type TrialFacts } from './outcome.ts';
 
 // Bumped on any change that can change a grade; regrades record both versions.
-export const GRADER_VERSION = '3';
+export const GRADER_VERSION = '4';
 
 export interface CheckResult {
   id: string;
