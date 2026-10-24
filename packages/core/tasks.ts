@@ -146,9 +146,20 @@ export async function parseTask({ id, files }: TaskFiles): Promise<Task> {
 // The design's task_version: sha256(task files + world hash), so a change to either is a new version.
 export const taskVersion = (task: Task, worldHash: string): Promise<string> => sha256Hex(`${task.filesHash}\n${worldHash}`);
 
-// A TaskSource over the directories `list` returns (each one holding a task.toml).
+// A TaskSource over the directories `list` returns (each one holding a task.toml). It calls
+// `list` once, on first use, and answers every later get and all from that read: a run of many
+// trials (the matrix, a batch) resolves its task once per trial, and a file changed under
+// tasks/<id>/ while it runs must not give two of its trials two task versions. A failed read
+// is not kept; the next call reads again.
 export function taskSource(list: () => Promise<TaskFiles[]>, opts: { testMode: boolean }): TaskSource {
-  const load = async () => (await list()).filter((d) => d.files['task.toml'] !== undefined).sort((a, b) => byPath(a.id, b.id));
+  let read: Promise<TaskFiles[]> | undefined;
+  const load = () =>
+    (read ??= list()
+      .then((dirs) => dirs.filter((d) => d.files['task.toml'] !== undefined).sort((a, b) => byPath(a.id, b.id)))
+      .catch((e: unknown) => {
+        read = undefined;
+        throw e;
+      }));
   return {
     async all() {
       const dirs = (await load()).filter((d) => opts.testMode || !d.id.startsWith('_'));

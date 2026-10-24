@@ -9,3 +9,5 @@ playwright/.cache/
 .env
 .env.*
 .DS_Store
+# Both runs of a case whose replay differed (cli/matrix.ts, scripts/replay-stress.ts)
+results/replay-mismatch/
