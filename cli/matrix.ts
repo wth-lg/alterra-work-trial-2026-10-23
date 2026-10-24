@@ -12,6 +12,9 @@
 // included), 0 when all pass.
 // --list-tasks prints the ids --task all runs as one line of JSON and exits 1 when there are
 // none. CI's matrix job fans out over it and runs --task <id> once per task, in parallel.
+// A case whose second run differs leaves both runs under results/replay-mismatch/<task>/ (or
+// $REPLAY_MISMATCH_DIR): each trajectory, raw and stripped, each record, and the first
+// divergent line.
 // It never builds a Messages client and opens no ledger: `pnpm cli oracle --live-judge` is the
 // only command that asks the judge live and refreshes the cache.
 // Two checks need Node and live here, given to the matrix as options:
@@ -22,19 +25,21 @@
 //                   compiler's module resolution and fails on any expected.ts or overlay module
 //                   it reaches, and on any dynamic import whose specifier is not a constant
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { availableParallelism } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { installEgressGuard } from '../packages/core/egress.ts';
+import { stripTimestamps, toJsonl } from '../packages/core/trajectory.ts';
 import type { Check, Json } from '../packages/grader/check.ts';
 import type { Grade } from '../packages/grader/grade.ts';
 import type { JudgeCacheEntry } from '../packages/grader/judge.ts';
-import { declaresOf, gradeRun, runMatrix, type CaseRun, type FreshGrade, type MatrixEnv, type MatrixOptions } from '../packages/grader/matrix/matrix.ts';
+import { declaresOf, gradeRun, runMatrix, type CaseRun, type FreshGrade, type MatrixEnv, type MatrixOptions, type ReplayDiff } from '../packages/grader/matrix/matrix.ts';
 import type { Agents, Alternative, MatrixTask, Mutant, Script, WorldView } from '../packages/grader/matrix/types.ts';
 import { nodeNow } from './adapters/clock-node.ts';
+import type { TaskSource } from '../packages/core/tasks.ts';
 import { nodeTaskSource, TASKS_DIR } from './adapters/tasks-node.ts';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
@@ -66,11 +71,12 @@ export function matrixTaskIds(root: string = TASKS_DIR): string[] {
     .sort();
 }
 
-// The world, manifest hash and definitions every matrix trial starts from.
-export function matrixEnv(): MatrixEnv {
+// The world, manifest hash, definitions and task files (under `root`, or `tasks`) every matrix
+// trial starts from.
+export function matrixEnv(root: string = TASKS_DIR, tasks: TaskSource = nodeTaskSource({ root, testMode: false })): MatrixEnv {
   const world = new Uint8Array(readFileSync(join(REPO, 'fixtures/world.ndjson.gz')));
   return {
-    tasks: nodeTaskSource({ testMode: false }),
+    tasks,
     world: { read: async () => world },
     worldHash: (JSON.parse(readFileSync(join(REPO, 'fixtures/manifest.json'), 'utf8')) as { world: { state_hash: string } }).world.state_hash,
     definitions: JSON.parse(readFileSync(join(REPO, 'fixtures/definitions-pruned.json'), 'utf8')),
@@ -87,9 +93,10 @@ async function exported<T>(dir: string, rel: string, name: string, fallback: T):
   return mod[name] as T;
 }
 
-// Reads a task's matrix inputs from tasks/<id> (layout: packages/grader/matrix/types.ts).
-export async function loadMatrixTask(id: string, root: string = TASKS_DIR): Promise<MatrixTask> {
-  const task = await nodeTaskSource({ root, testMode: true }).get(id);
+// Reads a task's matrix inputs from tasks/<id> (layout: packages/grader/matrix/types.ts); the
+// instruction and policies through `tasks`.
+export async function loadMatrixTask(id: string, root: string = TASKS_DIR, tasks: TaskSource = nodeTaskSource({ root, testMode: true })): Promise<MatrixTask> {
+  const task = await tasks.get(id);
   const dir = join(root, id);
   const cacheFile = join(dir, 'tests/judge-cache.json');
   const checksModule = join(dir, 'tests/grader.ts');
@@ -150,26 +157,50 @@ async function all(deps: Deps): Promise<number> {
 // loaded) is returned for the caller to print.
 async function one(id: string, deps: Deps): Promise<{ code: number; usage?: string }> {
   if (!TASK_ID.test(id)) return { code: 2, usage: `--task ${JSON.stringify(id)} is not a task id (letters, digits, _ and - only)` };
+  // One read of tasks/ for the whole run: the instruction and policies the cases are built from
+  // and the task every trial resolves are the same files.
+  const tasks = nodeTaskSource({ root: TASKS_DIR, testMode: true });
   let task: MatrixTask;
   try {
-    task = await (deps.load ?? loadMatrixTask)(id);
+    task = await (deps.load ?? ((t) => loadMatrixTask(t, TASKS_DIR, tasks)))(id);
   } catch (e) {
     return { code: 2, usage: `--task: ${(e as Error).message}` };
   }
   const options: MatrixOptions = {
     policyImports: () => policyImports(join(TASKS_DIR, id)),
+    onReplayMismatch: (c, first, again, diff) => {
+      const dir = writeReplayMismatch(deps.env.REPLAY_MISMATCH_DIR || join(REPO, 'results/replay-mismatch'), id, c.id, first, again, diff);
+      deps.out(`replay mismatch ${id}/${c.id}: ${diff.summary}; both runs in ${dir}`);
+    },
     ...(task.checksModule ? { fresh: freshGrader(task, task.checksModule) } : {}),
     ...deps.options,
   };
   let result;
   try {
-    result = await runMatrix(matrixEnv(), task, options);
+    result = await runMatrix(matrixEnv(TASKS_DIR, tasks), task, options);
   } catch (e) {
     deps.out(`matrix ${id}: FAIL\n  - ${(e as Error).message}`);
     return { code: 1 };
   }
   for (const line of result.lines) deps.out(line);
   return { code: result.pass ? 0 : 1 };
+}
+
+// Writes both runs of a case that did not replay to <root>/<task>/<case>-<n>/, n the first
+// unused number, and returns the directory: first and again as raw and stripped JSONL, their
+// records, and diff.txt with the first divergent line.
+export function writeReplayMismatch(root: string, task: string, caseId: string, first: CaseRun, again: CaseRun, diff: ReplayDiff): string {
+  let n = 1;
+  while (existsSync(join(root, task, `${caseId}-${n}`))) n++;
+  const dir = join(root, task, `${caseId}-${n}`);
+  mkdirSync(dir, { recursive: true });
+  for (const [name, r] of [['first', first], ['again', again]] as const) {
+    writeFileSync(join(dir, `${name}.jsonl`), toJsonl(r.events));
+    writeFileSync(join(dir, `${name}.stripped.jsonl`), stripTimestamps(toJsonl(r.events)));
+    writeFileSync(join(dir, `${name}.record.json`), `${JSON.stringify(r.record, null, 2)}\n`);
+  }
+  writeFileSync(join(dir, 'diff.txt'), `${diff.summary}\nfirst: ${diff.first}\nagain: ${diff.again}\n`);
+  return dir;
 }
 
 // What the fresh process reads on stdin.

@@ -171,6 +171,9 @@ export interface MatrixOptions {
   fresh?: FreshGrade;
   // policy.ts's import graph (cli/matrix.ts policyImports): modules reached, and each problem.
   policyImports?: () => { modules: number; problems: string[] };
+  // Given both runs of a case whose second run differs (cli/matrix.ts saves them), so the
+  // first divergent step of a replay failure can be read after the fact.
+  onReplayMismatch?: (c: Case, first: CaseRun, again: CaseRun, diff: ReplayDiff) => void;
 }
 
 export interface CaseRun {
@@ -179,6 +182,31 @@ export interface CaseRun {
 }
 
 export type FreshGrade = (c: Case, run: CaseRun) => Promise<Grade>;
+
+// Where a second run of a case departs from the first: the 0-based line of the stripped
+// trajectory (stripTimestamps) that first differs and both lines, or line null when the
+// trajectories agree and only the final hash differs.
+export interface ReplayDiff {
+  line: number | null;
+  first: string;
+  again: string;
+  summary: string;
+}
+
+// null when the second run reproduces the first: the same trajectory once timestamps are
+// stripped, and the same final state hash. The matrix's replay determinism check.
+export function replayDiff(first: CaseRun, again: CaseRun): ReplayDiff | null {
+  const a = stripTimestamps(toJsonl(first.events)).split('\n');
+  const b = stripTimestamps(toJsonl(again.events)).split('\n');
+  const hashA = first.record.state_hash.final;
+  const hashB = again.record.state_hash.final;
+  // Both end in a newline, so a longer `b` differs at a's final empty line.
+  const k = a.findIndex((l, i) => l !== b[i]);
+  if (k === -1 && hashA === hashB) return null;
+  const hash = hashA === hashB ? 'same final hash' : `final hash ${hashA} then ${hashB}`;
+  if (k === -1) return { line: null, first: hashA ?? 'null', again: hashB ?? 'null', summary: `trajectories agree, ${hash}` };
+  return { line: k, first: a[k] ?? '(no line)', again: b[k] ?? '(no line)', summary: `trajectory line ${k + 1} of ${a.length - 1} differs, ${hash}` };
+}
 
 // One grading of a recorded run from the cache, each judge cache miss recorded in `misses`
 // instead of thrown. The matrix and its fresh-process grade both grade through this.
@@ -311,7 +339,9 @@ export async function runCases(env: MatrixEnv, task: MatrixTask, selected: reado
       continue;
     }
     const again = await trial(env, task, c);
-    replays.set(c, stripTimestamps(toJsonl(again.events)) === stripTimestamps(toJsonl(first.events)) && again.record.state_hash.final === first.record.state_hash.final);
+    const diff = replayDiff(first, again);
+    replays.set(c, diff === null);
+    if (diff !== null) opts.onReplayMismatch?.(c, first, again, diff);
   }
 
   const fresh = opts.isolation !== false ? opts.fresh : undefined;

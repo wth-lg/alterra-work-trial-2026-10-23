@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { tempDir, write } from '../../../scripts/test/helpers.ts';
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
-import { parseTask, taskVersions } from '../tasks.ts';
+import { parseTask, taskSource, taskVersions, type TaskFiles } from '../tasks.ts';
 
 const toml = (id: string) => `[task]\nid = "${id}"\ntitle = "Task ${id}"\nmax_turns = 12\n`;
 
@@ -74,5 +74,35 @@ describe('TaskSource over tasks/*/task.toml', () => {
     }
     const world = await taskVersions(await parseTask({ id: 'a', files }), 'h2');
     expect([world.env_version !== base.env_version, world.grader_task_version === base.grader_task_version]).toEqual([true, true]);
+  });
+});
+
+describe('a TaskSource reads its task directories once', () => {
+  // A run of many trials (the matrix, a batch) resolves the task for each one; a file that
+  // changes under tasks/<id>/ mid-run must not give two trials of one run two task versions.
+  it('get() and all() return the files as first read, whatever list() returns later', async () => {
+    let reads = 0;
+    const list = async (): Promise<TaskFiles[]> => {
+      reads++;
+      return [{ id: 'a', files: { 'task.toml': toml('a'), 'instruction.md': `Do a, read ${reads}.\n` } }];
+    };
+    const source = taskSource(list, { testMode: false });
+    const first = await source.get('a');
+    const again = await source.get('a');
+    const [listed] = await source.all();
+    expect(again.instruction).toBe(first.instruction);
+    expect(again.filesHash).toBe(first.filesHash);
+    expect(listed!.filesHash).toBe(first.filesHash);
+    expect(reads).toBe(1);
+  });
+
+  it('reads again after a failed read', async () => {
+    let reads = 0;
+    const source = taskSource(async () => {
+      if (++reads === 1) throw new Error('EMFILE');
+      return [{ id: 'a', files: { 'task.toml': toml('a'), 'instruction.md': 'Do a.\n' } }];
+    }, { testMode: false });
+    await expect(source.get('a')).rejects.toThrow('EMFILE');
+    expect((await source.get('a')).id).toBe('a');
   });
 });
