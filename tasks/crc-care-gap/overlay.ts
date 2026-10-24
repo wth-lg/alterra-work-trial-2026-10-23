@@ -3,10 +3,15 @@
 // screening history and exclusion facts, and moves four birth dates so the ages fit the design
 // (E4 45 and E5 75 today, E7 72, E8 69 at the end of 2026). It removes what would change a
 // patient's answer or contradict the story: every Synthea colonoscopy on the slots (they would
-// make the gap patients met), Synthea's notes and note reports (they name the old ages and
-// histories), the 'MD' suffix on E5's name, and two conditions dated before the moved birth
-// dates allow (pt-0023's 'received higher education' at 12, pt-0019's adolescent scoliosis at
-// 27).
+// make the gap patients met), the colon-screening reason on Synthea check-ups (policy.test
+// checks no slot resource outside the overlay mentions colon screening), the note reports, the
+// 'MD' suffix on E5's name, and two conditions dated before the moved birth dates allow
+// (pt-0023's 'received higher education' at 12, pt-0019's adolescent scoliosis at 27). Of
+// Synthea's notes it keeps each slot's two newest that never mention the colon or screening for
+// it, edited (editNote) so they state no Synthea age and agree with the coded chart, so
+// search_notes has ordinary notes to wade through. It resolves leftovers a clinician would
+// notice: active 'Full-time employment' on frail E7 and E8, a 1998 anemia on E3 whose 2025 hemoglobin is 14.1, and a 2024
+// alteplase dose on E12 still active.
 //
 // Traps (design panel table): proc-t3-e2-colonoscopy (2016) and obs-t3-e3-sdna (2023) fall just
 // before their calendar-year windows; obs-t3-e10-fit is a 2025 FIT; pt-0023 and pt-0011 sit
@@ -33,6 +38,14 @@ const COLONOSCOPY = '73761001';
 const BIRTH: Record<string, string> = { [E.E4]: '1980-12-15', [E.E5]: '1950-11-20', [E.E7]: '1954-05-10', [E.E8]: '1957-10-28' };
 // Conditions dated before the moved birth date allows.
 const REMOVE_CONDITIONS = ['cond-00518', 'cond-00437'];
+// Synthea leftovers to resolve, with the date each ended: employment on E7 and E8 by their
+// frailty, E3's anemia by his normal 2025 hemoglobin (obs-01452).
+const RESOLVE_CONDITIONS: Record<string, string> = { 'cond-00231': '2025-09-16', 'cond-00452': '2026-03-04', 'cond-00425': '2025-07-06' };
+const COMPLETE_MEDICATIONS = ['mr-00269'];
+const SCREENING_FOR_COLON_CANCER = '275978004';
+// A note that mentions the colon or a stool test would speak to a member's screening answer.
+const ABOUT_COLON = /colon|colorectal|occult|fecal|sigmoid|stool|\bFIT\b|275978004/i;
+const NOTES_KEPT = 2;
 
 const SURGEON: Resource = { resourceType: 'Practitioner', id: 'pr-t3-adeyemi', active: true, name: [{ use: 'official', given: ['Tolu'], family: 'Adeyemi', suffix: ['MD'] }] };
 
@@ -92,6 +105,19 @@ function base64(s: string): string {
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary);
 }
+const unbase64 = (s: string) => new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
+
+type Doc = Extract<Resource, { resourceType: 'DocumentReference' }>;
+const noteText = (d: Doc) => d.content.map((c) => (c.attachment.data ? unbase64(c.attachment.data) : '')).join('\n');
+// The edits a kept Synthea note gets. 'Marilu Blanca is a 61 year-old hispanic white female.'
+// names the old age. E5's history lists a colon polyp that no coded resource records. E7's
+// medication list predates the overlay's donepezil (authored 2025-06-10), which her later notes
+// must list.
+function editNote(text: string, pt: string, date: string): string {
+  let t = text.replace(/ is an? \d+ year-old /g, ' is a ').replace(/, polyp of colon \(disorder\)/g, '');
+  if (pt === E.E7 && date >= '2025-06-10') t = t.replace(/^(# Medications\n.+)$/m, '$1; donepezil hydrochloride 10 mg oral tablet');
+  return t;
+}
 
 // E6's outside operative note, scanned into the chart: its text is what the scan's OCR gives.
 const OPERATIVE_NOTE = `[Scanned outside record - received 2015-07-14 - text from scan]
@@ -121,10 +147,12 @@ const opNote: Resource = {
   type: { coding: [{ system: LOINC, code: '11504-8', display: 'Surgical operation note' }], text: 'Surgical operation note' },
   category: [{ coding: [{ system: 'http://hl7.org/fhir/us/core/CodeSystem/us-core-documentreference-category', code: 'clinical-note', display: 'Clinical Note' }] }],
   subject: subject(E.E6),
-  date: '2015-06-03T16:20:00-04:00',
+  // Created when the outside report was scanned in; the surgery is the period it covers.
+  date: '2015-07-14T11:05:00-04:00',
   author: [{ reference: 'Practitioner/pr-t3-adeyemi' }],
   custodian: HOSPITAL,
   description: 'Scanned outside record',
+  context: { period: { start: '2015-06-03T08:00:00-04:00', end: '2015-06-03T16:20:00-04:00' } },
   content: [{ attachment: { contentType: 'text/plain; charset=utf-8', data: base64(OPERATIVE_NOTE), title: 'Outside operative report (scanned)' } }],
 };
 
@@ -181,8 +209,32 @@ const overlay: Overlay = {
   task: 'T3',
   build(world: WorldReader) {
     const ofSlots = (type: string) => SLOTS.flatMap((pt) => world.search(type, { patient: pt }).resources);
+    const edited = (d: Doc): Doc => ({
+      ...d,
+      content: d.content.map((c) => (c.attachment.data ? { ...c, attachment: { ...c.attachment, data: base64(editNote(unbase64(c.attachment.data), d.subject!.reference!.slice(8), d.date ?? '')) } } : c)),
+    });
+    const kept = SLOTS.flatMap((pt) =>
+      (world.search('DocumentReference', { patient: pt }).resources as Doc[])
+        .map(edited)
+        .filter((d) => !ABOUT_COLON.test(noteText(d)))
+        .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+        .slice(0, NOTES_KEPT),
+    );
+    const keptIds = new Set(kept.map((d) => d.id));
+    const checkups = (ofSlots('Encounter') as Array<Extract<Resource, { resourceType: 'Encounter' }>>)
+      .filter((e) => (e.reasonCode ?? []).some((rc) => (rc.coding ?? []).some((c) => c.code === SCREENING_FOR_COLON_CANCER)))
+      .map((e): Resource => {
+        const reasonCode = (e.reasonCode ?? []).filter((rc) => !(rc.coding ?? []).some((c) => c.code === SCREENING_FOR_COLON_CANCER));
+        const { reasonCode: _old, ...rest } = e;
+        return reasonCode.length ? { ...rest, reasonCode } : rest;
+      });
+    const resolved = Object.entries(RESOLVE_CONDITIONS).map(([id, ended]): Resource => {
+      const c = world.get('Condition', id) as Extract<Resource, { resourceType: 'Condition' }>;
+      return { ...c, clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'resolved' }] }, abatementDateTime: ended };
+    });
+    const completed = COMPLETE_MEDICATIONS.map((id): Resource => ({ ...(world.get('MedicationRequest', id) as Extract<Resource, { resourceType: 'MedicationRequest' }>), status: 'completed' }));
     const remove = [
-      ...ofSlots('DocumentReference'),
+      ...ofSlots('DocumentReference').filter((r) => !keptIds.has(r.id)),
       ...ofSlots('DiagnosticReport').filter((r) => r.resourceType === 'DiagnosticReport' && (r.presentedForm ?? []).length > 0),
       ...ofSlots('Procedure').filter((r) => r.resourceType === 'Procedure' && (r.code?.coding ?? []).some((c) => c.system === SNOMED && c.code === COLONOSCOPY)),
       ...REMOVE_CONDITIONS.map((id) => world.get('Condition', id)!),
@@ -195,6 +247,10 @@ const overlay: Overlay = {
 
     const put: Resource[] = [
       ...patients,
+      ...kept,
+      ...checkups,
+      ...resolved,
+      ...completed,
       SURGEON,
       group,
       procedure('proc-t3-e1-colonoscopy', E.E1, [COLONOSCOPY, 'Colonoscopy'], '2018-05-21T09:30:00-04:00'),

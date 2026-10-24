@@ -23,6 +23,12 @@ export const read = (resource_type: string, id: string): ScriptCall => ({ name: 
 export const search = (resource_type: string, patient: string, more: { [k: string]: string | number } = {}): ScriptCall => ({ name: 'fhir_search', input: { resource_type, patient, ...more } });
 export const notes = (query: string, patient?: string): ScriptCall => ({ name: 'search_notes', input: { query, ...(patient ? { patient } : {}) } });
 
+// The notes step: search_notes matches literal words, so a reviewer looking for colon surgery
+// searches the words a note would use. The operative note's row ('…Service: Colorectal
+// Surgery…') only references it; reading it shows the total proctocolectomy.
+export const NOTE_SEARCH = notes('colectomy colon colorectal');
+export const OPNOTE = read('DocumentReference', 'doc-t3-e6-opnote');
+
 // One patient's chart review: the Patient and everything §3 and §4 read.
 export const chart = (p: string): ScriptCall[] => [
   read('Patient', p),
@@ -39,7 +45,8 @@ export const reads = (patients: readonly string[] = MEMBERS): ScriptTurn[] => [
   { calls: [policy, groups] },
   { calls: [group] },
   ...[0, 1, 2, 3, 4, 5, 6].map((i) => ({ calls: patients.map((p) => chart(p)[i]!) })),
-  { calls: [notes('colectomy')] },
+  { calls: [NOTE_SEARCH] },
+  { calls: [OPNOTE] },
 ];
 
 export const FIT = 'LAB-FIT-KIT';
@@ -50,9 +57,14 @@ export const orderFit = (p: string, code: string = FIT, occurrence_start = '2026
 export const OUTREACH =
   'Our records show you are due for colorectal cancer screening. We are mailing you a FIT kit, a simple stool test you do at home. ' +
   'Please complete it and mail it back in the prepaid envelope. Call the clinic with any questions. Riverbend Family Medicine';
-export const outreach = (p: string, body: string = OUTREACH): ScriptCall => ({
+export const outreach = (p: string, body: string = OUTREACH, subject = 'Colorectal cancer screening: FIT kit on its way'): ScriptCall => ({
   name: 'send_message',
-  input: { recipient: `Patient/${p}`, priority: 'routine', subject: 'Colorectal cancer screening: FIT kit on its way', body, about: [] },
+  input: { recipient: `Patient/${p}`, priority: 'routine', subject, body, about: [] },
+});
+// A message to a staff pool or the panel group, about the resources in `about`.
+export const message = (recipient: string, subject: string, body: string, about: string[] = []): ScriptCall => ({
+  name: 'send_message',
+  input: { recipient, priority: 'routine', subject, body, about },
 });
 export const actions = (labels: readonly Label[] = GAPS): ScriptCall[] => labels.flatMap((l) => [orderFit(PT[l]), outreach(PT[l])]);
 

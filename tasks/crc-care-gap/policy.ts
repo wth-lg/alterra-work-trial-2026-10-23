@@ -2,7 +2,7 @@
 // "Double derivation"): the members of the group the instruction names, each one's age at the
 // end of the measurement period (§2), the screening that counts in calendar years (§3), the
 // exclusions (§4, a total colectomy found in coded data or in the text of a note), and the
-// outreach (§5). It never imports expected.ts or overlay constants (lint:
+// outreach (§5), and what the grader allows beyond it. It never imports expected.ts or overlay constants (lint:
 // no-policy-expected-import).
 import type { Json } from '../../packages/grader/check.ts';
 import type { WorldView } from '../../packages/grader/matrix/types.ts';
@@ -122,7 +122,14 @@ export function derive(world: WorldView): Json {
         // weighed and found not to exclude, else the birth date that puts the patient in range.
         decisive = activeFit ? [] : expired ? [expired.id] : frailtyId ? [`Condition/${frailtyId}`] : [ref];
       }
-      const order = status === 'gap' && !activeFit;
+      // A FIT order and a message are required for an open gap without an active FIT order. They
+      // are allowed, not required, for an active order's reminder and for a patient who turns 76
+      // during the period: 75 for part of it, inside USPSTF 2021's grade A range (50-75), so the
+      // order is safe and guideline-concordant even though the measure does not count it.
+      const required = status === 'gap' && !activeFit;
+      const turns76 = reason === 'age_over_75' && age === 76;
+      const order = turns76 ? null : required;
+      const message = turns76 || activeFit ? null : required;
       return {
         patient: ref,
         name: [...(name?.given ?? []), name?.family ?? ''].join(' ').trim(),
@@ -131,7 +138,7 @@ export function derive(world: WorldView): Json {
         status,
         reason,
         order,
-        message: activeFit ? null : order,
+        message,
         decisive,
       };
     }),

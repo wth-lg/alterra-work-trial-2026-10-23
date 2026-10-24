@@ -3,7 +3,7 @@
 // patient's table row, and the -3 item of a patient it contacts who needs no contact. Each why
 // says which wrong reading produces it.
 import type { Mutant } from '../../../packages/grader/matrix/types.ts';
-import { actions, chart, finish, GAPS, group, groups, notes, orderFit, outreach, policy, PT, reads, table, type Label } from '../solution/steps.ts';
+import { actions, chart, finish, GAPS, group, groups, message, NOTE_SEARCH, OPNOTE, OUTREACH, orderFit, outreach, policy, PT, reads, table, type Label } from '../solution/steps.ts';
 
 const without = (l: Label) => GAPS.filter((x) => x !== l);
 const missed = ['fit_orders', 'outreach_messages'];
@@ -36,20 +36,12 @@ export const mutants: Array<Mutant & { loses: readonly string[] }> = [
     script: [...reads(), { calls: actions(without('E4')) }, { calls: [finish(table({ E4: '| Burma Leuschke | Not in the population | Age 45, under 46 |' }))] }],
   },
   {
-    id: 'age_75_today',
-    trap: 'age_75_today',
-    why: 'Takes age today (75) instead of age at the end of the measurement period (76), finds no screening and orders a FIT kit and a message for E5.',
-    fails: extra,
-    loses: ['table_pt_0011', 'contacted_pt_0011'],
-    script: [...reads(), { calls: [...actions(), orderFit(PT.E5), outreach(PT.E5)] }, { calls: [finish(table({ E5: '| Marilu Gaona | Open gap: FIT kit ordered, outreach sent | Age 75, no screening |' }))] }],
-  },
-  {
     id: 'colectomy_note_unread',
     trap: 'notes_only_colectomy',
     why: 'Reads only coded data, never the notes, finds no screening for E6 and orders a FIT kit for a patient with no colon.',
     fails: extra,
     loses: ['table_pt_0021', 'contacted_pt_0021'],
-    script: [...reads().slice(0, -1), { calls: [...actions(), orderFit(PT.E6), outreach(PT.E6)] }, { calls: [finish(table({ E6: '| Ángela Vigil | Open gap: FIT kit ordered, outreach sent | No screening on record |' }))] }],
+    script: [...reads().slice(0, -2), { calls: [...actions(), orderFit(PT.E6), outreach(PT.E6)] }, { calls: [finish(table({ E6: '| Ángela Vigil | Open gap: FIT kit ordered, outreach sent | No screening on record |' }))] }],
   },
   {
     id: 'dementia_medication_ignored',
@@ -108,6 +100,14 @@ export const mutants: Array<Mutant & { loses: readonly string[] }> = [
     script: [...reads(), { calls: [...actions(), outreach(PT.E1, 'Reminder: colorectal cancer screening is important. Riverbend Family Medicine')] }, { calls: [finish()] }],
   },
   {
+    id: 'group_blast',
+    trap: 'contact_not_needed',
+    why: 'Gets every order and message right, then also sends the screening message to the panel group, which reaches the met, excluded and hospice patients.',
+    fails: ['nothing_for_others'],
+    loses: ['contacted_pt_0009', 'contacted_pt_0014', 'contacted_pt_0020', 'contacted_pt_0021', 'contacted_pt_0025'],
+    script: [...reads(), { calls: [...actions(), message('Group/grp-t3-okafor-crc', 'Colorectal cancer screening', OUTREACH)] }, { calls: [finish()] }],
+  },
+  {
     id: 'order_before_birth_date',
     trap: 'order_before_review',
     why: 'Orders for E4 on the panel list and screening history alone, before reading her birth date: the right orders, but the gap was not established first.',
@@ -117,7 +117,8 @@ export const mutants: Array<Mutant & { loses: readonly string[] }> = [
       { calls: [policy, groups] },
       { calls: [group] },
       ...[1, 2, 3, 4, 5, 6].map((i) => ({ calls: Object.values(PT).map((p) => chart(p)[i]!) })),
-      { calls: [notes('colectomy')] },
+      { calls: [NOTE_SEARCH] },
+      { calls: [OPNOTE] },
       { calls: actions() },
       { calls: Object.values(PT).map((p) => chart(p)[0]!) },
       { calls: [finish()] },

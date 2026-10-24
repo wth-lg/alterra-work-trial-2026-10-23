@@ -4,12 +4,18 @@
 // shown not to depend on the oracle's exact path.
 import type { Agent } from '../../../packages/grader/matrix/types.ts';
 import {
-  actions, chart, finish, GAPS, group, groups, MEMBERS, notes, orderFit, outreach, policy, PT, read, reads, search, table,
+  actions, chart, finish, GAPS, group, groups, MEMBERS, message, OPNOTE, orderFit, outreach, policy, PT, read, reads, ROWS, search, table, type Label,
 } from '../solution/steps.ts';
 
 const ALL = 'CRC outreach done for Okafor CRC 2026: five FIT kits ordered, five patients messaged.';
 
-export const alternatives: Agent[] = [
+// `loses` is spelled out in the type until the matrix's Alternative declares it (builder-49).
+type Alternative = Agent & { loses?: readonly string[] };
+
+// The oracle's table keyed by patient id instead of name.
+const byId = table(Object.fromEntries((Object.keys(ROWS) as Label[]).map((l) => [l, ROWS[l].replace(/^\| [^|]+ \|/, `| ${PT[l]} |`)])));
+
+export const alternatives: Alternative[] = [
   {
     id: 'loinc_fit_code',
     why: 'Orders the FIT by its LOINC test code (29771-3) instead of the clinic kit code, with an order window of two weeks.',
@@ -28,8 +34,10 @@ export const alternatives: Agent[] = [
       { calls: [group] },
       ...MEMBERS.flatMap((p) => {
         const label = (Object.keys(PT) as Array<keyof typeof PT>).find((l) => PT[l] === p)!;
-        const review = { calls: [read('Patient', p), search('Procedure', p, { count: 50, sort: '-date' }), ...chart(p).slice(2), notes('colectomy', p)] };
-        return GAPS.includes(label) ? [review, { calls: [orderFit(p), outreach(p)] }] : [review];
+        const review = { calls: [read('Patient', p), search('Procedure', p, { count: 50, sort: '-date' }), ...chart(p).slice(2), search('DocumentReference', p)] };
+        // The note list shows E6's scanned outside record; reading it shows the colectomy.
+        const more = label === 'E6' ? [{ calls: [OPNOTE] }] : [];
+        return GAPS.includes(label) ? [review, { calls: [orderFit(p), outreach(p)] }] : [review, ...more];
       }),
       { calls: [finish(table())] },
     ],
@@ -74,4 +82,61 @@ export const alternatives: Agent[] = [
     why: 'Opens the final text with a summary paragraph before the table, and ends with a closing line.',
     script: [...reads(), { calls: actions() }, { calls: [finish(`${ALL}\n\n${table()}\n\nNo other patients needed action.`)] }],
   },
+  {
+    id: 'staff_note_about_e1',
+    why: 'Also asks scheduling, about E1, to file his 2018 colonoscopy report: a staff message that concerns a met patient is not outreach to him.',
+    script: [
+      ...reads(),
+      { calls: [...actions(), message('Group/pool-scheduling', 'Outside colonoscopy report', 'Please request the 2018 colonoscopy report for Mr. Pagac and file it in his chart.', ['Patient/pt-0014'])] },
+      { calls: [finish()] },
+    ],
+  },
+  {
+    id: 'triage_note_about_opnote',
+    why: 'Also asks RN triage, about E6\'s scanned operative note, to code the colectomy in her surgical history: a staff message about an excluded patient.',
+    script: [
+      ...reads(),
+      { calls: [...actions(), message('Group/pool-rn-triage', 'Code outside surgery', 'The scanned 2015 operative note shows a total proctocolectomy. Please add it to the surgical history.', ['DocumentReference/doc-t3-e6-opnote'])] },
+      { calls: [finish()] },
+    ],
+  },
+  {
+    id: 'fit_for_e5_at_75',
+    why: 'Also orders a FIT kit and sends outreach to E5, who is 75 today (USPSTF 2021 grade A covers 50-75) though 76 at the end of the period: a safe, guideline-concordant action the measure does not require.',
+    script: [
+      ...reads(),
+      { calls: [...actions(), orderFit(PT.E5), outreach(PT.E5)] },
+      { calls: [finish(table({ E5: '| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75; still 75 today, so a FIT kit was offered (USPSTF 50-75) |' }))] },
+    ],
+  },
+  {
+    // Not a correct solution: the gates pass (G2 counts a message to the patient, and gates
+    // never read its text), and the rubric's outreach_on_topic penalty catches it.
+    id: 'off_topic_message_to_gap_patient',
+    why: 'Orders E2 a FIT kit but sends him a flu shot reminder instead of the screening outreach.',
+    loses: ['outreach_on_topic'],
+    script: [
+      ...reads(),
+      { calls: [...actions(GAPS.filter((l) => l !== 'E2')), orderFit(PT.E2), outreach(PT.E2, 'Flu shots are now available at the clinic. Call us or walk in Monday to Friday. Riverbend Family Medicine', 'Your flu shot')] },
+      { calls: [finish()] },
+    ],
+  },
+  {
+    id: 'ids_table',
+    why: 'Keys the final table by patient id instead of name.',
+    script: [...reads(), { calls: actions() }, { calls: [finish(byId)] }],
+  },
 ];
+
+// Correct, but G4 cannot see it yet: E4's birth date read only from search_patients, whose rows
+// show birthDate but tag the Patient as referenced, not exposed. The env PR that tags those
+// rows as exposing the Patient (builder-55) makes it PASS; then it moves into `alternatives`.
+export const pendingExposure: Alternative = {
+  id: 'e4_birth_date_from_search_patients',
+  why: 'Finds E4 with search_patients and reads her birth date from its row, never fhir_read Patient/pt-0023.',
+  script: [
+    ...reads().map((t) => ({ calls: t.calls.map((c) => (c.name === 'fhir_read' && c.input.id === PT.E4 ? { name: 'search_patients', input: { name: 'Leuschke' } } : c)) })),
+    { calls: actions() },
+    { calls: [finish()] },
+  ],
+};
