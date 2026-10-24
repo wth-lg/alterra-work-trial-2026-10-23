@@ -1,9 +1,11 @@
 // The inputs of a task's grader validation matrix (design section 5, "Grader validation
 // matrix"), as a task ships them:
 //   solution/solve.ts      `oracle`: the reference solution, a script of tool calls
-//   tests/alternatives.ts  `alternatives`: other correct solutions, each expected to PASS
+//   tests/alternatives.ts  `alternatives`: other correct solutions, each expected to PASS and
+//                          to lose exactly the rubric items it declares (none by default)
 //   tests/mutants.ts       `mutants`: near misses, one trap each, each expected to FAIL on
-//                          exactly the gate checks it declares
+//                          exactly the gate checks it declares and to lose exactly the rubric
+//                          items it declares
 //   tests/agents.ts        `spray`, `output_gap` and, where the task declares it, `status_only`
 //   tests/grader.ts        `checks` (its path is `checksModule`, which the matrix's isolation
 //                          check imports again in a fresh process)
@@ -38,11 +40,19 @@ export interface Agent {
   script: Script;
 }
 
+export interface Alternative extends Agent {
+  // The rubric items it must lose, and no other; absent or [] when it loses none (a score of 1.0).
+  loses?: readonly string[];
+}
+
 export interface Mutant extends Agent {
   // The task.toml trap it exercises.
   trap: string;
   // The gate checks it must fail, and no other.
   fails: readonly string[];
+  // The rubric items it must lose (a positive item not met, a penalty met), and no other; [] when
+  // it loses none. Required: the matrix fails a mutant without it, before any case runs.
+  loses: readonly string[];
 }
 
 export interface Agents {
@@ -73,7 +83,7 @@ export interface MatrixTask {
   // turns the isolation check off.
   checksModule?: string;
   oracle: Script | null;
-  alternatives: readonly Agent[];
+  alternatives: readonly Alternative[];
   mutants: readonly Mutant[];
   agents: Agents;
   expected: Json | undefined;
