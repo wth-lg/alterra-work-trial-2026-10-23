@@ -14,12 +14,19 @@
 // ('Patient/pt-0001') and never carries a resourceType; and a resource returned with content
 // left out holds an object with a `read_with` key naming the tool that returns it (a note's
 // text attachment in fhir_search), which makes the resource referenced, not exposed.
+//
+// A write tool (tools/write/) returns a Committed: its payload plus the ids it put into the
+// store. callTool reports those as written_ids, which is how the grader learns what a call
+// changed; no other result has the field.
 import { RESOURCE_TYPES } from '../world.ts';
 import { ToolError, type ErrorBody } from './errors.ts';
 
 export type PropertySchema =
   | { type: 'string'; description: string; enum?: readonly string[]; minLength?: number; maxLength?: number; pattern?: string }
-  | { type: 'integer'; description: string; minimum?: number; maximum?: number };
+  | { type: 'integer'; description: string; minimum?: number; maximum?: number }
+  | { type: 'number'; description: string; exclusiveMinimum?: number; maximum?: number }
+  | { type: 'array'; description: string; items: PropertySchema; minItems?: number; maxItems?: number }
+  | (ObjectSchema & { description: string });
 
 export interface ObjectSchema {
   type: 'object';
@@ -47,6 +54,21 @@ export interface ToolResult {
   content: unknown;
   exposed_ids: string[];
   referenced_ids: string[];
+  // Present only on a committed write: every resource the call put into the store, as
+  // <Type>/<id>, sorted (the resources it created or changed, and its Provenance). Reads,
+  // errors and finish have none.
+  written_ids?: string[];
+}
+
+// What a write tool returns once its resources are in the store (tools/write/commit.ts).
+export class Committed {
+  readonly content: unknown;
+  readonly written: readonly string[];
+
+  constructor(content: unknown, written: readonly string[]) {
+    this.content = content;
+    this.written = written;
+  }
 }
 
 // Results are capped at 8k tokens (design section 3). The count is estimated, not tokenized:
@@ -65,42 +87,70 @@ export function definitions(tools: readonly ToolDefinition[]): ToolDefinition[] 
 const patterns = new Map<string, RegExp>();
 const regex = (p: string) => patterns.get(p) ?? patterns.set(p, new RegExp(p, 'u')).get(p)!;
 
+// Strings and object members are checked where they are; `name` is the input path, e.g.
+// reactions[0].severity, and is the field an error names.
 function checkProperty(name: string, schema: PropertySchema, value: unknown): ToolError | undefined {
   const bad = (expected: string) => new ToolError('INVALID_INPUT', `'${name}' must be ${expected}`, name);
-  if (schema.type === 'integer') {
-    if (typeof value !== 'number' || !Number.isInteger(value)) return bad('an integer');
-    if (schema.minimum !== undefined && value < schema.minimum) return bad(`at least ${schema.minimum}`);
-    if (schema.maximum !== undefined && value > schema.maximum) return bad(`at most ${schema.maximum}`);
-    return undefined;
+  switch (schema.type) {
+    case 'integer':
+      if (typeof value !== 'number' || !Number.isInteger(value)) return bad('an integer');
+      if (schema.minimum !== undefined && value < schema.minimum) return bad(`at least ${schema.minimum}`);
+      if (schema.maximum !== undefined && value > schema.maximum) return bad(`at most ${schema.maximum}`);
+      return undefined;
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) return bad('a number');
+      if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) return bad(`greater than ${schema.exclusiveMinimum}`);
+      if (schema.maximum !== undefined && value > schema.maximum) return bad(`at most ${schema.maximum}`);
+      return undefined;
+    case 'array': {
+      if (!Array.isArray(value)) return bad('an array');
+      if (schema.minItems !== undefined && value.length < schema.minItems) return bad(`at least ${schema.minItems} items`);
+      if (schema.maxItems !== undefined && value.length > schema.maxItems) return bad(`at most ${schema.maxItems} items`);
+      for (let i = 0; i < value.length; i++) {
+        const invalid = checkProperty(`${name}[${i}]`, schema.items, value[i]);
+        if (invalid) return invalid;
+      }
+      return undefined;
+    }
+    case 'object':
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return bad('an object');
+      return checkMembers(schema, value as ToolInput, `${name}.`);
+    case 'string':
+      if (typeof value !== 'string') return bad('a string');
+      if (schema.enum && !schema.enum.includes(value)) return bad(`one of: ${schema.enum.join(', ')}`);
+      if (schema.minLength !== undefined && value.length < schema.minLength) return bad(`at least ${schema.minLength} characters`);
+      if (schema.maxLength !== undefined && value.length > schema.maxLength) return bad(`at most ${schema.maxLength} characters`);
+      if (schema.pattern !== undefined && !regex(schema.pattern).test(value)) return bad(`in the form ${schema.description}`);
+      return undefined;
   }
-  if (typeof value !== 'string') return bad('a string');
-  if (schema.enum && !schema.enum.includes(value)) return bad(`one of: ${schema.enum.join(', ')}`);
-  if (schema.minLength !== undefined && value.length < schema.minLength) return bad(`at least ${schema.minLength} characters`);
-  if (schema.maxLength !== undefined && value.length > schema.maxLength) return bad(`at most ${schema.maxLength} characters`);
-  if (schema.pattern !== undefined && !regex(schema.pattern).test(value)) return bad(`in the form ${schema.description}`);
+}
+
+// Unknown members, then missing required ones, then each member in schema order. `at` prefixes
+// the names: '' at the top level, 'new_dose.' inside an object property.
+function checkMembers(schema: Pick<ObjectSchema, 'properties' | 'required'>, input: ToolInput, at: string): ToolError | undefined {
+  const names = Object.keys(schema.properties);
+  for (const key of Object.keys(input)) {
+    if (!Object.hasOwn(schema.properties, key)) {
+      const takes = names.length === 0 ? 'this tool takes no parameters' : `${at === '' ? 'parameters' : 'properties'}: ${names.join(', ')}`;
+      return new ToolError('INVALID_INPUT', `'${at}${key}' is not a ${at === '' ? 'parameter' : 'property'} (${takes})`, `${at}${key}`);
+    }
+  }
+  for (const key of schema.required ?? []) {
+    if (input[key] === undefined) return new ToolError('INVALID_INPUT', `'${at}${key}' is required`, `${at}${key}`);
+  }
+  for (const key of names) {
+    const value = input[key];
+    if (value === undefined) continue;
+    const invalid = checkProperty(`${at}${key}`, schema.properties[key]!, value);
+    if (invalid) return invalid;
+  }
   return undefined;
 }
 
 // The ToolError for input that does not satisfy the schema, or undefined if it does.
 export function validateInput(schema: ObjectSchema, input: unknown): ToolError | undefined {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return new ToolError('INVALID_INPUT', 'input must be a JSON object');
-  const names = Object.keys(schema.properties);
-  for (const key of Object.keys(input)) {
-    if (!Object.hasOwn(schema.properties, key)) {
-      const takes = names.length === 0 ? 'this tool takes no parameters' : `parameters: ${names.join(', ')}`;
-      return new ToolError('INVALID_INPUT', `'${key}' is not a parameter (${takes})`, key);
-    }
-  }
-  for (const key of schema.required ?? []) {
-    if ((input as ToolInput)[key] === undefined) return new ToolError('INVALID_INPUT', `'${key}' is required`, key);
-  }
-  for (const key of names) {
-    const value = (input as ToolInput)[key];
-    if (value === undefined) continue;
-    const invalid = checkProperty(key, schema.properties[key]!, value);
-    if (invalid) return invalid;
-  }
-  return undefined;
+  return checkMembers(schema, input as ToolInput, '');
 }
 
 const REF = new RegExp(`^(${[...RESOURCE_TYPES, 'Policy'].join('|')})/[A-Za-z0-9.-]{1,64}$`);
@@ -142,10 +192,14 @@ export function callTool<C>(tools: readonly Tool<C>[], name: string, input: unkn
     if (e instanceof ToolError) return failure(e);
     throw e;
   }
+  const written = payload instanceof Committed ? [...payload.written].sort() : undefined;
+  if (payload instanceof Committed) payload = payload.content;
   const json = JSON.stringify(payload);
   if (!withinCap(json.length)) {
+    // The resources are already in the store, so reporting a rejection would be false.
+    if (written) throw new Error(`${name}: a committed write's result is over the ${RESULT_TOKEN_CAP}-token cap`);
     const message = `the result is about ${approxTokens(json)} tokens, over the ${RESULT_TOKEN_CAP}-token cap; ask for less (a smaller count, narrower filters, or search_notes for passages of a long note)`;
     return failure(new ToolError('NOT_SUPPORTED', message));
   }
-  return { is_error: false, content: payload, ...exposure(payload) };
+  return { is_error: false, content: payload, ...exposure(payload), ...(written ? { written_ids: written } : {}) };
 }
