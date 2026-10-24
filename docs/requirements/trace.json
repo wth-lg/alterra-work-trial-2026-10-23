@@ -1,4 +1,6 @@
 {
+  "pdf_block_sha256": "d4b59ac910142cf2d8d8e7364d06903f573b0a1190335543699729b42ef03a4b",
+  "done_when_clauses": 7,
   "rows": [
     {
       "id": "A1",
@@ -33,6 +35,9 @@
         }
       },
       "phase": "P22",
+      "done_when": [
+        5
+      ],
       "note": "The environment, six tasks in it, and the final run of claude-opus-5-5 against them (U1)."
     },
     {
@@ -81,7 +86,8 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=environment",
-        "action": "Open Environment and read the resource counts and the tool catalogue: FHIR R4 resources behind fhir_search, fhir_read and the typed write tools."
+        "action": "Open Environment and read the resource counts and the tool catalogue: FHIR R4 resources behind fhir_search, fhir_read and the typed write tools.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/A3-environment-fhir-store.png",
@@ -115,7 +121,8 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=chart",
-        "action": "Open Tasks, open renal-dose-review and its Chart tab: the read-only patient chart (problems, medications, allergies, results, notes) that the EHR-style tools read and write."
+        "action": "Open Tasks, open renal-dose-review and its Chart tab: the read-only patient chart (problems, medications, allergies, results, notes) that the EHR-style tools read and write.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/A4-task-chart.png",
@@ -124,10 +131,11 @@
       "expect": {
         "ax_text": {
           "file": "verifier-phase-P25c-1/A4-task-chart.ax.txt",
-          "text": "Allergies"
+          "text": "Source: FHIR R4 store"
         }
       },
-      "phase": "P14"
+      "phase": "P14",
+      "note": "An example shape, not a requirement. We did not build a separate mock EHR: the FHIR R4 store behind typed tools is what the agent acts on, and the Chart tab renders its resources EHR-style with a caption naming the store as the source."
     },
     {
       "id": "A5",
@@ -144,7 +152,8 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=environment",
-        "action": "Open Environment, pick search_notes in the tool catalogue, type a query and press Try: matching clinical notes come back with exposed_ids."
+        "action": "Open Environment, pick search_notes in the tool catalogue, type a query and press Try: matching clinical notes come back with exposed_ids.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/A5-environment-try-search-notes.png",
@@ -172,18 +181,27 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=findings",
-        "action": "Open Findings and read the section on what is new in this design (exposure-tagged tools, the grader validation matrix, attribution criteria)."
+        "action": "Open Findings and read the section What is new in this design (exposure-tagged tools, the grader validation matrix, attribution criteria).",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/A6-findings-design.png",
         "verifier-phase-P25c-1/A6-findings-design.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/A6-findings-design.ax.txt",
-          "text": "What is new in this design"
+      "expect": [
+        {
+          "command": {
+            "cmd": "grep -qF '>What is new in this design</h2>' docs/writeup.html",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/A6-findings-design.ax.txt",
+            "text": "What is new in this design"
+          }
         }
-      },
+      ],
       "phase": "P24"
     },
     {
@@ -207,7 +225,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=environment",
-        "action": "Open Environment, pick fhir_search in the tool catalogue, fill the arguments and press Try: the rows, their exposed_ids and an unchanged state hash show, with no key."
+        "action": "Open Environment, pick fhir_search in the tool catalogue, fill the arguments and press Try: the rows, their exposed_ids and an unchanged state hash show, with no key.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N1-environment-try-tool.png",
@@ -241,7 +260,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=environment",
-        "action": "Open Environment and read the tool catalogue: every read and write tool with its description and input schema; the agent changes state only through the write tools listed there."
+        "action": "Open Environment and read the tool catalogue: every read and write tool with its description and input schema; the agent changes state only through the write tools listed there.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N2-environment-tool-catalogue.png",
@@ -275,7 +295,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=environment",
-        "action": "Open Environment and read the count above the tool catalogue: 18 tools (9 read, 9 write including finish)."
+        "action": "Open Environment and read the count above the tool catalogue: 18 tools (9 read, 9 write including finish).",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N3-environment-tool-count.png",
@@ -310,7 +331,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks",
-        "action": "Open Tasks: six tasks are listed (renal-dose-review, results-inbox, crc-care-gap, discharge-medrec, contrast-ct-prep, message-queue), no _toy."
+        "action": "Open Tasks: six tasks are listed (renal-dose-review, results-inbox, crc-care-gap, discharge-medrec, contrast-ct-prep, message-queue), no _toy.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N4-tasks-list.png",
@@ -322,7 +344,10 @@
           "text": "message-queue"
         }
       },
-      "phase": "P14"
+      "phase": "P14",
+      "done_when": [
+        3
+      ]
     },
     {
       "id": "N5",
@@ -348,7 +373,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=grader-validation",
-        "action": "Open each of the six tasks, open its Grader validation tab and press Run: each one shows the oracle, alternative, mutant and null-agent verdicts, all as expected."
+        "action": "Open renal-dose-review, Grader validation: every probe verdict of the matrix; pnpm cli matrix --task all covers the six tasks.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N5-task-grader-validation-all.png",
@@ -389,7 +415,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=rubric",
-        "action": "Open Tasks, open renal-dose-review and its Rubric tab: each gate check and rubric item with its key, kind, method, points and traces_to."
+        "action": "Open Tasks, open renal-dose-review and its Rubric tab: each gate check and rubric item with its key, kind, method, points and traces_to.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N6-task-rubric.png",
@@ -421,8 +448,9 @@
       ],
       "ui_required": true,
       "ui": {
-        "route": "/?view=runs&run=final-1&trial=<first non-pass trial>",
-        "action": "Open Runs, open any trial of final-1 and its Grading tab: the verdict chip, the Score card, every gate check with its evidence and the rubric table with points, met and judge quote."
+        "route": "/?view=runs&run=final-1&trial=first-nonpass",
+        "action": "Open Runs, final-1 and its first non-pass trial, Grading tab: the verdict chip, the Score card, every gate check with its evidence and the rubric table with points, met and judge quote.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N7-trial-grading.png",
@@ -461,7 +489,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=reference-solution",
-        "action": "Open Tasks, open renal-dose-review and its Reference solution tab: the scripted step list through the same tools, with its oracle badge."
+        "action": "Open Tasks, open renal-dose-review and its Reference solution tab: the scripted step list through the same tools, with its oracle badge.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N8-task-reference-solution.png",
@@ -501,7 +530,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=grader-validation",
-        "action": "Open Tasks, open renal-dose-review, open Grader validation and press Run on the oracle (no key needed): it shows oracle PASS 1.0; repeat for the other five tasks."
+        "action": "Open renal-dose-review, Grader validation, Run (keyless): oracle PASS 1.0; pnpm cli oracle --task all covers the six tasks.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N9-task-grader-validation-oracle.png",
@@ -513,7 +543,10 @@
           "text": "oracle PASS 1.0"
         }
       },
-      "phase": "P14"
+      "phase": "P14",
+      "done_when": [
+        3
+      ]
     },
     {
       "id": "N10",
@@ -539,7 +572,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=prompt",
-        "action": "On the local runner with a key, open a task and press Run trial: the trajectory streams live and ends in the graded result with its Score and rubric breakdown."
+        "action": "On the local runner with a key, open a task and press Run trial: the trajectory streams live and ends in the graded result with its Score and rubric breakdown.",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/N10-live-trial-graded.png",
@@ -551,7 +585,10 @@
           "text": "Score"
         }
       },
-      "phase": "P15"
+      "phase": "P15",
+      "done_when": [
+        1
+      ]
     },
     {
       "id": "N11",
@@ -574,7 +611,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=prompt",
-        "action": "Open a task and press Run trial: the launcher shows the task and the model claude-opus-5-5, and hands back one graded trial record; the CLI one-liner is pnpm cli run-one --task <id> --model claude-opus-5-5."
+        "action": "Open a task and press Run trial: the launcher shows the task and the model claude-opus-5-5, and hands back one graded trial record; the CLI one-liner is pnpm cli run-one --task <id> --model claude-opus-5-5.",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/N11-run-launcher-model.png",
@@ -588,6 +626,9 @@
         }
       },
       "phase": "P15",
+      "done_when": [
+        2
+      ],
       "note": "One entry point: run(task, model) in packages/core/run.ts, used by run-one, the batch runner and the local runner."
     },
     {
@@ -610,7 +651,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=environment",
-        "action": "Open Environment and press Verify reset: the tab builds a fresh store and shows its hash next to the manifest hash, and says it matches the manifest."
+        "action": "Open Environment and press Verify reset: the tab builds a fresh store and shows its hash next to the manifest hash, and says it matches the manifest.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N12-environment-verify-reset.png",
@@ -647,21 +689,33 @@
       ],
       "ui_required": true,
       "ui": {
-        "route": "/?view=runs&run=final-1&trial=<first non-pass trial>",
-        "action": "Open any trial of final-1 and its State diff tab: the initial hash equals the manifest hash for every trial, and Replay reproduces the final hash."
+        "route": "/?view=runs&run=final-1&trial=first-nonpass",
+        "action": "Open the first non-pass trial of final-1: the initial state hash equals the manifest hash, and the state diff shows what the trial changed.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N13-trial-state-diff.png",
         "verifier-phase-P25c-1/N13-trial-state-diff.ax.txt",
         "verifier-phase-P25c-1/N13-state-hash-test.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm vitest run packages/env/test/state-hash packages/env/test/hash",
-          "exit": 0
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli replay results/runs/final-1",
+            "exit": 0
+          }
+        },
+        {
+          "command": {
+            "cmd": "pnpm vitest run packages/env/test/state-hash packages/env/test/hash",
+            "exit": 0
+          }
         }
-      },
-      "phase": "P16"
+      ],
+      "phase": "P16",
+      "done_when": [
+        4
+      ]
     },
     {
       "id": "N14",
@@ -685,18 +739,45 @@
       "ui_required": true,
       "ui": {
         "route": "/",
-        "action": "Open the app: the UI is the main surface, with the rail (Overview, Tasks, Runs, Findings, Environment) and the surface chip."
+        "action": "Open the app: the UI is the main surface, with the rail (Overview, Tasks, Runs, Findings, Environment) and the surface chip.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N14-app-shell.png",
         "verifier-phase-P25c-1/N14-app-shell.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/N14-app-shell.ax.txt",
-          "text": "Overview"
+      "expect": [
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/N14-app-shell.ax.txt",
+            "text": "Overview"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/N14-app-shell.ax.txt",
+            "text": "Tasks"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/N14-app-shell.ax.txt",
+            "text": "Runs"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/N14-app-shell.ax.txt",
+            "text": "Findings"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/N14-app-shell.ax.txt",
+            "text": "Environment"
+          }
         }
-      },
+      ],
       "phase": "P13",
       "note": "Superseded by the user: the UI is the main surface (U2, U12)."
     },
@@ -717,19 +798,28 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open Overview: each task row shows k/20 with its Wilson 95% interval, and the band 0.20-0.70 is drawn on the interval chart; every task sits inside it."
+        "action": "Open Overview: each task row shows k/20 with its Wilson 95% interval, and the band 0.20-0.70 is drawn on the interval chart; every task sits inside it.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W1-overview-band.png",
         "verifier-phase-P25c-1/W1-overview-band.ax.txt",
         "verifier-phase-P25c-1/W1-final-run-summary.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm cli summary results/runs/final-1 --require valid=20,band=0.2-0.7,env_error_raw=0,grader_error=0,model=claude-opus-5-5,replay=all",
-          "exit": 0
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require band=0.2-0.7",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W1-overview-band.ax.txt",
+            "text": "6 of 6 tasks in band"
+          }
         }
-      },
+      ],
       "phase": "P22"
     },
     {
@@ -755,19 +845,32 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open Overview: the band label reads band 0.20-0.70 (4 to 14 of 20) and each task shows k/20 inside it."
+        "action": "Open Overview: the band label reads band 0.20-0.70 (4 to 14 of 20) and each task shows k/20 inside it.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W2-overview-band.png",
-        "verifier-phase-P25c-1/W2-overview-band.ax.txt"
+        "verifier-phase-P25c-1/W2-overview-band.ax.txt",
+        "verifier-phase-P25c-1/W2-final-run-summary.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W2-overview-band.ax.txt",
-          "text": "band 0.20-0.70"
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require model=claude-opus-5-5,band=0.2-0.7",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W2-overview-band.ax.txt",
+            "text": "6 of 6 tasks in band"
+          }
         }
-      },
+      ],
       "phase": "P22",
+      "done_when": [
+        5
+      ],
       "note": "The user amended the band to 0.20-0.70 of 20 trials (U21); FINAL_PASS_BAND in packages/core/cost.ts."
     },
     {
@@ -787,19 +890,30 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open Overview: no task shows 0/20 or 20/20; each has passes and failures among its 20 swatches, with its Wilson 95% interval."
+        "action": "Open Overview: no task shows 0/20 or 20/20; each has passes and failures among its 20 swatches, with its Wilson 95% interval.",
+        "surface": "any"
       },
       "evidence": [
-        "verifier-phase-P25c-1/W3-overview-no-saturated-task.png",
-        "verifier-phase-P25c-1/W3-overview-no-saturated-task.ax.txt"
+        "verifier-phase-P25c-1/W3-overview-band.png",
+        "verifier-phase-P25c-1/W3-overview-band.ax.txt",
+        "verifier-phase-P25c-1/W3-final-run-summary.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W3-overview-no-saturated-task.ax.txt",
-          "text": "Wilson 95%"
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require band=0.2-0.7",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W3-overview-band.ax.txt",
+            "text": "6 of 6 tasks in band"
+          }
         }
-      },
-      "phase": "P22"
+      ],
+      "phase": "P22",
+      "note": "Band 0.2-0.7 excludes 0/20 and 20/20, so the band check is the check that no task always or never passes."
     },
     {
       "id": "W4",
@@ -817,18 +931,28 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=final-1",
-        "action": "Open Runs: final-1 is the official run, with its status, 120 trials, cost and pass rate; each trial opens its real claude-opus-5-5 trajectory."
+        "action": "Open Runs: final-1 is the official run, with its status, 120 trials, cost and pass rate; each trial opens its real claude-opus-5-5 trajectory.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W4-runs-official.png",
-        "verifier-phase-P25c-1/W4-runs-official.ax.txt"
+        "verifier-phase-P25c-1/W4-runs-official.ax.txt",
+        "verifier-phase-P25c-1/W4-replay-summary.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W4-runs-official.ax.txt",
-          "text": "final-1"
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli replay results/runs/final-1 && pnpm cli summary results/runs/final-1 --require model=claude-opus-5-5,replay=all,valid=20",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W4-runs-official.ax.txt",
+            "text": "claude-opus-5-5"
+          }
         }
-      },
+      ],
       "phase": "P22"
     },
     {
@@ -854,18 +978,29 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open Overview: each of the six tasks shows k/20 with its Wilson 95% interval and 20 trial swatches."
+        "action": "Open Overview: each of the six tasks shows k/20 with its Wilson 95% interval and 20 trial swatches.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W5-overview-pass-rates.png",
-        "verifier-phase-P25c-1/W5-overview-pass-rates.ax.txt"
+        "verifier-phase-P25c-1/W5-overview-pass-rates.ax.txt",
+        "verifier-phase-P25c-1/W5-summary-valid.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W5-overview-pass-rates.ax.txt",
-          "text": "/20"
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require valid=20",
+            "exit": 0
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/W5-overview-pass-rates.ax.txt",
+            "pattern": "\\b(?:[0-9]|1[0-9]|20)/20 passed, Wilson 95% [0-9]{1,3}-[0-9]{1,3}%",
+            "min_matches": 6
+          }
         }
-      },
+      ],
       "phase": "P22",
       "note": "The user amended ten trials to 20 per task (U21); FINAL_TRIALS_PER_TASK in packages/core/cost.ts."
     },
@@ -889,20 +1024,32 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=final-1",
-        "action": "Open Runs on final-1 and filter by label: every non-pass trial is labelled model, none environment or grader."
+        "action": "Open Runs on final-1 and filter by label: every non-pass trial is labelled model, none environment or grader.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W6-runs-labels.png",
         "verifier-phase-P25c-1/W6-runs-labels.ax.txt",
         "verifier-phase-P25c-1/W6-audit-check.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm cli audit-check results/runs/final-1",
-          "exit": 0
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli audit-check results/runs/final-1",
+            "exit": 0
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/W6-runs-labels.ax.txt",
+            "pattern": "\\b[1-9][0-9]* model, 0 environment, 0 grader\\b"
+          }
         }
-      },
-      "phase": "P23"
+      ],
+      "phase": "P23",
+      "done_when": [
+        6
+      ]
     },
     {
       "id": "W7",
@@ -925,20 +1072,32 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=final-1",
-        "action": "Open Runs on final-1 and filter by environment, then by grader: both lists are empty."
+        "action": "Open Runs on final-1 and filter by environment, then by grader: both lists are empty.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W7-runs-no-env-grader-fault.png",
         "verifier-phase-P25c-1/W7-runs-no-env-grader-fault.ax.txt",
         "verifier-phase-P25c-1/W7-summary-faults.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm cli summary results/runs/final-1 --require grader_error=0,env_error_raw=0",
-          "exit": 0
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require grader_error=0,env_error_raw=0",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W7-runs-no-env-grader-fault.ax.txt",
+            "text": "0 environment, 0 grader"
+          }
         }
-      },
-      "phase": "P23"
+      ],
+      "phase": "P23",
+      "done_when": [
+        6
+      ]
     },
     {
       "id": "W8",
@@ -947,30 +1106,33 @@
       "code": [
         "packages/core/outcomes.ts",
         "packages/core/explain.ts",
-        "apps/web/src/glossary"
+        "apps/web/src/trial"
       ],
       "tests": [
         "packages/core/test/explain.test.ts",
         "packages/core/test/outcomes.test.ts",
         "scripts/test/one-definition.test.ts",
-        "apps/web/e2e/browse.spec.ts"
+        "apps/web/e2e/trial.spec.ts"
       ],
       "ui_required": true,
       "ui": {
-        "route": "/?view=glossary",
-        "action": "Click the help icon beside any fault label: the How failures are attributed page lists each fault (model, environment, grader) with its criteria M1-M5, the audit label mapping, the pass definition and the denominator rule."
+        "route": "/?view=runs&run=final-1&trial=first-nonpass&tab=attribution",
+        "action": "Open the first non-pass trial of final-1 and its Attribution tab: each criterion M1-M5 shows met or not met with its evidence, which is how this failure was told apart from an environment or grader fault.",
+        "surface": "any"
       },
       "evidence": [
-        "verifier-phase-P25c-1/W8-glossary-criteria.png",
-        "verifier-phase-P25c-1/W8-glossary-criteria.ax.txt"
+        "verifier-phase-P25c-1/W8-trial-attribution-criteria.png",
+        "verifier-phase-P25c-1/W8-trial-attribution-criteria.ax.txt"
       ],
       "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W8-glossary-criteria.ax.txt",
-          "text": "How failures are attributed"
+        "ax_match": {
+          "file": "verifier-phase-P25c-1/W8-trial-attribution-criteria.ax.txt",
+          "pattern": "\\bM[1-5]: (?:met|not met)\\b",
+          "min_matches": 5
         }
       },
-      "phase": "P14"
+      "phase": "P16",
+      "note": "The expect names criterion ids, not criterion text: scripts/test/one-definition.test.ts forbids the FAULT_DEFINITIONS text verbatim outside packages/core/outcomes.ts."
     },
     {
       "id": "W9",
@@ -987,18 +1149,28 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=findings",
-        "action": "Open Findings: the pass-rate chart with Wilson intervals, the failure taxonomy bar and cost per trial, each claim linked to an example trajectory."
+        "action": "Open Findings: the pass-rate chart with Wilson intervals, the failure taxonomy bar and cost per trial, each claim linked to an example trajectory.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W9-findings.png",
         "verifier-phase-P25c-1/W9-findings.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W9-findings.ax.txt",
-          "text": "Wilson"
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm docs:check",
+            "exit": 0
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/W9-findings.ax.txt",
+            "pattern": "\\b(?:[0-9]|1[0-9]|20)/20 passed, Wilson 95% [0-9]{1,3}-[0-9]{1,3}%",
+            "min_matches": 6
+          }
         }
-      },
+      ],
       "phase": "P24"
     },
     {
@@ -1017,18 +1189,39 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=findings",
-        "action": "Open Findings and read Surprises, What we would change and Next steps."
+        "action": "Open Findings and read Surprises, What we would change and Next steps.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W10-findings-next.png",
         "verifier-phase-P25c-1/W10-findings-next.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W10-findings-next.ax.txt",
-          "text": "Next steps"
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm docs:check",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W10-findings-next.ax.txt",
+            "text": "Surprises"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W10-findings-next.ax.txt",
+            "text": "Changes"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W10-findings-next.ax.txt",
+            "text": "Next steps"
+          }
         }
-      },
+      ],
       "phase": "P24"
     },
     {
@@ -1070,7 +1263,8 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=prompt",
-        "action": "Open Tasks and each task: the Prompt, Rubric and Reference solution tabs; open Runs, final-1 and any trial for its trajectory."
+        "action": "Open Tasks and each task: the Prompt, Rubric and Reference solution tabs; open Runs, final-1 and any trial for its trajectory.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/H1-task-prompt.png",
@@ -1084,6 +1278,9 @@
         }
       },
       "phase": "P22",
+      "done_when": [
+        3
+      ],
       "note": "The replay command re-executes every committed trajectory to its recorded final hash, so the handed-over trajectories are complete."
     },
     {
@@ -1108,7 +1305,10 @@
           "exit": 0
         }
       },
-      "phase": "P24"
+      "phase": "P24",
+      "done_when": [
+        7
+      ]
     },
     {
       "id": "U1",
@@ -1126,7 +1326,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=prompt",
-        "action": "Open a task and press Run trial: the launcher shows the model read-only as claude-opus-5-5."
+        "action": "Open a task and press Run trial: the launcher shows the model read-only as claude-opus-5-5.",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/U1-run-launcher-model.png",
@@ -1158,18 +1359,45 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open the app: every requirement in this table is reachable from the rail (Overview, Tasks, Runs, Findings, Environment) without the CLI."
+        "action": "Open the app: every requirement in this table is reachable from the rail (Overview, Tasks, Runs, Findings, Environment) without the CLI.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U2-overview.png",
         "verifier-phase-P25c-1/U2-overview.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/U2-overview.ax.txt",
-          "text": "Wilson 95%"
+      "expect": [
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U2-overview.ax.txt",
+            "text": "Overview"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U2-overview.ax.txt",
+            "text": "Tasks"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U2-overview.ax.txt",
+            "text": "Runs"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U2-overview.ax.txt",
+            "text": "Findings"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U2-overview.ax.txt",
+            "text": "Environment"
+          }
         }
-      },
+      ],
       "phase": "P14"
     },
     {
@@ -1187,7 +1415,8 @@
       "ui_required": true,
       "ui": {
         "route": "/",
-        "action": "Open the app with no key: the key gate asks for an Anthropic API key, typed or pasted into the masked field, and Validate; nothing else is needed besides internet."
+        "action": "Open the app with no key: the key gate asks for an Anthropic API key, typed or pasted into the masked field, and Validate; nothing else is needed besides internet.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U3-key-gate.png",
@@ -1226,7 +1455,8 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=policy",
-        "action": "Open Tasks, open renal-dose-review and its Policy tab: the task follows a written clinical policy with real dosing criteria rather than a literal toy reading."
+        "action": "Open Tasks, open renal-dose-review and its Policy tab: the task follows a written clinical policy with real dosing criteria rather than a literal toy reading.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U4-task-policy.png",
@@ -1235,7 +1465,7 @@
       "expect": {
         "ax_text": {
           "file": "verifier-phase-P25c-1/U4-task-policy.ax.txt",
-          "text": "Policy"
+          "text": "RBC-PHARM-07"
         }
       },
       "phase": "P17i"
@@ -1261,6 +1491,9 @@
         }
       },
       "phase": "P24",
+      "done_when": [
+        7
+      ],
       "note": "docs:check fails when the dated reference list (2025-2026 research, datasets, tools) is missing from docs/writeup.html."
     },
     {
@@ -1275,14 +1508,23 @@
       ],
       "ui_required": false,
       "evidence": [
-        "verifier-phase-P25c-1/U6-donewhen.txt"
+        "verifier-phase-P25c-1/U6-donewhen.txt",
+        "verifier-phase-P25c-1/U6-phase-verdicts.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm donewhen",
-          "exit": 0
+      "expect": [
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U6-phase-verdicts.txt",
+            "text": "phases without a VERIFIED report: 0"
+          }
+        },
+        {
+          "command": {
+            "cmd": "pnpm donewhen",
+            "exit": 0
+          }
         }
-      },
+      ],
       "phase": "P26",
       "note": "Each phase lands only after a verifier VERIFIED verdict on the PR head; donewhen checks the whole done-when predicate on the result."
     },
@@ -1300,7 +1542,8 @@
       "ui_required": true,
       "ui": {
         "route": "https://wth-lg.github.io/clinical-agent-env/",
-        "action": "Open the hosted URL: the app loads from GitHub Pages and the surface chip reads Browser-direct."
+        "action": "Open the hosted URL: the app loads from GitHub Pages and the surface chip reads Browser-direct.",
+        "surface": "hosted"
       },
       "evidence": [
         "verifier-phase-P25c-1/U7-hosted-overview.png",
@@ -1408,7 +1651,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open Overview: stone neutrals with one blue accent, no logos, a self-hosted OFL font."
+        "action": "Open Overview: stone neutrals with one blue accent, no logos, a self-hosted OFL font.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U11-overview-style.png",
@@ -1440,7 +1684,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "From a clean clone run pnpm start, open the printed 127.0.0.1 URL: the app loads from the local runner and the surface chip reads Local runner."
+        "action": "From a clean clone run pnpm start, open the printed 127.0.0.1 URL: the app loads from the local runner and the surface chip reads Local runner.",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/U12-local-overview.png",
@@ -1452,7 +1697,10 @@
           "text": "Local runner"
         }
       },
-      "phase": "P12b"
+      "phase": "P12b",
+      "done_when": [
+        1
+      ]
     },
     {
       "id": "U13",
@@ -1475,7 +1723,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=prompt",
-        "action": "On the local runner press Run trial: the trial runs in the runner through run() and its events stream back into the live view."
+        "action": "On the local runner press Run trial: the trial runs in the runner through run() and its events stream back into the live view.",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/U13-live-trial-runner.png",
@@ -1488,7 +1737,10 @@
           "exit": 0
         }
       },
-      "phase": "P15"
+      "phase": "P15",
+      "done_when": [
+        1
+      ]
     },
     {
       "id": "U14",
@@ -1509,18 +1761,28 @@
       "ui_required": true,
       "ui": {
         "route": "/",
-        "action": "On the local runner open the key gate: it says the key goes only to the local runner, which keeps it in memory and sends it only to the Anthropic API; after Validate no key is in browser storage."
+        "action": "On the local runner open the key gate: it says the key goes only to the local runner, which keeps it in memory and sends it only to the Anthropic API; after Validate no key is in browser storage.",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/U14-key-gate-local.png",
-        "verifier-phase-P25c-1/U14-key-gate-local.ax.txt"
+        "verifier-phase-P25c-1/U14-key-gate-local.ax.txt",
+        "verifier-phase-P25c-1/U14-storage-count.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/U14-key-gate-local.ax.txt",
-          "text": "keeps it in memory"
+      "expect": [
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U14-storage-count.txt",
+            "text": "sk-ant- values in storage: 0"
+          }
+        },
+        {
+          "command": {
+            "cmd": "pnpm vitest run apps/runner",
+            "exit": 0
+          }
         }
-      },
+      ],
       "phase": "P12b"
     },
     {
@@ -1541,7 +1803,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Read the spend meter in the top bar: session spend against the session cap, below the ledger caps."
+        "action": "Read the spend meter in the top bar: session spend against the session cap, below the ledger caps.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U15-spend-meter.png",
@@ -1572,7 +1835,8 @@
       "ui_required": true,
       "ui": {
         "route": "https://wth-lg.github.io/clinical-agent-env/",
-        "action": "On the hosted URL validate the key: if its organization does not allow browser access, the page says so and shows the local command (ending in pnpm start) with a copy button; browsing and replay work without a key."
+        "action": "On the hosted URL validate the key: if its organization does not allow browser access, the page says so and shows the local command (ending in pnpm start) with a copy button; browsing and replay work without a key.",
+        "surface": "hosted"
       },
       "evidence": [
         "verifier-phase-P25c-1/U16-hosted-key-gate.png",
@@ -1584,7 +1848,10 @@
           "text": "pnpm start"
         }
       },
-      "phase": "P25"
+      "phase": "P25",
+      "done_when": [
+        1
+      ]
     },
     {
       "id": "U17",
@@ -1603,7 +1870,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=tasks&task=renal-dose-review&tab=prompt",
-        "action": "Run the live demo from the local runner: the surface chip reads Local runner while the trial streams."
+        "action": "Run the live demo from the local runner: the surface chip reads Local runner while the trial streams.",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/U17-local-live-trial.png",
@@ -1702,20 +1970,39 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open Overview: each task shows k/20 and its Wilson 95% interval inside the band 0.20-0.70."
+        "action": "Open Overview: each task shows k/20 and its Wilson 95% interval inside the band 0.20-0.70.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U21-overview-k-of-20.png",
         "verifier-phase-P25c-1/U21-overview-k-of-20.ax.txt",
         "verifier-phase-P25c-1/U21-final-run-summary.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm cli summary results/runs/final-1 --require valid=20,band=0.2-0.7,env_error_raw=0,grader_error=0,model=claude-opus-5-5,replay=all",
-          "exit": 0
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require valid=20,band=0.2-0.7",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U21-overview-k-of-20.ax.txt",
+            "text": "6 of 6 tasks in band"
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/U21-overview-k-of-20.ax.txt",
+            "pattern": "\\b(?:[0-9]|1[0-9]|20)/20 passed, Wilson 95% [0-9]{1,3}-[0-9]{1,3}%",
+            "min_matches": 6
+          }
         }
-      },
-      "phase": "P22"
+      ],
+      "phase": "P22",
+      "done_when": [
+        5
+      ]
     },
     {
       "id": "U22",
@@ -1746,27 +2033,40 @@
       "text_sha256": "f66b6c99f6c1ad838438ca58584ce0749214926b2a1e3980094642391a031cdb",
       "kind": "user",
       "code": [
-        "docs/requirements/trace.json",
-        "cli/trace-check.ts"
+        "apps/web/src/trial",
+        "apps/web/src/keygate/KeyChip.tsx",
+        "apps/web/src/keygate/KeyGate.tsx"
       ],
       "tests": [
-        "cli/test/trace-check.test.ts"
+        "apps/web/e2e/trial.spec.ts",
+        "apps/web/e2e/shell.spec.ts"
       ],
       "ui_required": true,
       "ui": {
-        "route": "/",
-        "action": "At the end of the computer-use audit press Forget on each surface: the key gate returns, asking for a key."
+        "route": "/?view=runs&run=session&trial=latest",
+        "action": "On the local runner, after the six live trials of the audit, open the latest one: its header shows the not human-audited marker; then press Forget key: the key gate returns.",
+        "surface": "local"
       },
       "evidence": [
+        "verifier-phase-P25c-1/U23-local-live-trial.png",
+        "verifier-phase-P25c-1/U23-local-live-trial.ax.txt",
         "verifier-phase-P25c-1/U23-local-key-forgotten.png",
         "verifier-phase-P25c-1/U23-local-key-forgotten.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/U23-local-key-forgotten.ax.txt",
-          "text": "Add an API key"
+      "expect": [
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U23-local-live-trial.ax.txt",
+            "text": "not human-audited"
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U23-local-key-forgotten.ax.txt",
+            "text": "Add an API key"
+          }
         }
-      },
+      ],
       "phase": "P25c"
     },
     {
@@ -1834,19 +2134,28 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=overview",
-        "action": "Open Overview: every task inside the band 0.20-0.70."
+        "action": "Open Overview: the band line reads 6 of 6 tasks in band.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U26-overview-band.png",
         "verifier-phase-P25c-1/U26-overview-band.ax.txt",
         "verifier-phase-P25c-1/U26-final-run-summary.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm cli summary results/runs/final-1 --require valid=20,band=0.2-0.7,env_error_raw=0,grader_error=0,model=claude-opus-5-5,replay=all",
-          "exit": 0
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require band=0.2-0.7",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U26-overview-band.ax.txt",
+            "text": "6 of 6 tasks in band"
+          }
         }
-      },
+      ],
       "phase": "P22"
     },
     {
@@ -1866,18 +2175,27 @@
       "ui_required": false,
       "ui": {
         "route": "/?view=findings",
-        "action": "Open Findings and read what is new in this design."
+        "action": "Open Findings and read the section What is new in this design (exposure-tagged tools, the grader validation matrix, attribution criteria).",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U27-findings-design.png",
         "verifier-phase-P25c-1/U27-findings-design.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/U27-findings-design.ax.txt",
-          "text": "What is new in this design"
+      "expect": [
+        {
+          "command": {
+            "cmd": "grep -qF '>What is new in this design</h2>' docs/writeup.html",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U27-findings-design.ax.txt",
+            "text": "What is new in this design"
+          }
         }
-      },
+      ],
       "phase": "P24"
     },
     {
@@ -1898,18 +2216,28 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=final-1",
-        "action": "Open Runs on final-1: the header shows k/N with its Wilson 95% interval, the pass definition and the denominator rule."
+        "action": "Open Runs on final-1: the header shows k/N with its Wilson 95% interval, the pass definition and the denominator rule.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U28-runs-header.png",
         "verifier-phase-P25c-1/U28-runs-header.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/U28-runs-header.ax.txt",
-          "text": "Wilson 95%"
+      "expect": [
+        {
+          "command": {
+            "cmd": "pnpm cli summary results/runs/final-1 --require model=claude-opus-5-5,valid=20,replay=all",
+            "exit": 0
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/U28-runs-header.ax.txt",
+            "pattern": "\\b(?:[0-9]|1[0-9]|20)/20 passed, Wilson 95% [0-9]{1,3}-[0-9]{1,3}%",
+            "min_matches": 6
+          }
         }
-      },
+      ],
       "phase": "P22"
     },
     {
@@ -1943,30 +2271,42 @@
         "packages/core/outcomes.ts",
         "packages/core/explain.ts",
         "cli/audit-check.ts",
+        "apps/web/src/trial",
         "apps/web/src/glossary"
       ],
       "tests": [
         "packages/core/test/explain.test.ts",
         "packages/core/test/outcomes.test.ts",
         "scripts/test/one-definition.test.ts",
-        "cli/test/audit-check.test.ts"
+        "cli/test/audit-check.test.ts",
+        "apps/web/e2e/trial.spec.ts"
       ],
       "ui_required": true,
       "ui": {
-        "route": "/?view=glossary",
-        "action": "Open How failures are attributed: each fault with its ordered criteria M1-M5 and what evidence meets each."
+        "route": "/?view=runs&run=final-1&trial=first-nonpass&tab=attribution",
+        "action": "Open the first non-pass trial of final-1 and its Attribution tab: the criteria table (M1-M5, met or not met) and the How failures are attributed link to the definitions.",
+        "surface": "any"
       },
       "evidence": [
-        "verifier-phase-P25c-1/U30-glossary-criteria.png",
-        "verifier-phase-P25c-1/U30-glossary-criteria.ax.txt"
+        "verifier-phase-P25c-1/U30-trial-attribution-criteria.png",
+        "verifier-phase-P25c-1/U30-trial-attribution-criteria.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/U30-glossary-criteria.ax.txt",
-          "text": "M5"
+      "expect": [
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/U30-trial-attribution-criteria.ax.txt",
+            "pattern": "\\bM[1-5]: (?:met|not met)\\b",
+            "min_matches": 5
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U30-trial-attribution-criteria.ax.txt",
+            "text": "How failures are attributed"
+          }
         }
-      },
-      "phase": "P14a"
+      ],
+      "phase": "P16"
     },
     {
       "id": "U31",
@@ -1988,7 +2328,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=final-1",
-        "action": "Open Runs on a run with non-pass trials: each non-pass row shows, with no click, the outcome, the label, the decisive check and the one-line reason; opening the trial shows the same in its header."
+        "action": "Open Runs, final-1: each non-pass row shows, with no click, the outcome, the label and the reason (decisive check id, expected and found); open the first non-pass trial: its header shows the same reason.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U31-runs-why-failed.png",
@@ -1996,14 +2337,22 @@
         "verifier-phase-P25c-1/U31-trial-attribution-header.png",
         "verifier-phase-P25c-1/U31-trial-attribution-header.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/U31-runs-why-failed.ax.txt",
-          "text": "not human-audited"
+      "expect": [
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/U31-runs-why-failed.ax.txt",
+            "pattern": "\\b[A-Z]+[0-9]+ failed: expected [^,\\n]+, found "
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/U31-trial-attribution-header.ax.txt",
+            "pattern": "\\b[A-Z]+[0-9]+ failed: expected [^,\\n]+, found "
+          }
         }
-      },
+      ],
       "phase": "P16",
-      "note": "The P14 and P16 gates check the reason equals explainTrial(record, audit); the AX text checks the audited marker is rendered on an unaudited trial."
+      "note": "The P14 and P16 gates check the reason equals explainTrial(record, audit). P23 audits every final-1 non-pass, so the not human-audited marker is checked on the local live trial in U23."
     },
     {
       "id": "U32",
@@ -2033,14 +2382,23 @@
       ],
       "ui_required": false,
       "evidence": [
-        "verifier-phase-P25c-1/U32-matrix-after-audit.txt"
+        "verifier-phase-P25c-1/U32-matrix-after-audit.txt",
+        "verifier-phase-P25c-1/U32-writeup-audit.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "pnpm cli matrix --task all",
-          "exit": 0
+      "expect": [
+        {
+          "command": {
+            "cmd": "grep -qF '>Audit against research and public environments</h2>' docs/writeup.html",
+            "exit": 0
+          }
+        },
+        {
+          "command": {
+            "cmd": "pnpm cli matrix --task all",
+            "exit": 0
+          }
         }
-      },
+      ],
       "phase": "P17i",
       "note": "The P17r audit report lives in the run directory; each routed item lands in P17i and the matrix stays green."
     },
@@ -2059,16 +2417,18 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Walk every screen in the audit and compare it with the reference workspace: layout, density and clarity."
+        "action": "Walk every screen in the audit and compare it with the reference workspace: layout, density and clarity.",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U33-overview-ui-review.png",
-        "verifier-phase-P25c-1/U33-overview-ui-review.ax.txt"
+        "verifier-phase-P25c-1/U33-overview-ui-review.ax.txt",
+        "verifier-phase-P25c-1/U33-ui-audit.txt"
       ],
       "expect": {
         "ax_text": {
-          "file": "verifier-phase-P25c-1/U33-overview-ui-review.ax.txt",
-          "text": "Overview"
+          "file": "verifier-phase-P25c-1/U33-ui-audit.txt",
+          "text": "must-fix open: 0"
         }
       },
       "phase": "P25c"
@@ -2096,7 +2456,10 @@
           "exit": 0
         }
       },
-      "phase": "P24"
+      "phase": "P24",
+      "done_when": [
+        7
+      ]
     }
   ]
 }

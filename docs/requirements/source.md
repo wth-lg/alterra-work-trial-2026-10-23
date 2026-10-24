@@ -5,9 +5,12 @@ modification. Each line is one sentence with its id: the section letter (A, N, W
 sentence's ordinal in that section. A bold lead-in such as "Something to act on." is its own
 line. The cover page and the page headers and footers are left out.
 
-`docs/requirements/trace.json` maps each id to code, tests, a UI screen and action, evidence and
-an owning plan phase. `pnpm cli trace-check` fails when an id has no row, when a line holds more
-than one sentence, when ids skip, or when a line changes and its row's `text_sha256` does not.
+`docs/requirements/trace.json` maps each id to code, tests, a UI screen with its action and
+surface, evidence, one or more expects and an owning plan phase; `docs/requirements/ui-contract.md`
+lists the routes and UI strings the expects depend on. `pnpm cli trace-check` fails when an id has
+no row, when a line holds more than one sentence, when ids skip, when a line changes and its row's
+`text_sha256` does not, when the A, N, W and H sections change and trace.json's
+`pdf_block_sha256` does not, or when a route or UI string is missing from the contract.
 
 ## A. The assignment
 

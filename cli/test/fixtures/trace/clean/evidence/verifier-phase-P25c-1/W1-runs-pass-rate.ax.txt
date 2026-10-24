@@ -1,2 +1,3 @@
 heading "Runs"
-text "7/20"
+text "1 of 1 tasks in band"
+text "7/20 passed"

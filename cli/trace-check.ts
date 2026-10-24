@@ -1,37 +1,50 @@
 // pnpm cli trace-check [--plan <plan.md>] [--done <phase ids>] [--final --evidence-root <dir>]
-//                      [--root <dir>] [--source <file>] [--trace <file>]
+//                      [--root <dir>] [--source <file>] [--trace <file>] [--contract <file>]
 // The requirement-trace matrix (plan phase P9t). docs/requirements/source.md holds every sentence
 // of the assignment's four sections (A, N, W, H) and every user modification (U), one per line as
-// `- **<id>** <text>`; docs/requirements/trace.json holds one row per id. It exits 1, printing
-// `<id>: <problem>; fix: <fix>` for each failure, when:
+// `- **<id>** <text>`; docs/requirements/trace.json holds one row per id;
+// docs/requirements/ui-contract.md lists every route and UI string the expects depend on. It
+// exits 1, printing `<id>: <problem>; fix: <fix>` for each failure, when:
 //   - a source id has no row, a row has no source line, or an id repeats
 //   - ids in a section do not run <letter>1..<letter>n in order, or a source line holds more
 //     than one sentence
-//   - text_sha256 differs from the sha256 of the source line's text
+//   - text_sha256 differs from the sha256 of the source line's text, or pdf_block_sha256 differs
+//     from the sha256 of the whole A/N/W/H block (so deleting a section's last sentence together
+//     with its row fails)
 //   - a row lacks code, tests, evidence, expect or phase, or its kind does not fit its section
-//   - an N or W row has ui_required false, or a ui_required row lacks ui.route or ui.action
-//   - an ax_text expect names a file that is not in the row's evidence list
+//   - an N or W row has ui_required false, a ui_required row lacks ui.route or ui.action, a ui
+//     lacks a surface (local, hosted or any), or a row with a UI snapshot (.ax.txt) has no ui
+//   - an expect element is not one of ax_text, ax_match or command, an ax_* file is not in the
+//     row's evidence list, or an ax_match pattern does not compile; expect may be a list, and
+//     every element must hold
+//   - a ui.route, an ax_text text or an ax_match pattern is not listed in ui-contract.md as a
+//     backticked string
+//   - done_when names a clause outside 1..done_when_clauses, or a clause has no row
 //   - with --plan, a phase is not a `### <phase>:` heading in that plan
 //   - with --done, a code or test path does not exist and the row's phase is in the list (a path
 //     of a phase not yet done may be missing)
-//   - with --final, any code, test or evidence path does not exist, or an expect does not hold:
-//     the ax_text is absent from the snapshot under --evidence-root, or the command, run in the
-//     repo root, exits with another code
+//   - with --final, any code, test or evidence path does not exist, a route holds a placeholder
+//     ('<'), or an expect element does not hold: the ax_text is absent from the snapshot under
+//     --evidence-root, the ax_match pattern matches fewer than min_matches times (default 1), or
+//     the command, run in the repo root, exits with another code
 // Paths in code and tests are relative to --root (default the repo root), evidence relative to
 // --evidence-root. Exit codes: 0 ok, 1 failure, 2 usage error.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
-const USAGE = 'usage: pnpm cli trace-check [--plan <plan.md>] [--done <phase ids>] [--final --evidence-root <dir>] [--root <dir>] [--source <file>] [--trace <file>]';
-const WITH_VALUE = new Set(['--plan', '--done', '--evidence-root', '--root', '--source', '--trace']);
+const USAGE = 'usage: pnpm cli trace-check [--plan <plan.md>] [--done <phase ids>] [--final --evidence-root <dir>] [--root <dir>] [--source <file>] [--trace <file>] [--contract <file>]';
+const WITH_VALUE = new Set(['--plan', '--done', '--evidence-root', '--root', '--source', '--trace', '--contract']);
 // A command expect runs the suite or check it names; a whole-repo command can take minutes.
 const COMMAND_TIMEOUT_MS = 15 * 60_000;
 
 export const SECTIONS = ['A', 'N', 'W', 'H', 'U'] as const;
+// The assignment's own sections; pdf_block_sha256 pins their text. U rows may grow.
+const PDF_SECTIONS: readonly string[] = ['A', 'N', 'W', 'H'];
+const SURFACES = ['local', 'hosted', 'any'] as const;
 type Section = (typeof SECTIONS)[number];
 const KINDS: Record<Section, readonly string[]> = {
   A: ['scope'],
@@ -48,7 +61,10 @@ const HEADING = /^## ([A-Z])\. /;
 // do not end one.
 const SENTENCE_END = /[.!?]+["'”’)\]]*(?=$|\s+["'“‘(]?[A-Z])/g;
 
-export type Expect = { ax_text: { file: string; text: string } } | { command: { cmd: string; exit: number } };
+export type Expect =
+  | { ax_text: { file: string; text: string } }
+  | { ax_match: { file: string; pattern: string; min_matches?: number } }
+  | { command: { cmd: string; exit: number } };
 
 export interface TraceRow {
   id: string;
@@ -59,11 +75,18 @@ export interface TraceRow {
   code: string[];
   tests: string[];
   ui_required: boolean;
-  ui?: { route: string; action: string };
+  ui?: { route: string; action: string; surface: (typeof SURFACES)[number] };
   evidence: string[];
-  expect: Expect;
+  expect: Expect | Expect[];
   phase: string;
+  done_when?: number[];
   note?: string;
+}
+
+export interface Trace {
+  pdf_block_sha256?: string;
+  done_when_clauses?: number;
+  rows: TraceRow[];
 }
 
 export interface SourceLine {
@@ -85,13 +108,18 @@ export const sha256 = (text: string): string => createHash('sha256').update(text
 
 export const sentenceCount = (text: string): number => text.match(SENTENCE_END)?.length ?? 0;
 
-// Every `- **<id>** <text>` line under a `## <letter>. ` heading, plus structural failures.
-export function parseSource(text: string): { lines: SourceLine[]; failures: Failure[] } {
+// Every `- **<id>** <text>` line under a `## <letter>. ` heading, the A/N/W/H block (every line
+// from its section headings up to the next other `## ` heading, trailing blanks dropped), plus
+// structural failures.
+export function parseSource(text: string): { lines: SourceLine[]; block: string; failures: Failure[] } {
   const lines: SourceLine[] = [];
   const failures: Failure[] = [];
+  const block: string[] = [];
   let section: string | undefined;
   text.split('\n').forEach((raw, i) => {
     const heading = HEADING.exec(raw);
+    if (raw.startsWith('## ')) section = heading?.[1];
+    if (section && PDF_SECTIONS.includes(section)) block.push(raw);
     if (heading) {
       section = heading[1];
       if (!(SECTIONS as readonly string[]).includes(section!)) failures.push({ id: `line ${i + 1}`, problem: `unknown section ${section}`, fix: `use one of ${SECTIONS.join(', ')}` });
@@ -119,7 +147,7 @@ export function parseSource(text: string): { lines: SourceLine[]; failures: Fail
     const n = sentenceCount(l.text);
     if (n > 1) failures.push({ id: l.id, problem: `the source line holds ${n} sentences`, fix: 'split it into one line per sentence, each with its own id' });
   }
-  return { lines, failures };
+  return { lines, block: block.join('\n').trimEnd(), failures };
 }
 
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
@@ -149,14 +177,55 @@ function checkRow(r: TraceRow, src: SourceLine, failures: Failure[]): void {
     if (!nonEmpty(r.ui?.route)) fail('ui.route is missing', 'name the screen as its URL route, e.g. /?view=environment');
     if (!nonEmpty(r.ui?.action)) fail('ui.action is missing', 'say what the interviewer sees or does on that screen');
   }
-  const e = r.expect as Partial<{ ax_text: { file?: unknown; text?: unknown }; command: { cmd?: unknown; exit?: unknown } }> | undefined;
-  if (!e) fail('expect is missing', 'add {ax_text: {file, text}} or {command: {cmd, exit}} that shows the outcome');
-  else if (e.ax_text && !e.command) {
-    if (!nonEmpty(e.ax_text.file) || !nonEmpty(e.ax_text.text)) fail('expect ax_text needs file and text', 'name the AX snapshot and the text it must contain');
-    else if (!r.evidence?.includes(e.ax_text.file)) fail(`expect ax_text file ${e.ax_text.file} is not in evidence`, 'add the snapshot to the row evidence list, so the audit produces it');
-  } else if (e.command && !e.ax_text) {
-    if (!nonEmpty(e.command.cmd) || !Number.isInteger(e.command.exit)) fail('expect command needs cmd and an integer exit', 'name the repo command and its expected exit code');
-  } else fail('expect must hold exactly one of ax_text or command', 'keep one');
+  if (r.ui !== undefined) {
+    if (!(SURFACES as readonly unknown[]).includes(r.ui.surface)) fail(r.ui.surface === undefined ? 'ui.surface is missing' : `ui.surface ${JSON.stringify(r.ui.surface)} is not ${SURFACES.slice(0, -1).join(', ')} or ${SURFACES.at(-1)}`, 'name the surface P25c checks the row on: local (the runner), hosted (the Pages site) or any');
+  }
+  for (const p of stringList(r.evidence) ? r.evidence : []) {
+    if (p.endsWith('.ax.txt') && !nonEmpty(r.ui?.route)) fail(`evidence ${p} is a UI snapshot, but the row has no ui.route`, 'add ui with the route, action and surface P25c takes the snapshot on');
+  }
+  if (r.expect === undefined) fail('expect is missing', 'add {ax_text: {file, text}}, {ax_match: {file, pattern}} or {command: {cmd, exit}} that shows the outcome');
+  else if (Array.isArray(r.expect) && r.expect.length === 0) fail('expect is an empty list', 'add at least one element that shows the outcome');
+  else for (const [label, e] of expectElements(r.expect)) checkExpect(r, label, e, fail);
+}
+
+type LooseExpect = Partial<{ ax_text: { file?: unknown; text?: unknown }; ax_match: { file?: unknown; pattern?: unknown; min_matches?: unknown }; command: { cmd?: unknown; exit?: unknown } }>;
+
+// Each element with its label in failures: `expect` for a single object, `expect[i]` in a list.
+const expectElements = (e: unknown): [string, LooseExpect][] =>
+  Array.isArray(e) ? e.map((x, i) => [`expect[${i}]`, (x ?? {}) as LooseExpect]) : [['expect', (e ?? {}) as LooseExpect]];
+
+function compiles(pattern: string): boolean {
+  try {
+    new RegExp(pattern, 'g');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function checkExpect(r: TraceRow, label: string, e: LooseExpect, fail: (problem: string, fix: string) => void): void {
+  const kinds = (['ax_text', 'ax_match', 'command'] as const).filter((k) => typeof e === 'object' && e[k] !== undefined);
+  if (kinds.length !== 1) {
+    fail(`${label} must hold exactly one of ax_text, ax_match or command`, 'keep one per element; use a list for several');
+    return;
+  }
+  const inEvidence = (file: string) => {
+    if (!r.evidence?.includes(file)) fail(`${label} ${kinds[0]} file ${file} is not in evidence`, 'add the snapshot to the row evidence list, so the audit produces it');
+  };
+  if (e.ax_text) {
+    if (!nonEmpty(e.ax_text.file) || !nonEmpty(e.ax_text.text)) fail(`${label} ax_text needs file and text`, 'name the AX snapshot and the text it must contain');
+    else inEvidence(e.ax_text.file);
+  } else if (e.ax_match) {
+    const m = e.ax_match;
+    if (!nonEmpty(m.file) || !nonEmpty(m.pattern)) fail(`${label} ax_match needs file and pattern`, 'name the AX snapshot and the regular expression it must match');
+    else {
+      inEvidence(m.file);
+      if (!compiles(m.pattern)) fail(`${label} ax_match pattern is not a valid regular expression: ${m.pattern}`, 'write a JavaScript regular expression source');
+    }
+    if (m.min_matches !== undefined && !(Number.isInteger(m.min_matches) && (m.min_matches as number) >= 1)) fail(`${label} ax_match min_matches is not a positive integer`, 'set min_matches to the count the screen must show, or leave it out for 1');
+  } else if (e.command) {
+    if (!nonEmpty(e.command.cmd) || !Number.isInteger(e.command.exit)) fail(`${label} command needs cmd and an integer exit`, 'name the repo command and its expected exit code');
+  }
 }
 
 function defaultRun(cmd: string, cwd: string): { exit: number; output: string } {
@@ -188,12 +257,17 @@ export async function main(args: string[], deps: Deps = { out: (l) => process.st
   const tracePath = resolve(root, opts.get('--trace') ?? 'docs/requirements/trace.json');
   const done = new Set((opts.get('--done') ?? '').split(/[\s,]+/).filter(Boolean));
 
+  const contractPath = resolve(root, opts.get('--contract') ?? 'docs/requirements/ui-contract.md');
+  let trace: Trace;
   let rows: TraceRow[];
   let source: ReturnType<typeof parseSource>;
+  let contract: string;
   try {
     source = parseSource(readFileSync(sourcePath, 'utf8'));
-    rows = (JSON.parse(readFileSync(tracePath, 'utf8')) as { rows: TraceRow[] }).rows;
+    trace = JSON.parse(readFileSync(tracePath, 'utf8')) as Trace;
+    rows = trace.rows;
     if (!Array.isArray(rows)) throw new Error(`${tracePath}: rows is not an array`);
+    contract = readFileSync(contractPath, 'utf8');
   } catch (e) {
     deps.out(`trace-check: ${(e as Error).message}`);
     return 2;
@@ -210,6 +284,15 @@ export async function main(args: string[], deps: Deps = { out: (l) => process.st
   }
 
   const failures: Failure[] = [...source.failures];
+  const blockSha = sha256(source.block);
+  if (!nonEmpty(trace.pdf_block_sha256)) failures.push({ id: 'source', problem: 'trace.json has no pdf_block_sha256', fix: `set it to the sha256 of the A/N/W/H block, ${blockSha}` });
+  else if (trace.pdf_block_sha256 !== blockSha) failures.push({ id: 'source', problem: `the A/N/W/H block has sha256 ${blockSha.slice(0, 12)}…, but pdf_block_sha256 is ${trace.pdf_block_sha256.slice(0, 12)}…`, fix: `if the assignment text changed on purpose, re-read every A, N, W and H row against it and set pdf_block_sha256 to ${blockSha}` });
+  // A route, text or pattern is listed when ui-contract.md holds it as a backticked string.
+  const listed = (s: string) => contract.includes(`\`${s}\``);
+  const contractName = basename(contractPath);
+  const clauses = trace.done_when_clauses;
+  if (clauses !== undefined && !(Number.isInteger(clauses) && clauses >= 1)) failures.push({ id: 'trace', problem: 'done_when_clauses is not a positive integer', fix: 'set it to the number of done-when clauses in run.md' });
+  const covered = new Set<number>();
   const byId = new Map<string, TraceRow>();
   for (const r of rows) {
     if (byId.has(r.id)) failures.push({ id: r.id, problem: 'more than one row has this id', fix: 'merge them into one row' });
@@ -224,6 +307,16 @@ export async function main(args: string[], deps: Deps = { out: (l) => process.st
       continue;
     }
     checkRow(r, src, failures);
+    if (nonEmpty(r.ui?.route) && !listed(r.ui.route)) failures.push({ id: r.id, problem: `ui.route ${r.ui.route} is not listed in ${contractName}`, fix: `add it to ${contractName} as \`${r.ui.route}\` with its owning phase, or use a listed route` });
+    if (finalMode && nonEmpty(r.ui?.route) && r.ui.route.includes('<')) failures.push({ id: r.id, problem: `ui.route ${r.ui.route} holds a placeholder (<)`, fix: `use a token ${contractName} defines, e.g. trial=first-nonpass` });
+    for (const [label, e] of r.expect === undefined ? [] : expectElements(r.expect)) {
+      if (nonEmpty(e.ax_text?.text) && !listed(e.ax_text.text)) failures.push({ id: r.id, problem: `${label} ax_text ${JSON.stringify(e.ax_text.text)} is not listed in ${contractName}`, fix: `add it to ${contractName} as a backticked string with the phase that renders it` });
+      if (nonEmpty(e.ax_match?.pattern) && !listed(e.ax_match.pattern)) failures.push({ id: r.id, problem: `${label} ax_match pattern ${e.ax_match.pattern} is not listed in ${contractName}`, fix: `add it to ${contractName} as a backticked string with the phase that renders it` });
+    }
+    for (const n of r.done_when ?? []) {
+      if (clauses !== undefined && Number.isInteger(n) && n >= 1 && n <= clauses) covered.add(n);
+      else failures.push({ id: r.id, problem: `done_when names ${String(n)}, but done-when has clauses 1..${String(clauses ?? 0)}`, fix: 'name a clause number of run.md done-when, or set done_when_clauses' });
+    }
     for (const by of r.by ?? []) if (!sourceIds.has(by)) failures.push({ id: r.id, problem: `by names ${by}, which has no source line`, fix: 'name an existing U row' });
     if (planPhases && nonEmpty(r.phase) && !planPhases.has(r.phase)) failures.push({ id: r.id, problem: `phase ${r.phase} is not a "### ${r.phase}:" heading in ${plan}`, fix: 'use the id of the plan phase that owns the row' });
     for (const key of ['code', 'tests'] as const) {
@@ -235,6 +328,10 @@ export async function main(args: string[], deps: Deps = { out: (l) => process.st
     }
   }
 
+  for (let n = 1; n <= (Number.isInteger(clauses) ? (clauses as number) : 0); n++) {
+    if (!covered.has(n)) failures.push({ id: `done-when (${n})`, problem: 'no row names it in done_when', fix: 'add the clause number to the done_when list of each row that proves it' });
+  }
+
   if (finalMode && evidenceRoot) {
     const evRoot = resolve(evidenceRoot);
     const run = deps.run ?? defaultRun;
@@ -243,16 +340,22 @@ export async function main(args: string[], deps: Deps = { out: (l) => process.st
       for (const p of stringList(r.evidence) ? r.evidence : []) {
         if (!existsSync(join(evRoot, p))) failures.push({ id: r.id, problem: `evidence file ${p} does not exist under ${evRoot}`, fix: 'produce it in the audit (P25c) under that name' });
       }
-      const e = r.expect as Partial<{ ax_text: { file: string; text: string }; command: { cmd: string; exit: number } }> | undefined;
-      if (e?.ax_text && nonEmpty(e.ax_text.file) && nonEmpty(e.ax_text.text)) {
-        const file = join(evRoot, e.ax_text.file);
-        if (!existsSync(file)) continue; // reported above as missing evidence
-        const snapshot = readFileSync(file, 'utf8');
-        if (!snapshot.includes(e.ax_text.text)) failures.push({ id: r.id, problem: `expect ax_text not met: expected ${JSON.stringify(e.ax_text.text)} in ${e.ax_text.file}, observed ${JSON.stringify(tail(snapshot, 3).slice(0, 200))}`, fix: 'fix the screen so it shows the text, or retake the snapshot on the right screen' });
-      } else if (e?.command && nonEmpty(e.command.cmd)) {
-        const got = run(e.command.cmd, root);
-        const said = tail(got.output, 3).slice(0, 300);
-        if (got.exit !== e.command.exit) failures.push({ id: r.id, problem: `expect command not met: \`${e.command.cmd}\` expected exit ${e.command.exit}, observed exit ${got.exit}${said ? ` (${said})` : ''}`, fix: 'fix what the command checks, then run it again' });
+      // Every element must hold; a missing snapshot is reported above as missing evidence.
+      for (const [label, e] of r.expect === undefined ? [] : expectElements(r.expect)) {
+        const read = (p: string) => (existsSync(join(evRoot, p)) ? readFileSync(join(evRoot, p), 'utf8') : undefined);
+        if (e.ax_text && nonEmpty(e.ax_text.file) && nonEmpty(e.ax_text.text)) {
+          const snapshot = read(e.ax_text.file);
+          if (snapshot !== undefined && !snapshot.includes(e.ax_text.text)) failures.push({ id: r.id, problem: `${label} ax_text not met: expected ${JSON.stringify(e.ax_text.text)} in ${e.ax_text.file}, observed ${JSON.stringify(tail(snapshot, 3).slice(0, 200))}`, fix: 'fix the screen so it shows the text, or retake the snapshot on the right screen' });
+        } else if (e.ax_match && nonEmpty(e.ax_match.file) && nonEmpty(e.ax_match.pattern) && compiles(e.ax_match.pattern)) {
+          const snapshot = read(e.ax_match.file);
+          const want = Number.isInteger(e.ax_match.min_matches) ? (e.ax_match.min_matches as number) : 1;
+          const got = snapshot === undefined ? want : (snapshot.match(new RegExp(e.ax_match.pattern, 'g'))?.length ?? 0);
+          if (got < want) failures.push({ id: r.id, problem: `${label} ax_match not met: expected at least ${want} match${want === 1 ? '' : 'es'} of /${e.ax_match.pattern}/ in ${e.ax_match.file}, observed ${got}`, fix: 'fix the screen so every item shows the text, or retake the snapshot on the right screen' });
+        } else if (e.command && nonEmpty(e.command.cmd)) {
+          const got = run(e.command.cmd, root);
+          const said = tail(got.output, 3).slice(0, 300);
+          if (got.exit !== e.command.exit) failures.push({ id: r.id, problem: `${label} command not met: \`${e.command.cmd}\` expected exit ${String(e.command.exit)}, observed exit ${got.exit}${said ? ` (${said})` : ''}`, fix: 'fix what the command checks, then run it again' });
+        }
       }
     }
   }

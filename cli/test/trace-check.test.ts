@@ -1,5 +1,5 @@
 // pnpm cli trace-check (plan phase P9t) on fixtures/trace/clean, a small source and trace with
-// a plan, repo paths and P25c-style evidence. Each case copies the clean fixture to a temp dir,
+// a plan, a UI contract, repo paths and P25c-style evidence. Each case copies the clean fixture to a temp dir,
 // breaks one thing, and expects exit 1 with the row id in the output; the clean copy exits 0 in
 // the default mode and under --final.
 import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -59,7 +59,7 @@ describe('trace-check: the 13 gate cases', () => {
   it('exits 1 on a need row without ui.action', async () => {
     const dir = copy();
     editRows(dir, (rows) => {
-      row(rows, 'N1').ui = { route: '/?view=environment', action: '' };
+      row(rows, 'N1').ui = { route: '/?view=environment', action: '', surface: 'any' };
     });
     const { code, text } = await check(dir);
     expect(code).toBe(1);
@@ -142,7 +142,7 @@ describe('trace-check: the 13 gate cases', () => {
     writeFileSync(join(dir, 'evidence/verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt'), 'heading "Runs"\ntext "No runs yet"\n');
     const { code, text } = await check(dir, ...final(dir));
     expect(code).toBe(1);
-    expect(text).toMatch(/^W1: expect ax_text not met: expected "\/20" in verifier-phase-P25c-1\/W1-runs-pass-rate\.ax\.txt, observed /m);
+    expect(text).toMatch(/^W1: expect\[1\] ax_text not met: expected "1 of 1 tasks in band" in verifier-phase-P25c-1\/W1-runs-pass-rate\.ax\.txt, observed /m);
   });
 
   it('--final exits 1 on a command expect whose exit code differs', async () => {
@@ -212,5 +212,127 @@ describe('trace-check: further rules', () => {
   it('exits 2 on --final without --evidence-root', async () => {
     const dir = copy();
     expect((await check(dir, '--final')).code).toBe(2);
+  });
+});
+
+describe('trace-check: expects that test outcomes (builder-43)', () => {
+  it('--final exits 1 when one element of an expect list fails and the others hold', async () => {
+    const dir = copy();
+    writeFileSync(join(dir, 'evidence/verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt'), 'heading "Runs"\ntext "1 of 1 tasks in band"\n');
+    const { code, text } = await check(dir, ...final(dir));
+    expect(code).toBe(1);
+    expect(text).toMatch(/^W1: expect\[2\] ax_match not met: expected at least 1 match of \/.*\/ in verifier-phase-P25c-1\/W1-runs-pass-rate\.ax\.txt, observed 0; fix: /m);
+    expect(text).not.toMatch(/^W1: expect\[[01]\]/m);
+  });
+
+  it('--final exits 1 when a command element of an expect list fails', async () => {
+    const dir = copy();
+    editRows(dir, (rows) => {
+      (row(rows, 'W1').expect as unknown as object[])[0] = { command: { cmd: 'node -e "process.exit(1)"', exit: 0 } };
+    });
+    const { code, text } = await check(dir, ...final(dir));
+    expect(code).toBe(1);
+    expect(text).toMatch(/^W1: expect\[0\] command not met: .* expected exit 0, observed exit 1; fix: /m);
+  });
+
+  it('exits 1 on an empty expect list, a bad element and a bad pattern', async () => {
+    const dir = copy();
+    editRows(dir, (rows) => {
+      row(rows, 'N1').expect = [] as unknown as TraceRow['expect'];
+      row(rows, 'U1').expect = [{ ax_text: { file: 'verifier-phase-P25c-1/U1-overview-surface.ax.txt', text: 'local runner' } }, { shell: 'x' }] as unknown as TraceRow['expect'];
+      (row(rows, 'W1').expect as unknown as { ax_match?: { pattern: string } }[])[2]!.ax_match!.pattern = '([0-9';
+    });
+    const { code, text } = await check(dir);
+    expect(code).toBe(1);
+    expect(text).toMatch(/^N1: expect is an empty list; fix: /m);
+    expect(text).toMatch(/^U1: expect\[1\] must hold exactly one of ax_text, ax_match or command; fix: /m);
+    expect(text).toMatch(/^W1: expect\[2\] ax_match pattern is not a valid regular expression/m);
+  });
+
+  it('--final exits 1 when an ax_match pattern matches fewer times than min_matches ("20/20" does not satisfy a k/20 count of 2)', async () => {
+    const dir = copy();
+    editRows(dir, (rows) => {
+      (row(rows, 'W1').expect as unknown as { ax_match?: { min_matches: number } }[])[2]!.ax_match!.min_matches = 2;
+    });
+    const { code, text } = await check(dir, ...final(dir));
+    expect(code).toBe(1);
+    expect(text).toMatch(/^W1: expect\[2\] ax_match not met: expected at least 2 matches of .*, observed 1; fix: /m);
+  });
+
+  it('exits 1 when the last sentence of a section and its row are deleted together (block pin)', async () => {
+    const dir = copy();
+    editSource(dir, '- **H1** Plus a writeup, in whatever form suits you.\n', '');
+    editRows(dir, (rows) => rows.splice(rows.indexOf(row(rows, 'H1')), 1));
+    const { code, text } = await check(dir);
+    expect(code).toBe(1);
+    expect(text).toMatch(/^source: the A\/N\/W\/H block has sha256 [0-9a-f]{12}\S*, but pdf_block_sha256 is [0-9a-f]{12}\S*; fix: /m);
+  });
+
+  it('exits 1 when trace.json has no pdf_block_sha256', async () => {
+    const dir = copy();
+    const path = join(dir, TRACE);
+    const trace = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    delete trace.pdf_block_sha256;
+    writeFileSync(path, JSON.stringify(trace));
+    const { code, text } = await check(dir);
+    expect(code).toBe(1);
+    expect(text).toMatch(/^source: trace\.json has no pdf_block_sha256; fix: /m);
+  });
+
+  it('--final exits 1 on a placeholder in a route; the default mode reports only the contract gap', async () => {
+    const dir = copy();
+    editRows(dir, (rows) => {
+      row(rows, 'W1').ui!.route = '/?view=runs&trial=<first non-pass trial>';
+    });
+    writeFileSync(join(dir, 'docs/requirements/ui-contract.md'), `${readFileSync(join(dir, 'docs/requirements/ui-contract.md'), 'utf8')}- \`/?view=runs&trial=<first non-pass trial>\`\n`);
+    expect((await check(dir)).code).toBe(0);
+    const { code, text } = await check(dir, ...final(dir));
+    expect(code).toBe(1);
+    expect(text).toMatch(/^W1: ui\.route .* holds a placeholder \(<\); fix: /m);
+  });
+
+  it('exits 1 on an ax_text, an ax_match pattern or a route that ui-contract.md does not list', async () => {
+    const dir = copy();
+    writeFileSync(join(dir, 'docs/requirements/ui-contract.md'), '# UI contract\n\n- `/`\n- `/?view=runs`\n- `local runner`\n');
+    const { code, text } = await check(dir);
+    expect(code).toBe(1);
+    expect(text).toMatch(/^N1: ui\.route \/\?view=environment is not listed in ui-contract\.md; fix: /m);
+    expect(text).toMatch(/^N1: expect ax_text "hash unchanged" is not listed in ui-contract\.md; fix: /m);
+    expect(text).toMatch(/^W1: expect\[1\] ax_text "1 of 1 tasks in band" is not listed in ui-contract\.md; fix: /m);
+    expect(text).toMatch(/^W1: expect\[2\] ax_match pattern .* is not listed in ui-contract\.md; fix: /m);
+    expect(text).not.toMatch(/^U1: /m);
+  });
+
+  it('exits 2 when ui-contract.md is missing', async () => {
+    const dir = copy();
+    rmSync(join(dir, 'docs/requirements/ui-contract.md'));
+    const { code, text } = await check(dir);
+    expect(code).toBe(2);
+    expect(text).toMatch(/ui-contract\.md/);
+  });
+
+  it('exits 1 on a ui without surface, a bad surface, and a UI snapshot on a row with no route', async () => {
+    const dir = copy();
+    editRows(dir, (rows) => {
+      delete (row(rows, 'N1').ui as Partial<NonNullable<TraceRow['ui']>>).surface;
+      (row(rows, 'U1').ui as { surface: string }).surface = 'web';
+      row(rows, 'A1').evidence.push('verifier-phase-P25c-1/A1-screen.ax.txt');
+    });
+    const { code, text } = await check(dir);
+    expect(code).toBe(1);
+    expect(text).toMatch(/^N1: ui\.surface is missing; fix: /m);
+    expect(text).toMatch(/^U1: ui\.surface "web" is not local, hosted or any; fix: /m);
+    expect(text).toMatch(/^A1: evidence verifier-phase-P25c-1\/A1-screen\.ax\.txt is a UI snapshot, but the row has no ui\.route; fix: /m);
+  });
+
+  it('exits 1 when a done-when clause has no row, or a row names a clause that does not exist', async () => {
+    const dir = copy();
+    editRows(dir, (rows) => {
+      row(rows, 'W1').done_when = [3];
+    });
+    const { code, text } = await check(dir);
+    expect(code).toBe(1);
+    expect(text).toMatch(/^W1: done_when names 3, but done-when has clauses 1\.\.2; fix: /m);
+    expect(text).toMatch(/^done-when \(2\): no row names it in done_when; fix: /m);
   });
 });

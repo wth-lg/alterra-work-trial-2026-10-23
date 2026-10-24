@@ -1,4 +1,6 @@
 {
+  "pdf_block_sha256": "be77ec35f4c37962ec79a41ac2a9f9a1ec10a260d880a14342613571a4aa89ca",
+  "done_when_clauses": 2,
   "rows": [
     {
       "id": "A1",
@@ -20,7 +22,10 @@
           "exit": 0
         }
       },
-      "phase": "P1"
+      "phase": "P1",
+      "done_when": [
+        1
+      ]
     },
     {
       "id": "N1",
@@ -36,7 +41,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=environment",
-        "action": "press Try on fhir_search"
+        "action": "press Try on fhir_search",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N1-environment-try.png",
@@ -63,7 +69,8 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=environment",
-        "action": "read the tool catalogue"
+        "action": "read the tool catalogue",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/N2-environment-catalogue.png",
@@ -90,19 +97,38 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs",
-        "action": "read the pass rate"
+        "action": "read the pass rate",
+        "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/W1-runs-pass-rate.png",
         "verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt"
       ],
-      "expect": {
-        "ax_text": {
-          "file": "verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt",
-          "text": "/20"
+      "expect": [
+        {
+          "command": {
+            "cmd": "node -e \"process.exit(0)\"",
+            "exit": 0
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt",
+            "text": "1 of 1 tasks in band"
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/W1-runs-pass-rate.ax.txt",
+            "pattern": "\\b([0-9]|1[0-9]|20)/20 passed\\b",
+            "min_matches": 1
+          }
         }
-      },
-      "phase": "P2"
+      ],
+      "phase": "P2",
+      "done_when": [
+        2
+      ]
     },
     {
       "id": "H1",
@@ -139,7 +165,8 @@
       "ui_required": true,
       "ui": {
         "route": "/",
-        "action": "open the app"
+        "action": "open the app",
+        "surface": "local"
       },
       "evidence": [
         "verifier-phase-P25c-1/U1-overview-surface.png",
