@@ -17,9 +17,10 @@
 //              form's own-run marker); its runs dir is a temp dir kept for keyscan and printed.
 //              The graded trial must report models_returned [claude-opus-5-5] and replay_final
 //              equal to final.
-//   --dry-run  stops after POST /api/trials?dry_run=1 and prints the projection as
-//              LIVE_PROJECTION_USD=<x>, for `pnpm cli spend --check --projected <x>`. It makes no
-//              call: under --live the key is not sent.
+//   --dry-run  stops after POST /api/trials?dry_run=1 and prints what a live check can spend, the
+//              trial's projection plus the Validate call's worst case, as LIVE_PROJECTION_USD=<x>,
+//              for `pnpm cli spend --check --projected <x>`. It makes no call: under --live the
+//              key is not sent.
 //   --json     prints one JSON report instead of lines.
 // Exit 0 when every check holds; 1 otherwise; 2 on a usage error. The key is never printed.
 import { spawn, spawnSync } from 'node:child_process';
@@ -33,7 +34,7 @@ import { installEgressGuard } from '../packages/core/egress.ts';
 import type { TrialEvent } from '../packages/core/events.ts';
 import { PROJECTED_CAP_USD } from '../packages/core/ledger.ts';
 import { redactText } from '../packages/core/redact.ts';
-import { parseDryRun, parseHealth, parseSse, parseTrialsAccepted, TOKEN_HEADER, TOKEN_META, type SseFrame } from '../packages/core/runner-api.ts';
+import { parseDryRun, parseHealth, parseSse, parseTrialsAccepted, TOKEN_HEADER, TOKEN_META, validateWorstCaseUsd, type SseFrame } from '../packages/core/runner-api.ts';
 import { stripTimestamps } from '../packages/core/trajectory.ts';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
@@ -142,7 +143,8 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const say = (line: string) => {
     if (!json) deps.out(redactText(line, [key]));
   };
-  const dist = env.NODE_ENV === 'test' && env.CLINENV_WEB_DIST ? env.CLINENV_WEB_DIST : join(REPO, 'apps/web/dist');
+  // The runner's test hook (apps/runner/main.ts), read the same way here.
+  const dist = env.NODE_ENV === 'test' && env.CLINENV_TEST_HOOKS === '1' && env.CLINENV_WEB_DIST ? env.CLINENV_WEB_DIST : join(REPO, 'apps/web/dist');
   if (!existsSync(join(dist, 'index.html'))) {
     deps.out(`runner-check: apps/web/dist is missing (${dist} has no index.html); run pnpm build first`);
     return 1;
@@ -165,6 +167,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const runnerLog: string[] = [];
   let eventsEqual: boolean | null = null;
   let projection: number | null = null;
+  let liveProjection: number | null = null;
 
   const child = spawn(process.execPath, [join(REPO, 'apps/runner/main.ts'), '--port', '0', ...(mode === 'mock' ? ['--mock'] : [])], { env: runnerEnv, cwd: REPO });
   let out = '';
@@ -219,8 +222,10 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     const dry = await http(port, 'POST', '/api/trials?dry_run=1', { token, body: trial });
     try {
       projection = parseDryRun(JSON.parse(dry.text)).projection.total_usd;
-      check('dry run', dry.status === 200, `projection $${projection.toFixed(2)}, 0 calls`);
-      say(`LIVE_PROJECTION_USD=${projection.toFixed(6)}`);
+      const validate = validateWorstCaseUsd();
+      liveProjection = projection + validate;
+      check('dry run', dry.status === 200, `trial projection $${projection.toFixed(6)} + Validate worst case $${validate.toFixed(6)}, 0 calls`);
+      say(`LIVE_PROJECTION_USD=${liveProjection.toFixed(6)}`);
     } catch (e) {
       check('dry run', false, `status ${dry.status}: ${(e as Error).message}`);
     }
@@ -277,7 +282,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const ok = checks.every((c) => c.ok);
   if (json) {
     deps.out(JSON.stringify({
-      ok, mode, checks, events_equal: eventsEqual, projection_usd: projection, tmp, runs_dir: join(tmp, 'runs'),
+      ok, mode, checks, events_equal: eventsEqual, projection_usd: projection, live_projection_usd: liveProjection, tmp, runs_dir: join(tmp, 'runs'),
       envs: { runner: shown(runnerEnv), run_one: shown(runOneEnv) }, runner_log: runnerLog,
     }, null, 2));
   } else say(`runner-check: ${checks.filter((c) => c.ok).length}/${checks.length} checks passed`);

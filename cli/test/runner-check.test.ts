@@ -7,7 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fakeDist, tempDir } from '../../apps/runner/test/helpers.ts';
+import { fakeDist, sentinels, tempDir } from '../../apps/runner/test/helpers.ts';
+import { validateWorstCaseUsd } from '../../packages/core/runner-api.ts';
 import { repoRoot } from '../../scripts/test/helpers.ts';
 import { childEnv } from '../runner-check.ts';
 
@@ -32,7 +33,7 @@ describe('runner-check --mock (gate case 9)', () => {
     const row = (kind: string) => JSON.stringify({ ts: '2026-10-24T00:00:00.000Z', call_id: 'c1', kind, source: 'node', run_id: null, batch_id: null, trial: 'x', usage: null, cost_usd: 0.5 });
     writeFileSync(C, `${row('reserve')}\n${row('settle')}\n`);
     const k = lines(C);
-    const r = runnerCheck(['--mock', '--json'], { HOME: T, CLINENV_CANONICAL_LEDGER: C, NODE_ENV: 'test', CLINENV_WEB_DIST: fakeDist() });
+    const r = runnerCheck(['--mock', '--json'], { HOME: T, CLINENV_CANONICAL_LEDGER: C, NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_WEB_DIST: fakeDist() });
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
     const report = JSON.parse(r.stdout) as Report;
     expect(report.ok).toBe(true);
@@ -51,7 +52,7 @@ describe('runner-check --mock (gate case 9)', () => {
   });
 
   it('fails with a clear message when the built UI is missing', () => {
-    const r = runnerCheck(['--mock'], { HOME: tempDir('rc-nodist'), NODE_ENV: 'test', CLINENV_WEB_DIST: join(tempDir('rc-nodist'), 'dist') });
+    const r = runnerCheck(['--mock'], { HOME: tempDir('rc-nodist'), NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_WEB_DIST: join(tempDir('rc-nodist'), 'dist') });
     expect(r.status).toBe(1);
     expect(r.stdout + r.stderr).toMatch(/dist.*missing.*pnpm build/);
   });
@@ -59,6 +60,49 @@ describe('runner-check --mock (gate case 9)', () => {
   it('refuses a usage error with 2', () => {
     expect(runnerCheck(['--mock', '--live'], { HOME: tempDir('rc-usage') }).status).toBe(2);
     expect(runnerCheck(['--bogus'], { HOME: tempDir('rc-usage') }).status).toBe(2);
+  });
+});
+
+// The live path offline: the runner's toy test transport answers every call, the key is a
+// sentinel and the ledger a temp file. At 277075e the trial was refused 409 because its session
+// cap left out the Validate call's spend (fixed in 523ddb9).
+describe('runner-check --live over the toy test transport', () => {
+  const liveEnv = () => {
+    const home = tempDir('rc-live');
+    const key = sentinels().skAnt;
+    const env = {
+      HOME: home, SPEND_LEDGER: join(home, 'spend.jsonl'), NODE_ENV: 'test', CLINENV_TEST_HOOKS: '1', CLINENV_RUNNER_TEST_TRANSPORT: 'toy',
+      CLINENV_WEB_DIST: fakeDist(), ANTHROPIC_API_KEY: key,
+    };
+    return { env, key, ledger: env.SPEND_LEDGER };
+  };
+
+  it('validates the key, streams one graded trial under projection plus session spend and exits 0', () => {
+    const { env, key, ledger } = liveEnv();
+    const r = runnerCheck(['--live', '--json'], env);
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout + r.stderr).not.toContain(key);
+    const report = JSON.parse(r.stdout) as Report;
+    expect(report.checks.every((c) => c.ok)).toBe(true);
+    expect(report.checks.map((c) => c.name)).toEqual(expect.arrayContaining(['key validated', 'trial streamed', 'graded record', 'runner exit']));
+    const rows = readFileSync(ledger, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as { trial: string | null; kind: string });
+    expect(rows.some((x) => x.trial?.includes('validate') && x.kind === 'settle')).toBe(true);
+    expect(rows.some((x) => !x.trial?.includes('validate') && x.kind === 'settle')).toBe(true);
+  });
+
+  it('--dry-run sends no key and prints the trial projection plus the Validate worst case', () => {
+    const { env, key, ledger } = liveEnv();
+    const r = runnerCheck(['--live', '--dry-run'], env);
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout + r.stderr).not.toContain(key);
+    expect(r.stdout).not.toContain('key validated');
+    const m = /^ok dry run: trial projection \$(\d+\.\d{6}) \+ Validate worst case \$(\d+\.\d{6}), 0 calls$/m.exec(r.stdout);
+    expect(m, r.stdout).not.toBeNull();
+    const [trial, validate] = [Number(m?.[1]), Number(m?.[2])];
+    expect(validate).toBeCloseTo(validateWorstCaseUsd(), 6);
+    expect(validate).toBeGreaterThan(0);
+    expect(r.stdout).toContain(`LIVE_PROJECTION_USD=${(trial + validate).toFixed(6)}\n`);
+    expect(existsSync(ledger) ? readFileSync(ledger, 'utf8') : '').toBe('');
   });
 });
 
