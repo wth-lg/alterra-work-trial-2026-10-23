@@ -8,7 +8,8 @@
 // version as fallback, else the $6 cap, x 1.15, plus the judge allowance). A key whose record is
 // settled is never run again, so a killed batch resumes with exactly its unfinished trials.
 //
-// runBatch then:
+// runBatch holds the run's lock (ResultSink.lock) from the plan to the final manifest, so two
+// batches never run one run's keys at once; a second is refused, with no call. It then:
 //   1. closes this run's batches that are still open in the ledger (a killed process leaves its
 //      open row); the ledger refuses a batch whose process is alive, and so does runBatch. The
 //      dead batch's unsettled reservations keep counting, each once, at its worst case;
@@ -23,7 +24,11 @@
 //      new starts;
 //   4. closes the grant (the batch's close row) and records the batch in the run manifest.
 // A cancelled or stopped trial's record is kept as a re-queued attempt, never settled, so a rerun
-// runs it again.
+// runs it again. GRADER_ERROR is settled, never re-queued: a rerun would pay for a model trial to
+// work around a grader bug; regrade grades it again from its trajectory. A ResultSink write that
+// throws stops the batch like a harness failure: the trials in flight are cancelled and settle,
+// then the grant closes, the manifest is written and runBatch rethrows the write's error.
+// result.cancelled is true only when the caller's signal left keys unsettled.
 import { ANTHROPIC_VERSION, classifyFailure } from './anthropic.ts';
 import { projectBatch, type Projection, type TrialObservation } from './cost.ts';
 import type { TrialEvent } from './events.ts';
@@ -51,7 +56,7 @@ export interface TrialKey {
 
 // The idempotence key.
 export const trialKey = (k: TrialKey): string => `${k.task_version}/${k.model}/${k.effort}/${k.index}`;
-const keyOfRecord = (r: BatchRecord): string => trialKey({ task_id: r.task_id, task_version: r.task_version ?? '', model: r.model_requested, effort: r.effort, index: r.index });
+export const recordKey = (r: Pick<BatchRecord, 'task_id' | 'task_version' | 'model_requested' | 'effort' | 'index'>): string => trialKey({ task_id: r.task_id, task_version: r.task_version ?? '', model: r.model_requested, effort: r.effort, index: r.index });
 
 // A trial record as a batch stores it. settled: the key's record; false for a re-queued attempt.
 export type BatchRecord = TrialRecord & {
@@ -102,6 +107,9 @@ export interface ResultSink {
   // One trajectory event, as it happens; a throw ends the trial as ENV_ERROR (run.ts).
   event(key: TrialKey, attempt: string, e: TrialEvent): void;
   finish(key: TrialKey, record: BatchRecord): Promise<void>;
+  // Takes the run's lock and returns its release; throws BatchRefused while another batch holds
+  // it. A lock its holder left by dying is taken over, with a line to log.
+  lock(log: (line: string) => void): Promise<() => Promise<void>>;
 }
 
 export interface BatchSpec {
@@ -181,7 +189,7 @@ export async function planBatch(spec: BatchSpec, deps: Pick<BatchDeps, 'tasks' |
       throw new BatchRefused(`the run directory holds ${r.task_id} at task_version ${r.task_version}, and the task is now ${v}; use a new run directory`);
     }
   }
-  const done = new Set(settled.map(keyOfRecord));
+  const done = new Set(settled.map(recordKey));
   const keys = spec.taskIds.flatMap((task_id) =>
     Array.from({ length: spec.trials }, (_, index): TrialKey => ({ task_id, task_version: versions[task_id] as string, model: spec.model, effort: spec.effort, index })),
   );
@@ -212,9 +220,18 @@ async function closeStale(runId: string, deps: BatchDeps, log: (l: string) => vo
 
 export async function runBatch(spec: BatchSpec, deps: BatchDeps): Promise<BatchResult> {
   const log = spec.log ?? (() => {});
+  const unlock = await deps.sink.lock(log);
+  try {
+    return await lockedBatch(spec, deps, log);
+  } finally {
+    await unlock();
+  }
+}
+
+async function lockedBatch(spec: BatchSpec, deps: BatchDeps, log: (line: string) => void): Promise<BatchResult> {
   const plan = await planBatch(spec, deps);
   const result: BatchResult = { batch_id: null, plan, settled: 0, requeued: 0, stopped: null, cancelled: false };
-  if (plan.remaining.length === 0 || spec.signal?.aborted) return { ...result, cancelled: spec.signal?.aborted ?? false };
+  if (plan.remaining.length === 0 || spec.signal?.aborted) return { ...result, cancelled: plan.remaining.length > 0 };
   await closeStale(spec.runId, deps, log);
   const grant = await deps.ledger.batchStart(plan.projection.total);
   result.batch_id = grant.batch_id;
@@ -244,6 +261,7 @@ export async function runBatch(spec: BatchSpec, deps: BatchDeps): Promise<BatchR
     return checks.get(id) as Promise<readonly Check[]>;
   };
   let attempts = 0;
+  const settledKeys = new Set<string>();
 
   // Runs one attempt; returns the item again when it is re-queued.
   const attempt = async (item: { key: TrialKey; reruns: number }) => {
@@ -290,31 +308,42 @@ export async function runBatch(spec: BatchSpec, deps: BatchDeps): Promise<BatchR
       else if (item.reruns < (spec.maxReruns ?? MAX_RERUNS)) [settled, again] = [false, true];
     }
     await deps.sink.finish(key, { ...record, run_id: spec.runId, index: key.index, attempt: id, mode: spec.mode, settled, ...(settled ? {} : { requeue_reason: o }) });
-    if (settled) entry.settled++;
-    else entry.requeued++;
+    if (settled) {
+      entry.settled++;
+      settledKeys.add(trialKey(key));
+    } else entry.requeued++;
     return again ? { key, reruns: item.reruns + 1 } : null;
   };
 
   try {
     await deps.sink.writeManifest(manifest);
     let round = plan.remaining.map((key) => ({ key, reruns: 0 }));
+    // A worker whose sink write threw: the batch stops, and the error is rethrown once every
+    // worker has settled.
+    let failed: { error: unknown } | null = null;
     // Re-queued trials run after the round that re-queued them: at the end of the batch.
     while (round.length > 0 && !signal.aborted) {
       const queue = [...round];
       const next: typeof round = [];
       await Promise.all(
         Array.from({ length: Math.min(spec.concurrency, queue.length) }, async () => {
-          for (let item = queue.shift(); item !== undefined && !signal.aborted; item = queue.shift()) {
-            const again = await attempt(item);
-            if (again) next.push(again);
+          try {
+            for (let item = queue.shift(); item !== undefined && !signal.aborted; item = queue.shift()) {
+              const again = await attempt(item);
+              if (again) next.push(again);
+            }
+          } catch (e) {
+            failed ??= { error: e };
+            halt('harness', `result sink failed: ${errorText(e)}`);
           }
         }),
       );
       round = next;
     }
+    if (failed !== null) throw (failed as { error: unknown }).error;
   } finally {
     await grant.close();
-    result.cancelled = spec.signal?.aborted ?? false;
+    result.cancelled = (spec.signal?.aborted ?? false) && plan.remaining.some((k) => !settledKeys.has(trialKey(k)));
     Object.assign(entry, { ended: iso(deps.now()), stopped: result.stopped?.code ?? null, cancelled: result.cancelled });
     await deps.sink.writeManifest(manifest);
   }
@@ -326,6 +355,7 @@ export async function runBatch(spec: BatchSpec, deps: BatchDeps): Promise<BatchR
 // A ResultSink in memory: the batch tests, and any caller that keeps results itself.
 export function memorySink(): ResultSink & { events: Map<string, TrialEvent[]> } {
   let manifest: RunManifest | null = null;
+  let locked = false;
   const settled = new Map<string, BatchRecord>();
   const requeued: BatchRecord[] = [];
   const events = new Map<string, TrialEvent[]>();
@@ -348,6 +378,13 @@ export function memorySink(): ResultSink & { events: Map<string, TrialEvent[]> }
     finish: async (k, record) => {
       if (record.settled) settled.set(trialKey(k), record);
       else requeued.push(record);
+    },
+    lock: async () => {
+      if (locked) throw new BatchRefused('the run is locked by another batch');
+      locked = true;
+      return async () => {
+        locked = false;
+      };
     },
   };
 }

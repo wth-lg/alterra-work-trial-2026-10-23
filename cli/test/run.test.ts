@@ -150,6 +150,38 @@ describe('cli run', { timeout: 480_000 }, () => {
     expect(after.filter((r) => r.kind === 'close' && r.batch_id === dead.batch_id)).toHaveLength(1);
   });
 
+  it('counts only this batch\'s keys as recorded, not the records of other tasks in the run directory', async () => {
+    const dir = join(tempDir('run-other'), 'run-other');
+    for (const i of [0, 1, 2]) write(dir, `trials/zz-other/${i}.json`, JSON.stringify({ task_id: 'zz-other', task_version: 'v-other', model_requested: MODEL, effort: 'high', index: i, outcome: 'PASS', settled: true }));
+    const h = harness();
+    const code = await main(runArgs(dir, '--trials', '2', '--mock', 'toy'), h.deps);
+    expect(code, h.out.join('\n')).toBe(0);
+    expect(h.out.join('\n')).toContain('2 of 2 keys recorded');
+  });
+
+  it('a second process on a run directory whose batch is alive is refused on the lock; once that process is killed, its stale lock is taken over', async () => {
+    const dir = join(tempDir('run-lock'), 'run-lock');
+    const h = harness();
+    const marker = join(tempDir('lock-marker'), 'marker');
+    const env: Record<string, string> = { ...(process.env as Record<string, string>), HOME: h.deps.env.HOME as string, SPEND_LEDGER: h.ledger };
+    delete env.CLINENV_CANONICAL_LEDGER;
+    delete env.ANTHROPIC_API_KEY;
+    const args = runArgs(dir, '--trials', '2', '--concurrency', '1', '--mock', 'toy');
+    const child = spawn(process.execPath, [join(repoRoot, 'cli/test/kill-child.ts'), marker, '0', ...args], { env, stdio: 'ignore' });
+    const exited = new Promise<NodeJS.Signals | null>((resolve) => child.on('exit', (_code, signal) => resolve(signal)));
+    await expect.poll(() => existsSync(marker), { timeout: 150_000, interval: 50 }).toBe(true);
+    expect(await main(args, h.deps), h.out.join('\n')).toBe(1);
+    expect(h.out.join('\n')).toMatch(new RegExp(`run directory ${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is locked by pid ${child.pid}`));
+    expect(h.calls.mock).toBe(0);
+    child.kill('SIGKILL');
+    expect(await exited).toBe('SIGKILL');
+    const code = await main(args, h.deps);
+    expect(code, h.out.join('\n')).toBe(0);
+    expect(h.out.join('\n')).toMatch(new RegExp(`took over the stale lock of pid ${child.pid}`));
+    expect(keysIn(dir)).toHaveLength(2);
+    expect(existsSync(join(dir, '.lock'))).toBe(false);
+  });
+
   it('--task takes an explicit list; --dry-run lists exactly those tasks; --cost-from uses the later run; a task with no cost data projects at $6', async () => {
     const tasksRoot = tempDir('fixture-tasks');
     for (const id of ['renal-dose-review', 'crc-care-gap', 'other-task']) {

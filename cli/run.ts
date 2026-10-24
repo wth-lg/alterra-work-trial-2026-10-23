@@ -16,14 +16,16 @@
 // the projection would cross PROJECTED_CAP_USD (packages/core/ledger.ts). The manifest records env_git_sha and env_dirty: whether
 // `git status --porcelain -- tasks fixtures packages/env packages/core packages/grader` is
 // non-empty. A live batch on a dirty tree (or outside git) is refused with no call: a committed
-// run must name the code it ran. Ctrl-C cancels the batch through its AbortSignal. Exit 0 when
-// every key is recorded and the batch was not stopped; 1 otherwise; 2 on a usage error.
+// run must name the code it ran. A run directory runs one batch at a time: a second is refused
+// while the first holds <out>/.lock. Ctrl-C cancels the batch through its AbortSignal. Exit 0
+// when every key of this batch is recorded and the batch was not stopped; 1 otherwise; 2 on a
+// usage error.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MessagesClient, MODEL, type Transport } from '../packages/core/anthropic.ts';
-import { BatchRefused, planBatch, runBatch, type BatchSpec } from '../packages/core/batch.ts';
+import { BatchRefused, planBatch, recordKey, runBatch, trialKey, type BatchSpec } from '../packages/core/batch.ts';
 import { formatProjection, money, type TrialObservation } from '../packages/core/cost.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import { SpendRefused } from '../packages/core/ledger.ts';
@@ -190,7 +192,8 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
         client: (grant, trial) => new MessagesClient({ grant, ledger, apiKey: key, fetch: mock === undefined ? deps.fetch : deps.mock(mock, trial), trial }),
       },
     );
-    const recorded = (await sink.settled()).length;
+    const keys = new Set(result.plan.keys.map(trialKey));
+    const recorded = (await sink.settled()).filter((r) => keys.has(recordKey(r))).length;
     deps.out(`projection ${money(result.plan.projection.total)}; batch ${result.batch_id ?? '(none: every key recorded)'}: ${result.settled} settled, ${result.requeued} re-queued; ${recorded} of ${result.plan.keys.length} keys recorded in ${out}`);
     if (result.stopped) deps.out(`run: batch stopped (${result.stopped.code}): ${redactText(result.stopped.message, [key])}`);
     if (result.cancelled) deps.out('run: batch cancelled');

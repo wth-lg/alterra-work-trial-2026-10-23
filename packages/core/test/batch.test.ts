@@ -8,8 +8,9 @@ import { scenarioTransport, sse, turnEvents } from '../../../apps/web/src/harnes
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { checks as toyChecks } from '../../../tasks/_toy/tests/grader.ts';
 import { MessagesClient, MODEL, type Transport } from '../anthropic.ts';
-import { memorySink, runBatch, type BatchDeps, type BatchSpec, type ResultSink } from '../batch.ts';
+import { BatchRefused, memorySink, runBatch, type BatchDeps, type BatchSpec, type ResultSink } from '../batch.ts';
 import { JUDGE_ALLOWANCE_USD, PER_TRIAL_CAP_USD, PRICE_USD_PER_MTOK, RERUN_FACTOR } from '../cost.ts';
+import { run } from '../run.ts';
 import { ACTUAL_CAP_USD, admitStore, createLedger, PROJECTED_CAP_USD, SpendRefused, totals, type LedgerRow, type LedgerStore } from '../ledger.ts';
 
 const root = new URL('../../../', import.meta.url);
@@ -138,12 +139,86 @@ describe('runBatch', { timeout: 480_000 }, () => {
     const requeued = await sink.requeued();
     expect(requeued.some((r) => r.trial_id === stalled)).toBe(true);
     expect((await sink.settled()).some((r) => r.trial_id === stalled)).toBe(false);
-    if (ordinal === 2) expect(requeued.find((r) => r.trial_id === stalled)?.status).toBe('CANCELLED');
+    // A judge call cancelled with the batch ends its trial CANCELLED, like a loop call.
+    expect(requeued.find((r) => r.trial_id === stalled)).toMatchObject({ status: 'CANCELLED', outcome: 'CANCELLED' });
     expect(store.rows.filter((r) => r.kind === 'close' && r.batch_id === result.batch_id)).toHaveLength(1);
     expect(unsettled(store.rows)).toEqual([]);
     const sent = calls.n;
     await new Promise((r) => setTimeout(r, 20));
     expect(calls.n).toBe(sent);
+  });
+
+  it('a sink write that throws mid-batch stops it, lets the trials in flight settle, then closes the grant and writes the manifest last', async () => {
+    const store = new MemoryStore();
+    const inner = memorySink();
+    const ops: string[] = [];
+    let finishes = 0;
+    const sink: ResultSink = {
+      ...inner,
+      writeManifest: async (m) => {
+        ops.push('manifest');
+        await inner.writeManifest(m);
+      },
+      begin: async (k, a) => {
+        ops.push('begin');
+        await inner.begin(k, a);
+      },
+      finish: async (k, r) => {
+        if (++finishes === 1) throw new Error('ENOSPC: no space left on device');
+        ops.push('finish');
+        await inner.finish(k, r);
+      },
+    };
+    await expect(runBatch(spec({ trials: 12 }), deps(store, sink, newCalls()))).rejects.toThrow(/ENOSPC/);
+    const closeAt = store.rows.findIndex((r) => r.kind === 'close');
+    expect(closeAt).toBeGreaterThan(-1);
+    expect(unsettled(store.rows)).toEqual([]);
+    const settledAtClose = ops.length;
+    expect(ops.at(-1)).toBe('manifest');
+    // Nothing is written once the manifest is: the siblings were done before the grant closed.
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(ops).toHaveLength(settledAtClose);
+    expect(store.rows.slice(closeAt + 1)).toEqual([]);
+    expect((await inner.manifest())!.batches.at(-1)).toMatchObject({ stopped: 'harness', cancelled: false });
+  });
+
+  it('a signal that aborts once the last trial has finished leaves cancelled false; so does an aborted signal with every key recorded', async () => {
+    const store = new MemoryStore();
+    const sink = memorySink();
+    const controller = new AbortController();
+    let n = 0;
+    const late: typeof run = async (...a) => {
+      const r = await run(...a);
+      if (++n === 3) controller.abort(new Error('late Ctrl-C'));
+      return r;
+    };
+    const result = await runBatch(spec({ trials: 3, concurrency: 1, signal: controller.signal }), { ...deps(store, sink, newCalls()), run: late });
+    expect(result.settled).toBe(3);
+    expect(result.cancelled).toBe(false);
+    expect((await sink.manifest())!.batches.at(-1)!.cancelled).toBe(false);
+    const again = await runBatch(spec({ trials: 3, signal: controller.signal }), deps(store, sink, newCalls()));
+    expect(again.batch_id).toBeNull();
+    expect(again.cancelled).toBe(false);
+  });
+
+  it('two batches started at once on one run: one is refused on the run lock, and each key runs once', async () => {
+    const store = new MemoryStore();
+    const sink = memorySink();
+    const calls = newCalls();
+    const alive = new Set([1, 2]);
+    const results = await Promise.allSettled([
+      runBatch(spec({ trials: 4 }), deps(store, sink, calls, { pid: 1, alive })),
+      runBatch(spec({ trials: 4 }), deps(store, sink, calls, { pid: 2, alive })),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(refused.reason).toBeInstanceOf(BatchRefused);
+    expect((refused.reason as Error).message).toMatch(/locked/);
+    expect(calls.n).toBe(4 * CALLS_PER_TOY_TRIAL);
+    expect(new Set(await keysOf(sink)).size).toBe(4);
+    // The lock is released: a later batch on the run is not refused.
+    const later = await runBatch(spec({ trials: 5 }), deps(store, sink, newCalls(), { pid: 3 }));
+    expect(later).toMatchObject({ settled: 1, stopped: null });
   });
 
   it('a kill during trial 31 resumes with 60 unique keys, the partial call billed once, and only the 30 unfinished trials called', async () => {
@@ -171,7 +246,8 @@ describe('runBatch', { timeout: 480_000 }, () => {
 
     store.dead = false; // the next process reads the same ledger file
     const second = newCalls();
-    const result = await runBatch(spec({ concurrency: 1 }), deps(store, sink, second, { pid: 202 }));
+    // The dead process still holds its in-memory lock; the next one takes over the stale lock.
+    const result = await runBatch(spec({ concurrency: 1 }), deps(store, { ...sink, lock: memorySink().lock }, second, { pid: 202 }));
     expect(result.stopped).toBeNull();
     const keys = await keysOf(sink);
     expect(keys).toHaveLength(60);
