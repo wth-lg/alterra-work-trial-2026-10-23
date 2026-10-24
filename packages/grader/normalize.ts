@@ -9,7 +9,9 @@
 //   - total daily dose: dose x doses per day, or the explicit timing events per clinic day;
 //   - RxNorm: SCD, SBD and ingredient forms of one drug are the same drug (brand and alias
 //     names map to the ingredient), optionally at one strength; a combination product is its
-//     whole ingredient set, so amoxicillin alone is not amoxicillin / clavulanate;
+//     whole ingredient set, so amoxicillin alone is not amoxicillin / clavulanate; a strength
+//     is a mass (in mg), mEq, units or a concentration ('100 UNT/ML' = '100 units/mL',
+//     '250 MG in 5 ML' = '50 MG/ML'), never part of the name or a second ingredient;
 //   - LOINC and other coded concepts: the code decides; display text only when there is no code,
 //     compared without case, punctuation or spacing;
 //   - status sets: only 'active' is active;
@@ -88,8 +90,8 @@ const UNITS: Record<string, [unit: string, dim: Dimension, factor: number]> = {
   kg: ['kg', 'mass', 1e6], kilogram: ['kg', 'mass', 1e6], kilograms: ['kg', 'mass', 1e6],
   lb: ['[lb_av]', 'mass', 453_592.37], lbs: ['[lb_av]', 'mass', 453_592.37], '[lb_av]': ['[lb_av]', 'mass', 453_592.37], pound: ['[lb_av]', 'mass', 453_592.37], pounds: ['[lb_av]', 'mass', 453_592.37],
   ml: ['mL', 'volume', 1], l: ['L', 'volume', 1e3],
-  '[iu]': ['[iU]', 'other', 1], iu: ['[iU]', 'other', 1], unit: ['[iU]', 'other', 1], units: ['[iU]', 'other', 1],
-  meq: ['meq', 'other', 1],
+  '[iu]': ['[iU]', 'other', 1], iu: ['[iU]', 'other', 1], unit: ['[iU]', 'other', 1], units: ['[iU]', 'other', 1], unt: ['[iU]', 'other', 1],
+  meq: ['mEq', 'other', 1],
   '{tablet}': ['{tablet}', 'count', 1], tablet: ['{tablet}', 'count', 1], tablets: ['{tablet}', 'count', 1], tab: ['{tablet}', 'count', 1],
   '{capsule}': ['{capsule}', 'count', 1], capsule: ['{capsule}', 'count', 1], capsules: ['{capsule}', 'count', 1], cap: ['{capsule}', 'count', 1],
 };
@@ -209,30 +211,53 @@ const FORM_WORDS = /\b(?:\d+ hr|extended release|delayed release|sustained relea
 // Salt words after an ingredient name ('clavulanate potassium', 'hydrocodone bitartrate'); the
 // first word of a name is never one ('potassium chloride' stays).
 const SALT_WORDS = /(?<=\S )(?:potassium|sodium|bitartrate|phosphate|sulfate|maleate|mesylate|besylate)\b/g;
+// The units a strength in a drug name is written in (RxNorm writes units as UNT).
+const STRENGTH_UNIT = 'mg|mcg|ug|µg|g|meq|unt|units?|iu';
+// A strength per volume or per actuation ('100 unt/ml', '250 mg/5 ml', '250 mg in 5 ml'),
+// rewritten '250 mg per 5 ml': one strength, so its slash is not read as a combination.
+const PER = new RegExp(`(\\d+(?:\\.\\d+)?) ?(${STRENGTH_UNIT}) ?(?:/|\\bin\\b|\\bper\\b) ?(?:(\\d+(?:\\.\\d+)?) ?)?(ml|actuat)\\b`, 'g');
+const STRENGTH = new RegExp(`(\\d+(?:\\.\\d+)?) ?(${STRENGTH_UNIT})\\b(?: per (\\d+(?:\\.\\d+)?) (ml|actuat)\\b)?`);
+// A package volume before the name, as in an RxNorm SCD ('1 ML medroxyprogesterone acetate
+// 150 MG/ML Injection') or after an NDA prefix: not part of the drug.
+const PACKAGE = /^(?:nda\d+ )?\d+(?:\.\d+)? ml (?=[a-z])/;
 // Separators between the ingredients of a combination name.
 const COMBINATION = /\s+\/\s+|\s*\/\s*(?=[a-z])|\s+and\s+|\s*\+\s*/;
 const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm';
 
 export interface Ingredient {
   name: string;
+  // The strength in mg when it is a mass; null otherwise.
   strength_mg: number | null;
+  // The strength in any unit: a mass in mg, mEq, units ([iU]), or a concentration per mL or per
+  // actuation ('mg/mL', '[iU]/mL', 'mg/{actuat}').
+  strength: Quantity | null;
 }
 
 export interface Drug {
   // The ingredient, or a combination's ingredients sorted and joined by ' / '.
   ingredient: string;
-  // The unit strength of a single-ingredient drug; null for a combination (see ingredients).
+  // The unit strength of a single-ingredient drug, in mg and in any unit; null for a
+  // combination (see ingredients).
   strength_mg: number | null;
+  strength: Quantity | null;
   // Every ingredient with its strength, sorted by name.
   ingredients: Ingredient[];
 }
 
+// '250', 'mg', '5', 'ml' -> 50 mg/mL; a mass in mg, any other unit as quantity() names it.
+function strengthOf(value: string, unit: string, per: string | undefined, perUnit: string | undefined): Quantity {
+  const [u, dim] = unitOf(unit);
+  const q = dim === 'mass' ? quantity({ value, unit }, 'mg')! : { value: Number(value), unit: u };
+  if (perUnit === undefined) return { value: Math.round(q.value * 1e9) / 1e9, unit: q.unit };
+  return { value: Math.round((q.value / Number(per ?? 1)) * 1e9) / 1e9, unit: `${q.unit}/${perUnit === 'ml' ? 'mL' : '{actuat}'}` };
+}
+
 function ingredientOf(part: string): Ingredient | null {
-  const strength = /(\d+(?:\.\d+)?) ?(mg|mcg|ug|g)\b/.exec(part);
-  const strength_mg = strength ? quantity({ value: strength[1]!, unit: strength[2]! }, 'mg')!.value : null;
-  const head = strength ? part.slice(0, strength.index) : part;
-  const name = head.replace(FORM_WORDS, ' ').replace(/\s+/g, ' ').trim().replace(SALT_WORDS, '').replace(/\s+/g, ' ').trim();
-  return name === '' ? null : { name, strength_mg };
+  const m = STRENGTH.exec(part);
+  const strength = m ? strengthOf(m[1]!, m[2]!, m[3], m[4]) : null;
+  const head = m ? part.slice(0, m.index) : part;
+  const name = head.replace(FORM_WORDS, ' ').replace(/\s+/g, ' ').trim().replace(SALT_WORDS, '').replace(/\s+/g, ' ').replace(/ ,/g, ',').trim();
+  return name === '' ? null : { name, strength_mg: strength?.unit === 'mg' ? strength.value : null, strength };
 }
 
 // The ingredients and unit strengths a drug name or concept states: 'Eliquis 5 MG Oral Tablet'
@@ -246,12 +271,14 @@ export function drugOf(c: CodeableConcept | string | undefined): Drug | null {
   // A branded name repeats its ingredients before the brand in brackets: the brand adds nothing.
   let s = name.toLowerCase().replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
   if (s.startsWith('{')) return null;
+  s = s.replace(PACKAGE, '').replace(PER, (_, v: string, u: string, n: string | undefined, d: string) => `${v} ${u} per ${n ?? 1} ${d}`);
   for (const [re, ingredient] of ALIASES) if (re.test(s)) s = s.replace(re, ingredient);
   const parts = s.split(COMBINATION).map(ingredientOf);
   if (parts.length === 0 || parts.some((p) => p === null)) return null;
   const ingredients = (parts as Ingredient[]).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   if (new Set(ingredients.map((i) => i.name)).size !== ingredients.length) return null;
-  return { ingredient: ingredients.map((i) => i.name).join(' / '), strength_mg: ingredients.length === 1 ? ingredients[0]!.strength_mg : null, ingredients };
+  const one = ingredients.length === 1 ? ingredients[0]! : null;
+  return { ingredient: ingredients.map((i) => i.name).join(' / '), strength_mg: one?.strength_mg ?? null, strength: one?.strength ?? null, ingredients };
 }
 
 export interface DrugAccept {
@@ -272,8 +299,8 @@ export function isDrug(c: CodeableConcept | undefined, accept: DrugAccept): bool
   const want = drugOf(accept.ingredient);
   if (d === null || want === null || d.ingredient !== want.ingredient) return false;
   const strengths = d.ingredients.every((x, i) => {
-    const w = want.ingredients[i]!.strength_mg;
-    return w === null || (x.strength_mg !== null && close(x.strength_mg, w));
+    const w = want.ingredients[i]!.strength;
+    return w === null || (x.strength !== null && x.strength.unit === w.unit && close(x.strength.value, w.value));
   });
   if (!strengths) return false;
   return accept.strength_mg === undefined || (d.strength_mg !== null && close(d.strength_mg, accept.strength_mg));

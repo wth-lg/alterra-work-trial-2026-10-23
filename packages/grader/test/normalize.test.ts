@@ -118,8 +118,8 @@ describe('codes', () => {
     // The world fixture's SCD (rxcui 562251, 7 MedicationRequests) and the RxNorm 875/125 form.
     const fixture = { coding: [{ system: RX, code: '562251', display: 'Amoxicillin 250 MG / Clavulanate 125 MG Oral Tablet' }] };
     const scd875 = { coding: [{ system: RX, code: '562508', display: 'Amoxicillin 875 MG / Clavulanate potassium 125 MG Oral Tablet' }] };
-    expect(drugOf(fixture)).toEqual({ ingredient: 'amoxicillin / clavulanate', strength_mg: null, ingredients: [{ name: 'amoxicillin', strength_mg: 250 }, { name: 'clavulanate', strength_mg: 125 }] });
-    expect(drugOf(scd875)).toEqual({ ingredient: 'amoxicillin / clavulanate', strength_mg: null, ingredients: [{ name: 'amoxicillin', strength_mg: 875 }, { name: 'clavulanate', strength_mg: 125 }] });
+    expect(drugOf(fixture)).toEqual({ ingredient: 'amoxicillin / clavulanate', strength_mg: null, strength: null, ingredients: [{ name: 'amoxicillin', strength_mg: 250, strength: { value: 250, unit: 'mg' } }, { name: 'clavulanate', strength_mg: 125, strength: { value: 125, unit: 'mg' } }] });
+    expect(drugOf(scd875)).toEqual({ ingredient: 'amoxicillin / clavulanate', strength_mg: null, strength: null, ingredients: [{ name: 'amoxicillin', strength_mg: 875, strength: { value: 875, unit: 'mg' } }, { name: 'clavulanate', strength_mg: 125, strength: { value: 125, unit: 'mg' } }] });
     for (const c of [fixture, scd875]) {
       expect(isDrug(c, { ingredient: 'amoxicillin' })).toBe(false);
       expect(isDrug(c, { ingredient: 'clavulanate' })).toBe(false);
@@ -144,6 +144,52 @@ describe('codes', () => {
     expect(isDrug({ coding: [{ system: RX, code: '314076', display: 'lisinopril 20 MG Oral Tablet' }] }, { ingredient: 'lisinopril / hydrochlorothiazide' })).toBe(false);
     // A salt word after the ingredient is not part of it.
     expect(drugOf('Acetaminophen 325 MG / Oxycodone Hydrochloride 10 MG Oral Tablet [Percocet]')).toMatchObject({ ingredient: 'acetaminophen / oxycodone' });
+  });
+
+  // Strengths that are not a mass: mEq, units, and a concentration per mL or per actuation,
+  // which is one strength, never a second ingredient.
+  it('mEq: potassium chloride 20 MEQ is potassium chloride at 20 mEq, however mEq is written', () => {
+    for (const s of ['potassium chloride 20 MEQ Extended Release Oral Tablet', 'Potassium Chloride 20 mEq ER tablet', 'potassium chloride 20 meq']) {
+      expect(drugOf(s)).toEqual({ ingredient: 'potassium chloride', strength_mg: null, strength: { value: 20, unit: 'mEq' }, ingredients: [{ name: 'potassium chloride', strength_mg: null, strength: { value: 20, unit: 'mEq' } }] });
+      expect(isDrug({ text: s }, { ingredient: 'potassium chloride' })).toBe(true);
+      expect(isDrug({ text: s }, { ingredient: 'potassium chloride 20 mEq' })).toBe(true);
+      expect(isDrug({ text: s }, { ingredient: 'potassium chloride 10 mEq' })).toBe(false);
+      expect(isDrug({ text: s }, { ingredient: 'potassium chloride 20 mg' })).toBe(false);
+    }
+  });
+
+  it('units: UNT, units and IU are one unit; a units-per-mL concentration is one strength', () => {
+    expect(drugOf('Vitamin D3 1000 units tablet')).toMatchObject({ ingredient: 'vitamin d3', strength_mg: null, strength: { value: 1000, unit: '[iU]' } });
+    expect(drugOf('vitamin D3 1000 UNT Oral Tablet')).toMatchObject({ ingredient: 'vitamin d3', strength: { value: 1000, unit: '[iU]' } });
+    expect(drugOf('insulin glargine 100 UNT/ML Injectable Solution')).toMatchObject({ ingredient: 'insulin glargine', strength: { value: 100, unit: '[iU]/mL' } });
+    // The world's heparin and Humulin 70/30 SCDs.
+    expect(drugOf('heparin sodium, porcine 100 UNT/ML Injectable Solution')).toMatchObject({ ingredient: 'heparin, porcine', strength: { value: 100, unit: '[iU]/mL' } });
+    const humulin = drugOf('insulin isophane, human 70 UNT/ML / insulin, regular, human 30 UNT/ML Injectable Suspension [Humulin]');
+    expect(humulin).toMatchObject({ ingredient: 'insulin isophane, human / insulin, regular, human', strength: null });
+    expect(humulin!.ingredients.map((i) => i.strength)).toEqual([{ value: 70, unit: '[iU]/mL' }, { value: 30, unit: '[iU]/mL' }]);
+    expect(isDrug({ text: 'insulin glargine 100 UNT/ML Injectable Solution' }, { ingredient: 'insulin glargine 100 units/mL' })).toBe(true);
+    expect(isDrug({ text: 'insulin glargine 100 UNT/ML Injectable Solution' }, { ingredient: 'insulin glargine 100 units' })).toBe(false);
+  });
+
+  it('MCG: a microgram strength is the same strength in mg; per actuation is one strength', () => {
+    expect(drugOf('cyanocobalamin 1000 MCG Oral Tablet')).toMatchObject({ ingredient: 'cyanocobalamin', strength_mg: 1, strength: { value: 1, unit: 'mg' } });
+    expect(isDrug({ text: 'levothyroxine sodium 0.05 MG Oral Tablet' }, { ingredient: 'levothyroxine 50 mcg' })).toBe(true);
+    expect(drugOf('fluticasone propionate 50 MCG/ACTUAT Nasal Spray')).toMatchObject({ ingredient: 'fluticasone propionate', strength_mg: null, strength: { value: 0.05, unit: 'mg/{actuat}' } });
+  });
+
+  it('mL: a per-mL concentration, in any spelling, is one strength; a leading package volume is not part of the name', () => {
+    for (const s of ['amoxicillin 50 MG/ML Oral Suspension', 'Amoxicillin 250 MG in 5 ML Oral Suspension', 'amoxicillin 250 mg/5 mL suspension']) {
+      expect(drugOf(s)).toMatchObject({ ingredient: 'amoxicillin', strength_mg: null, strength: { value: 50, unit: 'mg/mL' } });
+    }
+    expect(isDrug({ text: 'Amoxicillin 250 MG in 5 ML Oral Suspension' }, { ingredient: 'amoxicillin 50 mg/mL' })).toBe(true);
+    expect(isDrug({ text: 'Amoxicillin 250 MG in 5 ML Oral Suspension' }, { ingredient: 'amoxicillin 250 mg' })).toBe(false);
+    expect(drugOf('albuterol 5 MG/ML Inhalation Solution')).toMatchObject({ ingredient: 'albuterol', strength: { value: 5, unit: 'mg/mL' } });
+    expect(drugOf('1 ML medroxyprogesterone acetate 150 MG/ML Injection')).toMatchObject({ ingredient: 'medroxyprogesterone acetate', strength: { value: 150, unit: 'mg/mL' } });
+    expect(drugOf('5 ML SUFentanil 0.05 MG/ML Injection')).toMatchObject({ ingredient: 'sufentanil', strength: { value: 0.05, unit: 'mg/mL' } });
+    const three = drugOf('Acetaminophen 21.7 MG/ML / Dextromethorphan Hydrobromide 1 MG/ML / doxylamine succinate 0.417 MG/ML Oral Solution');
+    expect(three!.ingredients.map((i) => [i.name, i.strength])).toEqual([
+      ['acetaminophen', { value: 21.7, unit: 'mg/mL' }], ['dextromethorphan hydrobromide', { value: 1, unit: 'mg/mL' }], ['doxylamine succinate', { value: 0.417, unit: 'mg/mL' }],
+    ]);
   });
 
   it('LOINC: the code decides, display text formatting does not', () => {
