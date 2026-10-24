@@ -2,7 +2,7 @@
 // reproduces every grade and writes replay.json, regrade appends one regrades[] entry per grader
 // version, and with one judge cache entry removed both exit 1 naming the miss, with 0 fetch calls
 // while ANTHROPIC_API_KEY holds a sentinel.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { scenarioTransport } from '../../apps/web/src/harness/scenarios.ts';
@@ -59,6 +59,23 @@ describe('replay and regrade', () => {
     const other = await cli(regrade, [dir, '--grader-version', `${GRADER_VERSION}0`]);
     expect(other.code).toBe(2);
     expect(other.text).toMatch(new RegExp(`grader version is ${GRADER_VERSION}`));
+  });
+
+  it('replay refuses a trial whose task_version is not the checkout\'s, naming both; regrade still runs', async () => {
+    const copy = join(tempDir('replay-changed'), 'replay-changed');
+    cpSync(dir, copy, { recursive: true });
+    const file = join(copy, 'trials', '_toy', '0.json');
+    const rec = JSON.parse(readFileSync(file, 'utf8')) as { task_version: string; regrades?: unknown };
+    const current = rec.task_version;
+    delete rec.regrades;
+    writeFileSync(file, JSON.stringify({ ...rec, task_version: 'v-before-the-edit' }, null, 2));
+    const r = await cli(replay, [copy]);
+    expect(r.code, r.text).toBe(1);
+    expect(r.text).toContain(`_toy/0: task changed: run at v-before-the-edit, checkout at ${current}`);
+    const j = JSON.parse(readFileSync(join(copy, 'replay.json'), 'utf8'));
+    expect(j.trials['_toy/0']).toMatchObject({ match: false });
+    expect(j.trials['_toy/1']).toMatchObject({ match: true });
+    expect((await cli(regrade, [copy, '--grader-version', GRADER_VERSION])).code).toBe(0);
   });
 
   it('with one judge cache entry removed, regrade and replay exit 1 naming the miss, with 0 fetch calls', async () => {
