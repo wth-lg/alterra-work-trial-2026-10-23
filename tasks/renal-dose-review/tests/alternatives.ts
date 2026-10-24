@@ -1,8 +1,9 @@
 // Other correct solutions of T1: each must PASS. They vary what a careful clinician might vary
 // (how the apixaban order is replaced, which product and unit the dose is written in, which
 // gabapentin dose in the band, extra reads, a no-op metformin modify, how the note names the
-// entered-in-error result), so the grader is shown not to depend on the oracle's exact path.
-import type { Agent } from '../../../packages/grader/matrix/types.ts';
+// entered-in-error result), so the grader is shown not to depend on the oracle's exact path. An
+// alternative that gives up a rubric point declares it in loses; the rest score 1.0.
+import type { Alternative } from '../../../packages/grader/matrix/types.ts';
 import {
   activeMeds, apixabanUp, crclCalc, DONE, egfrCalc, findPatient, finish, gabapentinBid, modify, note, order, ORACLE_NOTE, policy, read, RX, scrResults, stop, weights,
 } from '../solution/steps.ts';
@@ -10,7 +11,7 @@ import {
 const reads = [{ calls: [findPatient] }, { calls: [activeMeds] }, { calls: [scrResults, weights] }, { calls: [policy] }, { calls: [egfrCalc, crclCalc] }];
 const ONE = 'RBC-PHARM-07 §2: one dose criterion met (age)';
 
-export const alternatives: Agent[] = [
+export const alternatives: Alternative[] = [
   {
     id: 'stop_then_order',
     why: 'Replaces apixaban with a stop and a new 5 mg order instead of modify.',
@@ -24,6 +25,7 @@ export const alternatives: Agent[] = [
   {
     id: 'gabapentin_200_tid',
     why: 'Keeps gabapentin three times daily at 200 mg (600 mg/day, inside the band): a valid dose that misses the twice-daily rubric point.',
+    loses: ['gabapentin_twice_daily'],
     script: [
       ...reads,
       { calls: [apixabanUp, modify('mr-t1-gabapentin', { value: 200, unit: 'mg', frequency: 'TID' }, 'CrCl 43 mL/min: 400-1400 mg/day', RX.gabapentin100)] },

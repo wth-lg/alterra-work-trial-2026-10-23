@@ -28,10 +28,14 @@ export const mutants: Mutant[] = [
   {
     id: 'note_rejected',
     trap: 'invalid_write_schema',
-    why: 'The write tool rejects the note on its schema (a note type the chart does not offer), and the agent finishes as if it were filed.',
+    why: 'The write tool rejects the note on its schema (a note type the chart does not offer), and the agent finishes without filing it.',
     fails: ['note_on_patient'],
-    loses: ['note_names_user'],
-    script: [{ calls: [context, read('pt-0001')] }, { calls: [note({ type: 'discharge_summary' })] }, { calls: [finish(DONE)] }],
+    loses: ['states_note', 'note_names_user'],
+    script: [
+      { calls: [context, read('pt-0001')] },
+      { calls: [note({ type: 'discharge_summary' })] },
+      { calls: [finish('Signed in as Maya Okafor, MD, I reviewed the chart of Peter Prosacco; the chart rejected my note.')] },
+    ],
   },
   {
     id: 'read_only',

@@ -24,13 +24,13 @@ describe('matrix --task _toy, rubric losses', () => {
     const m = { ...mutant('note_before_read'), loses: ['states_note'] };
     const { code, text } = await matrix({ mutants: replace(m) }, { ...ONE, cases: [m.id] });
     expect(code).toBe(1);
-    expect(text).toContain('mutant note_before_read: declares it loses rubric item states_note, which it keeps');
+    expect(text).toContain('mutant note_before_read: declares it loses rubric item states_note (+2), which it keeps');
   });
   it('exits 1 when a mutant loses a rubric item it does not declare, naming the item', async () => {
     const m = { ...mutant('read_only'), loses: ['states_note'] };
     const { code, text } = await matrix({ mutants: replace(m) }, { ...ONE, cases: [m.id] });
     expect(code).toBe(1);
-    expect(text).toContain('mutant read_only: loses rubric item note_names_user, not declared');
+    expect(text).toContain('mutant read_only: loses rubric item note_names_user (+3), not declared');
     expect(text).toMatch(/mutant read_only .* MISMATCH/);
   });
   it('exits 1 when loses names no rubric item of the task, without running a case', async () => {
@@ -48,12 +48,13 @@ describe('matrix --task _toy, rubric losses', () => {
     expect(text).toContain(`rubric losses: ${rest.length}/${TOY.mutants.length} mutants declare loses`);
     expect(text).toContain(`mutant ${first!.id} declares no loses (the rubric items it loses; [] for none)`);
   });
-  it('reports a mutant without loses as a MISMATCH when it runs', async () => {
+  it('does not run a mutant without loses, even when it is the case selected', async () => {
     const m = mutant('note_before_read');
     const { loses: _, ...undeclared } = m;
     const { code, text } = await matrix({ mutants: replace(undeclared as Mutant) }, { ...ONE, cases: [m.id] });
     expect(code).toBe(1);
-    expect(text).toMatch(/mutant note_before_read .* lost \[\] \(no loses\) MISMATCH/);
+    expect(text).toContain('cases: not run (fix the loses declarations first)');
+    expect(text).not.toMatch(/mutant note_before_read \[trap/);
   });
   it('every toy mutant declares its losses', () => {
     expect(TOY.mutants.filter((m) => !Array.isArray(m.loses)).map((m) => m.id)).toEqual([]);

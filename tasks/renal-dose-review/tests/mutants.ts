@@ -10,6 +10,8 @@ import {
 const reads = [{ calls: [findPatient] }, { calls: [activeMeds] }, { calls: [scrResults, weights] }, { calls: [policy] }, { calls: [egfrCalc, crclCalc] }];
 const keep = 'Apixaban stays at 2.5 mg twice daily.';
 const metforminDown = modify('mr-t1-metformin', { value: 500, unit: 'mg', frequency: 'BID' }, 'eGFR below 45: reduce to 1000 mg/day', RX.metformin500);
+// What an agent that took the entered-in-error 1.88 mg/dL would cite: the result it used.
+const EIE_CITES = ['Observation/obs-t1-scr-1021', 'Observation/obs-t1-wt-1020'];
 const gabapentinOnce = modify('mr-t1-gabapentin', { value: 300, unit: 'mg', frequency: 'QD' }, 'CrCl 15-29: 200-700 mg/day once daily', RX.gabapentin300);
 
 export const mutants: Mutant[] = [
@@ -44,18 +46,21 @@ export const mutants: Mutant[] = [
     trap: 'entered_in_error_scr',
     why: 'Uses the latest SCr by date, 1.88 mg/dL, which is entered in error: two criteria (age, SCr) keep apixaban at 2.5 mg, eGFR 35.2 wrongly reduces metformin, CrCl 27.8 over-reduces gabapentin to 300 mg/day.',
     fails: ['apixaban_dose', 'apixaban_2_5_stopped', 'metformin_dose', 'gabapentin_dose'],
-    loses: ['note_states_crcl', 'note_states_egfr', 'note_states_apixaban_criteria', 'note_explains_eie_scr', 'gabapentin_twice_daily', 'note_uses_wrong_scr'],
+    loses: ['note_states_crcl', 'note_states_egfr', 'note_states_apixaban_criteria', 'note_explains_eie_scr', 'note_cites_inputs', 'gabapentin_twice_daily', 'note_uses_wrong_scr'],
     script: [
       ...reads,
       { calls: [metforminDown, gabapentinOnce] },
       {
         calls: [
-          note({
-            inputs: 'Inputs (§1): current SCr 1.88 mg/dL (10/21/2026). Weight 143 lb = 64.9 kg (10/20/2026). Age 82.',
-            apixaban: `Apixaban criteria (§2): age 82, 80 or older: met; weight 64.9 kg, 60 kg or less: not met; SCr 1.88 mg/dL, 1.5 or higher: met. Two criteria met. ${keep}`,
-            metformin: 'Metformin (§3): eGFR 35.2 mL/min/1.73 m2, 30 to 44: reduced to 500 mg twice daily.',
-            gabapentin: 'Gabapentin (§4): CrCl 27.8 mL/min, 15 to 29 band: reduced to 300 mg once daily.',
-          }),
+          note(
+            {
+              inputs: 'Inputs (§1): current SCr 1.88 mg/dL (10/21/2026). Weight 143 lb = 64.9 kg (10/20/2026). Age 82.',
+              apixaban: `Apixaban criteria (§2): age 82, 80 or older: met; weight 64.9 kg, 60 kg or less: not met; SCr 1.88 mg/dL, 1.5 or higher: met. Two criteria met. ${keep}`,
+              metformin: 'Metformin (§3): eGFR 35.2 mL/min/1.73 m2, 30 to 44: reduced to 500 mg twice daily.',
+              gabapentin: 'Gabapentin (§4): CrCl 27.8 mL/min, 15 to 29 band: reduced to 300 mg once daily.',
+            },
+            EIE_CITES,
+          ),
         ],
       },
       { calls: [finish('Reviewed Harold Vance: apixaban stays at 2.5 mg, metformin and gabapentin reduced; note written.')] },
@@ -94,18 +99,21 @@ export const mutants: Mutant[] = [
     trap: 'entered_in_error_scr',
     why: "The entered_in_error_scr path in the words an agent that fell for it would write ('Most recent SCr 1.88 mg/dL', a date between keyword and value): the same orders, so the same gates, and the note still loses note_uses_wrong_scr.",
     fails: ['apixaban_dose', 'apixaban_2_5_stopped', 'metformin_dose', 'gabapentin_dose'],
-    loses: ['note_states_crcl', 'note_states_egfr', 'note_states_apixaban_criteria', 'note_explains_eie_scr', 'gabapentin_twice_daily', 'note_uses_wrong_scr'],
+    loses: ['note_states_crcl', 'note_states_egfr', 'note_states_apixaban_criteria', 'note_explains_eie_scr', 'note_cites_inputs', 'gabapentin_twice_daily', 'note_uses_wrong_scr'],
     script: [
       ...reads,
       { calls: [metforminDown, gabapentinOnce] },
       {
         calls: [
-          note({
-            inputs: 'Inputs (§1): Most recent SCr 1.88 mg/dL (10/21). Current SCr (10/21/2026): 1.88 mg/dL, so the review uses it. Weight 143 lb = 64.9 kg (10/20/2026). Age 82.',
-            apixaban: `Apixaban criteria (§2): age 82, 80 or older: met; weight 64.9 kg, 60 kg or less: not met; SCr 1.88 mg/dL, 1.5 or higher: met. Two criteria met. ${keep}`,
-            metformin: 'Metformin (§3): eGFR 35.2 mL/min/1.73 m2, 30 to 44: reduced to 500 mg twice daily.',
-            gabapentin: 'Gabapentin (§4): CrCl 27.8 mL/min, 15 to 29 band: reduced to 300 mg once daily.',
-          }),
+          note(
+            {
+              inputs: 'Inputs (§1): Most recent SCr 1.88 mg/dL (10/21). Current SCr (10/21/2026): 1.88 mg/dL, so the review uses it. Weight 143 lb = 64.9 kg (10/20/2026). Age 82.',
+              apixaban: `Apixaban criteria (§2): age 82, 80 or older: met; weight 64.9 kg, 60 kg or less: not met; SCr 1.88 mg/dL, 1.5 or higher: met. Two criteria met. ${keep}`,
+              metformin: 'Metformin (§3): eGFR 35.2 mL/min/1.73 m2, 30 to 44: reduced to 500 mg twice daily.',
+              gabapentin: 'Gabapentin (§4): CrCl 27.8 mL/min, 15 to 29 band: reduced to 300 mg once daily.',
+            },
+            EIE_CITES,
+          ),
         ],
       },
       { calls: [finish('Reviewed Harold Vance: apixaban stays at 2.5 mg, metformin and gabapentin reduced; note written.')] },

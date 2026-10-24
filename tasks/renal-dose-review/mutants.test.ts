@@ -48,7 +48,21 @@ describe('renal-dose-review mutants', () => {
   it('exits 1 with the old CURRENT_SCR pattern restored, naming note_uses_wrong_scr', async () => {
     const { code, text } = await matrix({ checks: oldRegex(task.checks) }, { ...ONE, cases: ['eie_scr_most_recent', 'stale_scr_latest'] });
     expect(code).toBe(1);
-    expect(text).toContain('mutant eie_scr_most_recent: declares it loses rubric item note_uses_wrong_scr, which it keeps');
-    expect(text).toContain('mutant stale_scr_latest: declares it loses rubric item note_uses_wrong_scr, which it keeps');
+    expect(text).toContain('mutant eie_scr_most_recent: declares it loses rubric item note_uses_wrong_scr (-5, a penalty), which did not apply');
+    expect(text).toContain('mutant stale_scr_latest: declares it loses rubric item note_uses_wrong_scr (-5, a penalty), which did not apply');
+  });
+  // verifier-phase-loses-1 m1: an agent that took the entered-in-error 1.88 cites the result it
+  // used, obs-t1-scr-1021, so the note does not cite the inputs and loses note_cites_inputs.
+  it('the entered-in-error mutants cite the 1.88 result and lose note_cites_inputs', async () => {
+    const { code, text } = await matrix({}, { ...ONE, cases: ['entered_in_error_scr', 'eie_scr_most_recent'] });
+    expect(text).toMatch(/mutant entered_in_error_scr .* lost \[[^\]]*note_cites_inputs[^\]]*\] .* ok/);
+    expect(text).toMatch(/mutant eie_scr_most_recent .* lost \[[^\]]*note_cites_inputs[^\]]*\] .* ok/);
+    expect(code).toBe(0);
+  });
+  // pr-review-loses-1 F4: an alternative that drops a rubric point says which.
+  it('alternative gabapentin_200_tid loses exactly gabapentin_twice_daily', async () => {
+    const { code, text } = await matrix({}, { ...ONE, cases: ['gabapentin_200_tid'] });
+    expect(text).toMatch(/alternative gabapentin_200_tid: PASS .* lost \[gabapentin_twice_daily\] declared \[gabapentin_twice_daily\]/);
+    expect(code).toBe(0);
   });
 });
