@@ -30,7 +30,7 @@ import type { Check, Json } from '../packages/grader/check.ts';
 import type { Grade } from '../packages/grader/grade.ts';
 import type { JudgeCacheEntry } from '../packages/grader/judge.ts';
 import { declaresOf, gradeRun, runMatrix, type CaseRun, type FreshGrade, type MatrixEnv, type MatrixOptions } from '../packages/grader/matrix/matrix.ts';
-import type { Agent, Agents, MatrixTask, Mutant, Script, WorldView } from '../packages/grader/matrix/types.ts';
+import type { Agents, Alternative, MatrixTask, Mutant, Script, WorldView } from '../packages/grader/matrix/types.ts';
 import { nodeNow } from './adapters/clock-node.ts';
 import { nodeTaskSource, TASKS_DIR } from './adapters/tasks-node.ts';
 
@@ -98,7 +98,7 @@ export async function loadMatrixTask(id: string, root: string = TASKS_DIR): Prom
     checks: await exported<Check[]>(dir, 'tests/grader.ts', 'checks', []),
     ...(existsSync(checksModule) ? { checksModule } : {}),
     oracle: await exported<Script | null>(dir, 'solution/solve.ts', 'oracle', null),
-    alternatives: await exported<Agent[]>(dir, 'tests/alternatives.ts', 'alternatives', []),
+    alternatives: await exported<Alternative[]>(dir, 'tests/alternatives.ts', 'alternatives', []),
     mutants: await exported<Mutant[]>(dir, 'tests/mutants.ts', 'mutants', []),
     agents: existsSync(join(dir, 'tests/agents.ts')) ? ((await import(pathToFileURL(join(dir, 'tests/agents.ts')).href)) as Agents) : {},
     expected: await exported<Json | undefined>(dir, 'expected.ts', 'expected', undefined),

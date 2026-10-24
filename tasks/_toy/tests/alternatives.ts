@@ -1,6 +1,6 @@
-// Other correct solutions of the toy: each must PASS. They vary what a careful clinician might
+// Other correct solutions of the toy: each must PASS, and none loses a rubric point (no loses). They vary what a careful clinician might
 // vary, so the grader is shown not to depend on the oracle's exact path.
-import type { Agent, ScriptCall } from '../../../packages/grader/matrix/types.ts';
+import type { Alternative, ScriptCall } from '../../../packages/grader/matrix/types.ts';
 
 const context: ScriptCall = { name: 'get_context', input: {} };
 const read = (resource_type: string, id: string): ScriptCall => ({ name: 'fhir_read', input: { resource_type, id } });
@@ -10,7 +10,7 @@ const note = (over: Partial<Record<'patient' | 'title' | 'text', string>> & { ci
 });
 const finish = (summary: string): ScriptCall => ({ name: 'finish', input: { summary } });
 
-export const alternatives: Agent[] = [
+export const alternatives: Alternative[] = [
   {
     id: 'read_patient_first',
     why: 'Opens the chart before checking who is signed in.',
