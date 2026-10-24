@@ -22,7 +22,8 @@
 // Patel's 2021 colonoscopy goes, since a screening FIT four years after one is implausible.
 // Denise Holloway's CKD stage 1 and 2 entries become CKD 3b, and her base creatinine and MDRD
 // eGFR results, which Synthea left contradicting each other, become a stable CKD 3b series.
-// Leslie Parisian's duplicate simvastatin goes.
+// Leslie Parisian's duplicate simvastatin goes, and so does the 1965 Linda Marsh's tubal ligation
+// dated 2020, which her new birth date puts at 55.
 import type { Resource } from '../../packages/env/store.ts';
 import type { Overlay, WorldReader } from '../../packages/env/overlay.ts';
 
@@ -60,6 +61,7 @@ const REMOVE: Array<{ resourceType: string; id: string }> = [
   { resourceType: 'MedicationRequest', id: 'mr-00092' }, // Leslie Parisian's second simvastatin
   { resourceType: 'Condition', id: 'cond-00247' }, // Denise Holloway: CKD stage 1
   { resourceType: 'Condition', id: 'cond-00265' }, // Denise Holloway: CKD stage 2
+  { resourceType: 'Condition', id: 'cond-00673' }, // the 1965 Linda Marsh: a tubal ligation in 2020, at 55
 ];
 
 function base64(s: string): string {
