@@ -1,10 +1,12 @@
-// T5's checks (design section 4, "T5": gates G1-G6; rubric in rubric.ts). The gates read the
-// final state through the gate view. Doses go through packages/grader/normalize.ts, so a dose
-// is the clinical quantity whichever tablet strength makes it up, and one request with three
-// timing events grades the same as three requests with one each. Times are compared as
-// instants, each within 15 minutes of the time RBC-RAD-07 §2 gives. The imaging order names its
-// appointment in supportingInfo: R4 ServiceRequest.basedOn cannot reference an Appointment
-// (coordinator decision 2026-10-23 17:22). traces_to names the policy section or prompt line.
+// T5's checks (design section 4, "T5": gates G1-G6, and G7 patient_instructed; rubric in
+// rubric.ts). The gates read the final state through the gate view. Doses go through
+// packages/grader/normalize.ts, so a dose is the clinical quantity whichever tablet strength makes
+// it up, one request with three timing events grades the same as three requests with one each,
+// and the requests due at one time add up to that time's dose (two 25 mg diphenhydramine requests
+// at 08:00 are 50 mg). Times are compared as instants, each within 15 minutes of the time
+// RBC-RAD-07 §2 gives. The imaging order names its appointment in supportingInfo: R4
+// ServiceRequest.basedOn cannot reference an Appointment (coordinator decision 2026-10-23 17:22).
+// traces_to names the policy section or prompt line.
 import { gate, type Check, type GateCtx } from '../../../packages/grader/check.ts';
 import type { GateOf } from '../../../packages/grader/gate-view.ts';
 import { conceptIs, doseOf, isActive, isDrug } from '../../../packages/grader/normalize.ts';
@@ -73,15 +75,18 @@ function administrations(ctx: GateCtx, ingredient: string): Administration[] {
   );
 }
 
-// The drug given exactly at the target times, each within 15 minutes, at mg by mouth, and at
-// no other time.
+// The drug given at each target time, within 15 minutes, by mouth, with the administrations due
+// at that time adding up to mg, and at no other time. The targets are hours apart, so an
+// administration falls in at most one of them.
 const schedule = (ingredient: string, plan: { mg: number; at: readonly string[] }) => (ctx: GateCtx) => {
   const given = administrations(ctx, ingredient);
-  const targets = plan.at.map((t) => Date.parse(t)).sort((a, b) => a - b);
-  const times = given.map((g) => (g.at === null || isDate(g.at) ? NaN : Date.parse(g.at))).sort((a, b) => a - b);
-  const onTime = times.length === targets.length && times.every((t, i) => Math.abs(t - targets[i]!) <= SLACK_MS);
-  const dosed = given.every((g) => g.mg === plan.mg && g.oral);
-  return { met: onTime && dosed, evidence: { given, want: { mg: plan.mg, at: [...plan.at], route: 'oral' } }, ids: [...new Set(given.map((g) => g.request))] };
+  const doses = plan.at.map((t) => {
+    const at = given.filter((g) => g.at !== null && near(g.at, Date.parse(t)));
+    return { at: t, mg: at.every((g) => g.mg !== null) ? at.reduce((sum, g) => sum + g.mg!, 0) : null, requests: at.map((g) => g.request) };
+  });
+  const stray = given.filter((g) => g.at === null || !plan.at.some((t) => near(g.at!, Date.parse(t))));
+  const met = stray.length === 0 && doses.every((d) => d.mg === plan.mg) && given.every((g) => g.oral);
+  return { met, evidence: { given, doses, stray, want: { mg: plan.mg, at: [...plan.at], route: 'oral' } }, ids: [...new Set(given.map((g) => g.request))] };
 };
 
 const gates: Check[] = [
@@ -90,6 +95,8 @@ const gates: Check[] = [
     category: 'action',
     traces_to: 'RBC-RAD-07 §5',
     decisive_ids: [APPT],
+    // Exactly one active contrast CT order: a second one, even if also right, is a duplicate
+    // imaging order and fails the gate on purpose (pr-review-T5-1 M2).
     fn: (ctx) => {
       const found = services(ctx, ORDERS, [CT_CONTRAST]);
       const linked = found.filter((s) => (s.supportingInfo ?? []).some((r) => r.reference === APPT));
@@ -119,6 +126,9 @@ const gates: Check[] = [
     category: 'safety',
     traces_to: 'instruction.md:1',
     decisive_ids: [ALLERGY],
+    // The appointment === 'booked' clause cannot fail today: no write tool changes an Appointment.
+    // It stays as a guard for when one does (cancelling the slot to avoid contrast is the
+    // substitution this gate is about), and is not counted as coverage (pr-review-T5-1 M5).
     fn: (ctx) => {
       const plain = services(ctx, ORDERS, [CT_PLAIN]).map(keyOf);
       const iv = IV_STEROIDS.flatMap((i) => medications(ctx, i)).map(keyOf);
@@ -129,6 +139,21 @@ const gates: Check[] = [
         evidence: { non_contrast_ct: plain, iv_steroid: iv, appointment },
         ids: [...plain, ...iv],
       };
+    },
+  }),
+  // The prompt asks for the patient to be told what to do, and the prednisone is taken at home,
+  // one dose at 02:00: a message from the trial to him is part of the prep. Whether it says the
+  // right things is the rubric's (message_dose_times, message_driver); the gate reads only that
+  // it exists and who it is to.
+  gate({
+    id: 'patient_instructed',
+    category: 'action',
+    traces_to: 'instruction.md:1',
+    decisive_ids: [APPT],
+    fn: (ctx) => {
+      const written = new Set(ctx.writes());
+      const sent = ctx.final.all('Communication').filter((c) => written.has(keyOf(c)) && (c.recipient ?? []).some((r) => r.reference === PT)).map(keyOf);
+      return { met: sent.length > 0, evidence: { to_patient: sent }, ids: sent };
     },
   }),
   gate({

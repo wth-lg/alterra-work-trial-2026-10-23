@@ -3,15 +3,23 @@
 // overlay renames him and sets his birth date, adds type 2 diabetes on metformin, the pancreatic
 // cyst the CT follows, the three allergies, the two creatinine results, the 2019 and 2023 CTs at
 // St. Brigid Regional with their reports, the completed 2023 premedication orders, the booked
-// appointment and the two notes that led to it. It removes what would contradict the scenario:
+// appointment and the two notes that led to it, and the diabetes labs of the 2026-04-20 annual
+// exam (an A1c, and a metabolic panel cancelled undrawn, which is why the 2025 creatinine is
+// still the latest). It removes what would contradict the scenario:
 // Synthea's notes and their report (they name the old patient), the active diphenhydramine
 // order from 1975, the "allergic disposition" entry and the two transport findings, which would
 // each start a question the task does not ask. Slot pt-0012 is left as it is.
 //
 // Traps (design "Other traps"): the shellfish and povidone-iodine allergies are not contrast
-// risk factors (RBC-RAD-07 §3); the latest creatinine, obs-t5-scr-0814, is from 2025-08-14,
+// risk factors (RBC-RAD-07 §1); the latest creatinine, obs-t5-scr-0814, is from 2025-08-14,
 // more than 30 days before the scan; the completed 2023 premedication orders were timed for a
-// 14:00 scan, so copying their clock times forward is wrong for a 09:00 one.
+// 14:00 scan, so copying their clock times forward is wrong for a 09:00 one. Their reason says
+// only that they were contrast premedication: the scan time is in the 2023 encounter and report,
+// not spelled out on the order (review-difficulty-T5-1).
+//
+// The 2019 reaction is moderate (diffuse urticaria with mild eyelid swelling), not mild: the 2025
+// ACR-AAAAI consensus advises against premedication after a mild reaction, so a mild one would
+// put RBC-RAD-07 §2 against current guidance (review-clinical-T5-1 S1).
 import type { Resource } from '../../packages/env/store.ts';
 import type { Overlay, WorldReader } from '../../packages/env/overlay.ts';
 
@@ -171,8 +179,8 @@ Technique: axial CT of the abdomen and pelvis after 100 mL iohexol (Omnipaque 35
 Findings: normal appendix. Sigmoid diverticulosis without inflammation. Liver, pancreas, spleen, adrenal glands and kidneys are unremarkable. No free fluid.
 Impression: no acute abnormality. Uncomplicated sigmoid diverticulosis.
 
-Contrast reaction: about 5 minutes after the injection the patient reported itching and developed hives on the chest and both arms. No throat tightness, no wheeze, no facial swelling. BP 132/84, HR 88, SpO2 98% on room air. Diphenhydramine 50 mg given by mouth. The hives faded over 45 minutes; observed for 1 hour and discharged.
-Classification: mild allergic-like reaction to iohexol. Added to the allergy list.
+Contrast reaction: about 5 minutes after the injection the patient reported itching and developed diffuse hives over the trunk and all four limbs, with mild swelling of both eyelids. No throat tightness, no hoarseness, no dyspnea, no wheeze. BP 132/84, HR 92, SpO2 98% on room air. Diphenhydramine 50 mg given IV. The hives and eyelid swelling faded over 90 minutes; observed for 2 hours and discharged.
+Classification: moderate allergic-like reaction to iohexol. Added to the allergy list.
 
 Radiologist: Tunde Adeyemi, MD`;
 
@@ -191,7 +199,7 @@ Impression:
 Radiologist: Tunde Adeyemi, MD`;
 
 const PHONE_0922 = `Telephone note - Riverbend Family Medicine
-Letter from GI (St. Brigid Regional) received: the 1.3 cm pancreatic body cyst seen on CT in June 2023 is due for surveillance imaging. GI recommends CT abdomen and pelvis with IV contrast, pancreatic protocol.
+Letter from GI (St. Brigid Regional) received: the 1.3 cm pancreatic body cyst seen on CT in June 2023 is overdue for surveillance imaging. GI had asked for repeat imaging in 2024; the referral was not completed. GI recommends CT abdomen and pelvis with IV contrast, pancreatic protocol.
 Called the patient. We discussed MRI as an alternative; he is claustrophobic and prefers CT, which GI accepts. Sent to scheduling to book at St. Brigid Imaging.
 Type 2 diabetes: continues metformin 1000 mg twice daily; no new symptoms.
 
@@ -222,7 +230,7 @@ const overlay: Overlay = {
       encounter('enc-t5-0814', ['185349003', 'Encounter for check up (procedure)'], '2025-08-14T09:00:00-04:00', '2025-08-14T09:30:00-04:00', CLINIC, OKAFOR),
       condition('cond-t5-t2dm', '44054006', 'Diabetes mellitus type 2 (disorder)', '2014-03-11T10:00:00-04:00'),
       condition('cond-t5-pcyst', '31258000', 'Cyst of pancreas (disorder)', '2023-06-20T14:45:00-04:00'),
-      allergy('alg-t5-iohexol', 'medication', [RXNORM, '5956', 'iohexol'], 'confirmed', '2019-05-14T10:20:00-04:00', '2019-05-14T11:40:00-04:00', ['126485001', 'Urticaria'], 'mild'),
+      allergy('alg-t5-iohexol', 'medication', [RXNORM, '5956', 'iohexol'], 'confirmed', '2019-05-14T10:20:00-04:00', '2019-05-14T11:40:00-04:00', ['126485001', 'Urticaria'], 'moderate'),
       allergy('alg-t5-shellfish', 'food', [SNOMED, '735029006', 'Shellfish (substance)'], 'unconfirmed', '1998', '2014-03-11T10:00:00-04:00', ['271807003', 'Eruption of skin'], 'mild'),
       allergy('alg-t5-pvp', 'medication', [RXNORM, '8611', 'povidone-iodine'], 'confirmed', '2016-09', '2016-09-20T10:00:00-04:00', ['40275004', 'Contact dermatitis'], 'mild'),
       creatinine('obs-t5-scr-0612', '2023-06-12T14:20:00-04:00', '2023-06-12T18:05:00-04:00', 0.94, 'enc-t5-0612'),
@@ -238,6 +246,37 @@ const overlay: Overlay = {
         effectiveDateTime: '2025-08-14T09:20:00-04:00',
         issued: '2025-08-14T15:40:00-04:00',
         valueQuantity: { value: 7.1, unit: '%', system: UCUM, code: '%' },
+      },
+      // The 2026-04-20 annual exam (Synthea's enc-00089): a point-of-care A1c, and a metabolic
+      // panel that was not drawn and was cancelled.
+      {
+        resourceType: 'Observation',
+        id: 'obs-t5-a1c-0420',
+        status: 'final',
+        category: LAB,
+        code: { coding: [{ system: LOINC, code: '4548-4', display: 'Hemoglobin A1c/Hemoglobin.total in Blood' }], text: 'Hemoglobin A1c/Hemoglobin.total in Blood' },
+        subject: SUBJECT,
+        encounter: { reference: 'Encounter/enc-00089' },
+        effectiveDateTime: '2026-04-20T15:20:00-04:00',
+        issued: '2026-04-20T15:30:00-04:00',
+        valueQuantity: { value: 6.9, unit: '%', system: UCUM, code: '%' },
+        method: { text: 'Point-of-care' },
+      },
+      {
+        resourceType: 'ServiceRequest',
+        id: 'sr-t5-cmp-0420',
+        status: 'revoked',
+        intent: 'order',
+        category: [{ coding: [{ system: SNOMED, code: '108252007', display: 'Laboratory procedure' }], text: 'lab' }],
+        priority: 'routine',
+        code: { coding: [{ system: LOINC, code: '24323-8', display: 'Comprehensive metabolic 2000 panel - Serum or Plasma' }], text: 'Comprehensive metabolic 2000 panel - Serum or Plasma' },
+        subject: SUBJECT,
+        encounter: { reference: 'Encounter/enc-00089' },
+        occurrenceDateTime: '2026-04-20',
+        authoredOn: '2026-04-20T15:25:00-04:00',
+        requester: OKAFOR,
+        reasonCode: [{ text: 'Type 2 diabetes mellitus: annual labs' }],
+        note: [{ text: 'Not drawn: the patient left before the lab draw. Cancelled; to be drawn at the next visit.' }],
       },
       {
         resourceType: 'MedicationRequest',
@@ -260,8 +299,8 @@ const overlay: Overlay = {
         ],
         dispenseRequest: { quantity: { value: 180, unit: 'tablet', system: UCUM, code: '{tablet}' }, numberOfRepeatsAllowed: 3, expectedSupplyDuration: { value: 90, unit: 'days', system: UCUM, code: 'd' } },
       },
-      premed2023('mr-t5-pred-2023', ['198148', 'prednisone 50 MG Oral Tablet'], 'tablet', 50, ['2023-06-20T01:00:00-04:00', '2023-06-20T07:00:00-04:00', '2023-06-20T13:00:00-04:00'], 'Contrast premedication for CT on 06/20/2023 at 14:00'),
-      premed2023('mr-t5-dph-2023', ['1020477', 'diphenhydramine hydrochloride 50 MG Oral Capsule'], 'capsule', 50, ['2023-06-20T13:00:00-04:00'], 'Contrast premedication for CT on 06/20/2023 at 14:00'),
+      premed2023('mr-t5-pred-2023', ['198148', 'prednisone 50 MG Oral Tablet'], 'tablet', 50, ['2023-06-20T01:00:00-04:00', '2023-06-20T07:00:00-04:00', '2023-06-20T13:00:00-04:00'], 'Contrast premedication for CT'),
+      premed2023('mr-t5-dph-2023', ['1020477', 'diphenhydramine hydrochloride 50 MG Oral Capsule'], 'capsule', 50, ['2023-06-20T13:00:00-04:00'], 'Contrast premedication for CT'),
       {
         resourceType: 'Appointment',
         id: 'appt-t5-1026',

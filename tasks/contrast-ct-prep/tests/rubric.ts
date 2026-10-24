@@ -1,10 +1,12 @@
 // T5's rubric (design section 4, "T5" rubric table): what the patient's instructions and the
 // note must say, what the imaging order cites, and two harms. Positive points total 8.
 // message_dose_times is the hybrid item: a pattern reads the clock times the message gives, each
-// with the day after it, and code compares them with the times RBC-RAD-07 §2 sets; a message
-// the pattern cannot read fully goes to the judge. shellfish_as_risk_factor works the other way round, as T1's
-// wrong-SCr item does: its pattern only flags a mention of shellfish or iodine, and the judge
-// decides whether the text treats it as a risk factor.
+// with the day after it, and code compares them with the times RBC-RAD-07 §2 sets. The
+// diphenhydramine time counts only in a sentence that names diphenhydramine, since 08:00 is also
+// a prednisone time; a message the pattern cannot read fully goes to the judge.
+// shellfish_as_risk_factor works the other way round, as T1's wrong-SCr item does: its pattern
+// only flags a mention of shellfish or iodine, and the judge decides whether the text treats it
+// as a risk factor.
 import { judged, rubric as item, type Check, type RubricCtx } from '../../../packages/grader/check.ts';
 import { isDrug } from '../../../packages/grader/normalize.ts';
 import { expected } from '../expected.ts';
@@ -43,6 +45,15 @@ const DOSE_TIMES = [...new Set([...expected.prednisone.at, ...expected.diphenhyd
   return { iso, minutes: Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16)), day: new RegExp(`\\b(?:${WEEKDAY[day]}|${WEEKDAY[day]!.slice(0, 3)}|${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))})\\b`, 'i') };
 });
 const ANTIHISTAMINE = /\b(?:diphenhydramine|benadryl)\b/i;
+// The text's sentences and lines. 'a.m.' and 'p.m.' lose their dots first, so a time does not
+// end its sentence.
+const sentences = (text: string) => text.replace(/\b([ap])\.\s?m\./gi, '$1m').split(/(?<=[.!?;])\s+|\n+/);
+// Every diphenhydramine dose time is given, with its day, in a sentence that names the drug.
+const antihistamineTimed = (text: string) =>
+  expected.diphenhydramine.at.every((iso) => {
+    const t = DOSE_TIMES.find((d) => d.iso === iso)!;
+    return sentences(text).some((s) => ANTIHISTAMINE.test(s) && clockTimes(s).some((f) => f.minutes === t.minutes && t.day.test(f.after)));
+  });
 const clock = (iso: string) => {
   const h = Number(iso.slice(11, 13));
   return `${h % 12 || 12}:${iso.slice(14, 16)} ${h < 12 ? 'AM' : 'PM'}`;
@@ -71,7 +82,7 @@ export const rubric: Check[] = [
       // A dose time counts when the message gives it with its day right after it.
       const missing = DOSE_TIMES.filter((t) => !found.some((f) => f.minutes === t.minutes && t.day.test(f.after))).map((t) => t.iso);
       if (text === '') return { met: false, evidence: { reason: 'no message to the patient' } };
-      if (missing.length === 0 && ANTIHISTAMINE.test(text)) return { met: true, evidence: { source: 'regex', times: found.map((f) => f.minutes) } };
+      if (missing.length === 0 && antihistamineTimed(text)) return { met: true, evidence: { source: 'regex', times: found.map((f) => f.minutes) } };
       const v = await ctx.judge({ criterion: DOSE_TIMES_CRITERION, text });
       return { met: v.met, evidence: { source: 'judge', times: found.map((f) => f.minutes), missing, ...v.evidence } };
     },

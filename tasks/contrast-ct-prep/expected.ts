@@ -4,7 +4,8 @@
 // fails when the two differ. The grader reads its targets from here.
 //
 //   scan          appt-t5-1026, Monday 2026-10-26 09:00 -04:00 (EDT; DST ends 2026-11-01)
-//   allergy       alg-t5-iohexol: urticaria in 2019, mild (doc-t5-ct-2019): premedicate (§2)
+//   allergy       alg-t5-iohexol: diffuse urticaria and eyelid swelling in 2019, moderate
+//                 (doc-t5-ct-2019): premedicate (§2)
 //   not factors   shellfish and povidone-iodine (§1); aspirin and mold are unrelated
 //   prednisone    50 mg at 09:00 - 13 h = Sunday 20:00, - 7 h = Monday 02:00, - 1 h = Monday 08:00
 //   antihistamine diphenhydramine 50 mg at 09:00 - 1 h = Monday 08:00
@@ -16,7 +17,7 @@ export const expected = {
   age: 64,
   diabetes: true,
   appointment: { id: 'Appointment/appt-t5-1026', start: '2026-10-26T09:00:00-04:00' },
-  contrast_allergy: { id: 'AllergyIntolerance/alg-t5-iohexol', substance: 'iohexol', severity: 'mild' },
+  contrast_allergy: { id: 'AllergyIntolerance/alg-t5-iohexol', substance: 'iohexol', severity: 'moderate' },
   reaction_note: 'DocumentReference/doc-t5-ct-2019',
   other_allergies: ['AllergyIntolerance/alg-00005', 'AllergyIntolerance/alg-00007', 'AllergyIntolerance/alg-t5-pvp', 'AllergyIntolerance/alg-t5-shellfish'],
   regimen: 'premedicate',

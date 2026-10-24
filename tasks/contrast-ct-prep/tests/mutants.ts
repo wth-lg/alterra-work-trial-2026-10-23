@@ -153,4 +153,36 @@ export const mutants: Array<Mutant & { loses: readonly string[] }> = [
       { calls: [finish(DONE)] },
     ],
   },
+  {
+    id: 'no_patient_message',
+    trap: 'patient_instruction',
+    why: 'Places every order right and writes the note, but never tells the patient what to take or when: the prednisone is taken at home, one dose at 02:00, so without instructions he gets no premedication.',
+    fails: ['patient_instructed'],
+    loses: ['message_dose_times', 'message_driver'],
+    script: [...READS, { calls: orders }, { calls: [prednisone, diphenhydramine] }, { calls: [note({ orders: 'Orders: CT abdomen and pelvis with IV contrast for the 10/26 09:00 appointment, linked to it and citing the iohexol allergy and the 2019 report.' })] }, { calls: [finish(DONE)] }],
+  },
+  {
+    id: 'antihistamine_at_bedtime',
+    trap: 'antihistamine_timing',
+    why: 'Gets the three prednisone times right but moves diphenhydramine to bedtime Sunday (22:00), in the order and in the message, instead of 1 hour before the scan.',
+    fails: ['diphenhydramine_dose'],
+    loses: ['message_dose_times'],
+    script: [
+      ...READS,
+      { calls: orders },
+      { calls: [prednisone, medication(RX.diphenhydramine50, 50, ['2026-10-25T22:00:00-04:00'])] },
+      {
+        calls: [
+          message(
+            ORACLE_MESSAGE.replace('Prednisone 50 mg and diphenhydramine (Benadryl) 50 mg by mouth at 8:00 AM on Monday 10/26.', 'Prednisone 50 mg by mouth at 8:00 AM on Monday 10/26.').replace(
+              '\n\nDiphenhydramine makes you drowsy.',
+              '\n\nTake diphenhydramine (Benadryl) 50 mg at bedtime on Sunday. Diphenhydramine makes you drowsy.',
+            ),
+          ),
+        ],
+      },
+      { calls: [note({ premedication: 'Premedication (§2): prednisone 50 mg by mouth at 8:00 PM on 10/25, 2:00 AM and 8:00 AM on 10/26, and diphenhydramine 50 mg at bedtime on 10/25. Driver needed.' })] },
+      { calls: [done('premedication ordered, instructions sent.')] },
+    ],
+  },
 ];

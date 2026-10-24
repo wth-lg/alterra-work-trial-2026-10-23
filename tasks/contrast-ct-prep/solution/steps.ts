@@ -41,7 +41,7 @@ export const READS = [
   { calls: [timesCalc] },
 ];
 
-const REASON = 'RBC-RAD-07 §2: premedication for a prior mild allergic-like reaction to iohexol (2019)';
+const REASON = 'RBC-RAD-07 §2: premedication for a prior moderate allergic-like reaction to iohexol (2019)';
 
 type ServiceInput = { code?: string; start?: string; end?: string; supporting?: string[]; reason?: string; priority?: string };
 export const service = (s: ServiceInput): ScriptCall => ({
@@ -90,7 +90,7 @@ export interface NoteFacts {
 }
 export const ORACLE_NOTE: NoteFacts = {
   allergies:
-    'Allergies (§1): mild allergic-like reaction to iohexol on 05/14/2019 (hives on the chest and arms about 5 minutes after the injection, resolved with oral diphenhydramine; radiology report of that day). ' +
+    'Allergies (§1): moderate allergic-like reaction to iohexol on 05/14/2019 (diffuse hives over the trunk and limbs with mild eyelid swelling about 5 minutes after the injection, no breathing problems, resolved with diphenhydramine; radiology report of that day). ' +
     'That is the risk factor. The shellfish (rash) and povidone-iodine (contact dermatitis) allergies are not risk factors for a contrast reaction and do not change the plan.',
   premedication:
     'Premedication (§2): prednisone 50 mg by mouth at 8:00 PM on 10/25, 2:00 AM on 10/26 and 8:00 AM on 10/26 (13, 7 and 1 hours before the scan), and diphenhydramine 50 mg by mouth at 8:00 AM on 10/26. ' +

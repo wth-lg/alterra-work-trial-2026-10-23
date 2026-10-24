@@ -37,6 +37,9 @@ describe('message_dose_times', () => {
     times_in_words: { source: 'judge', met: true },
     overnight_date_slip: { source: 'judge', met: false },
     copied_2023_times: { source: 'judge', met: false },
+    // pr-review-T5-1 S2: the prednisone times are all there, but diphenhydramine is at bedtime.
+    antihistamine_at_bedtime: { source: 'judge', met: false },
+    split_doses: { source: 'regex', met: true },
   };
   it.each(Object.entries(WANT))('%s: %o', async (id, want) => {
     const c = cases(task).find((x) => x.id === id);
