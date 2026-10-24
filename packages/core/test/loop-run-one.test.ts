@@ -2,7 +2,7 @@
 // batchStart is given and opens nothing; a ledger whose exposure plus that projection crosses
 // $450 refuses before any call; a mocked trial writes the record and the trajectory JSONL,
 // meters through the ledger and closes its batch; a rerun of a recorded trial key sends nothing.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { tempDir, write } from '../../../scripts/test/helpers.ts';
@@ -49,7 +49,7 @@ describe('cli run-one', () => {
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
     expect(h.calls()).toBe(0);
     expect(h.lines.join('\n')).toMatch(/projected cap: .* = \$450\.01 > \$450/);
-    expect(existsSync(join(dir, 'trials/_toy/0.json'))).toBe(false);
+    expect(existsSync(join(dir, 'trials/_toy/claude-opus-5-5/high/mock-toy/0.json'))).toBe(false);
   });
 
   it('runs a mocked trial, writes record and trajectory, and skips a recorded key on rerun', async () => {
@@ -58,16 +58,16 @@ describe('cli run-one', () => {
     const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(0);
     expect(h.calls()).toBe(2);
-    const record = JSON.parse(readFileSync(join(dir, 'trials/_toy/0.json'), 'utf8'));
-    expect(record).toMatchObject({ task_id: '_toy', status: 'COMPLETED', effort: 'high', models_returned: ['claude-opus-5-5'], mock: 'toy', trajectory: 'trajectories/_toy/0.jsonl' });
+    const record = JSON.parse(readFileSync(join(dir, 'trials/_toy/claude-opus-5-5/high/mock-toy/0.json'), 'utf8'));
+    expect(record).toMatchObject({ task_id: '_toy', status: 'COMPLETED', effort: 'high', models_returned: ['claude-opus-5-5'], mock: 'toy', trajectory: 'trajectories/_toy/claude-opus-5-5/high/mock-toy/0.jsonl' });
     expect(record.state_hash.replay_final).toBe(record.state_hash.final);
-    const events = parseTrajectory(readFileSync(join(dir, 'trajectories/_toy/0.jsonl'), 'utf8'));
+    const events = parseTrajectory(readFileSync(join(dir, 'trajectories/_toy/claude-opus-5-5/high/mock-toy/0.jsonl'), 'utf8'));
     expect(events.filter((e) => e.type === 'request')).toHaveLength(2);
     const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     expect(rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed')).toHaveLength(2);
     expect(rows.filter((r) => r.kind === 'open')).toHaveLength(1);
     expect(rows.filter((r) => r.kind === 'close')).toHaveLength(1);
-    expect(rows.filter((r) => r.kind === 'reserve' && r.call_id !== 'seed').every((r) => r.trial === 'mock:run-one:_toy:0')).toBe(true);
+    expect(rows.filter((r) => r.kind === 'reserve' && r.call_id !== 'seed').every((r) => r.trial === 'mock:run-one:_toy/claude-opus-5-5/high/mock-toy/0')).toBe(true);
 
     const again = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], again.deps)).toBe(0);
@@ -79,5 +79,45 @@ describe('cli run-one', () => {
     const h = harness({});
     expect(await main(['--task', '_toy', '--model', 'claude-opus-5', '--dry-run'], h.deps)).toBe(2);
     expect(await main(['--task', '_toy', '--model', 'claude-opus-5-5', '--effort', 'huge', '--dry-run'], h.deps)).toBe(2);
+  });
+
+  it('never lets a mock record stand in for a live trial: the live form with no key fails', async () => {
+    const dir = tempDir('run-one');
+    write(dir, 'spend.jsonl', seed(1));
+    const mocked = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
+    expect(await main([...ARGS, '--mock', 'toy', '--out', dir], mocked.deps)).toBe(0);
+    const live = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
+    const code = await main([...ARGS, '--out', dir], live.deps);
+    expect(code).not.toBe(0);
+    expect(live.lines.join('\n')).toMatch(/ANTHROPIC_API_KEY is not set/);
+    expect(live.lines.join('\n')).not.toMatch(/already recorded/);
+    expect(live.calls()).toBe(0);
+  });
+
+  it('keys a trial by effort: --effort low after --effort high at the same index runs', async () => {
+    const dir = tempDir('run-one');
+    write(dir, 'spend.jsonl', seed(1));
+    const env = { SPEND_LEDGER: join(dir, 'spend.jsonl') };
+    expect(await main([...ARGS, '--mock', 'toy', '--out', dir], harness(env).deps)).toBe(0);
+    const low = harness(env);
+    const lowArgs = ['--task', '_toy', '--model', 'claude-opus-5-5', '--effort', 'low', '--index', '0', '--mock', 'toy', '--out', dir];
+    expect(await main(lowArgs, low.deps)).toBe(0);
+    expect(low.calls()).toBe(2);
+    expect(low.lines.join('\n')).not.toMatch(/already recorded/);
+    const recordLine = low.lines.find((l) => l.startsWith('record '))!;
+    expect(JSON.parse(readFileSync(recordLine.slice('record '.length), 'utf8'))).toMatchObject({ effort: 'low', mock: 'toy' });
+  });
+
+  it.each(['../escape', 'a/b', 'a\\b', '..', 'no-such-task'])('rejects --task %s before any file or ledger write', async (task) => {
+    const dir = tempDir('run-one');
+    const out = join(dir, 'out');
+    const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
+    const args = ['--task', task, '--model', 'claude-opus-5-5', '--mock', 'toy', '--out', out];
+    expect(await main(args, h.deps)).not.toBe(0);
+    expect(await main([...args, '--dry-run'], h.deps)).not.toBe(0);
+    expect(h.calls()).toBe(0);
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(join(dir, 'spend.jsonl'))).toBe(false);
+    expect(readdirSync(dir)).toEqual([]);
   });
 });

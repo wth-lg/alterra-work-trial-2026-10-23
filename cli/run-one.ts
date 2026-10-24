@@ -1,21 +1,25 @@
 // pnpm cli run-one --task <id> --model claude-opus-5-5 [--effort high] [--index 0] [--out <dir>]
 //                  [--mock <scenario>] [--dry-run]
 // One trial through packages/core/run.ts in Node, metered through the spend ledger.
-//   --task      a task id; an explicit _-prefixed id (_toy) resolves too
+//   --task      a task id, resolved through the TaskSource before anything is written; an
+//               explicit _-prefixed id (_toy) resolves too
 //   --effort    low | medium | high | xhigh | max; default high
-//   --index     the trial's index in its key (task, model, effort, index); default 0
-//   --out       the run directory: trials/<task>/<index>.json and trajectories/<task>/<index>.jsonl
+//   --index     the trial's index in its key (task, model, effort, mode, index); default 0
+//   --out       the run directory: trials/<key>.json and trajectories/<key>.jsonl, where <key> is
+//               <task>/<model>/<effort>/<mode>/<index> and mode is live or mock-<scenario>
 //               (default $CHARTR_RUNS_DIR, else ~/.chartr/runs/run-one)
 //   --mock      answers from a scripted scenario (apps/web/src/harness/scenarios.ts) instead of
 //               the API. It needs no key and still meters through the ledger, at the mocked usage,
-//               with trial labels starting mock:, so the cap checks run as they do live
+//               with trial labels starting mock:, so the cap checks run as they do live. Its
+//               records have their own mode in the key, so a live run never reads one
 //   --dry-run   prints the projection batchStart is given, and makes no call and opens nothing
 // The projection is the per-trial cap ($6): the loop stops a trial once its cost reaches the cap
 // and one trial makes no reruns and, until P8, no judge calls. batchStart refuses it, before
 // any call, when the ledger's exposure plus the projection would cross $450. Each event is
 // appended to the trajectory as it arrives, so a crash leaves a valid prefix; the record is
-// written at the end. A trial key whose record exists is not run again. Exit 0 when the trial
-// completed and replay_final equals final; 1 otherwise; 2 on a usage error.
+// written at the end. A trial key whose record exists is not run again (live mode checks for the
+// key first). Exit 0 when the trial completed and replay_final equals final; 1 otherwise; 2 on
+// a usage error, an unknown task included.
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -32,6 +36,8 @@ import { openNodeLedger } from './adapters/ledger-node.ts';
 import { nodeTaskSource } from './adapters/tasks-node.ts';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
+// A task id is a directory name: no path separators, no '..'.
+const TASK_ID = /^[A-Za-z0-9_-]+$/;
 const WITH_VALUE = new Set(['--task', '--model', '--effort', '--index', '--out', '--mock']);
 const USAGE = 'usage: pnpm cli run-one --task <id> --model claude-opus-5-5 [--effort high] [--index 0] [--out <dir>] [--mock <scenario>] [--dry-run]';
 
@@ -63,6 +69,13 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   }
   const task = opts.get('--task');
   if (!task) return usage(deps, '--task is required');
+  if (!TASK_ID.test(task)) return usage(deps, `--task ${JSON.stringify(task)} is not a task id (letters, digits, _ and - only)`);
+  const tasks = nodeTaskSource({ testMode: false });
+  try {
+    await tasks.get(task);
+  } catch (e) {
+    return usage(deps, `--task: ${(e as Error).message}`);
+  }
   if (opts.get('--model') !== MODEL) return usage(deps, `--model must be ${MODEL}`);
   const effort = (opts.get('--effort') ?? DEFAULT_EFFORT) as Effort;
   if (!EFFORTS.includes(effort)) return usage(deps, `--effort must be one of ${EFFORTS.join(', ')}`);
@@ -80,20 +93,25 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     return 0;
   }
 
-  const recordFile = join(outDir, 'trials', task, `${index}.json`);
-  const trajectoryRel = `trajectories/${task}/${index}.jsonl`;
-  if (existsSync(recordFile)) {
-    const prior = JSON.parse(readFileSync(recordFile, 'utf8')) as { status?: string; state_hash?: { final?: unknown; replay_final?: unknown } };
-    deps.out(`trial ${task}:${index} is already recorded in ${recordFile} (status ${prior.status}); not run again`);
-    return succeeded(prior) ? 0 : 1;
-  }
-
   const key = mock === undefined ? (deps.env.ANTHROPIC_API_KEY ?? '') : 'mock-key-not-sent';
   if (key === '') {
     deps.out('run-one: ANTHROPIC_API_KEY is not set');
     return 1;
   }
-  const label = `${mock === undefined ? '' : 'mock:'}run-one:${task}:${index}`;
+  const trialKey = `${task}/${MODEL}/${effort}/${mock === undefined ? 'live' : `mock-${mock}`}/${index}`;
+  const recordFile = join(outDir, 'trials', `${trialKey}.json`);
+  const trajectoryRel = `trajectories/${trialKey}.jsonl`;
+  if (existsSync(recordFile)) {
+    const prior = JSON.parse(readFileSync(recordFile, 'utf8')) as Prior;
+    const mismatch = prior.task_id !== task || prior.model_requested !== MODEL || prior.effort !== effort || prior.mock !== mock;
+    if (mismatch) {
+      deps.out(`run-one: ${recordFile} does not hold trial ${trialKey}; not run, not counted`);
+      return 1;
+    }
+    deps.out(`trial ${trialKey} is already recorded in ${recordFile} (status ${prior.status}); not run again`);
+    return succeeded(prior) ? 0 : 1;
+  }
+  const label = `${mock === undefined ? '' : 'mock:'}run-one:${trialKey}`;
   try {
     const { ledger, mode, path } = openNodeLedger({ transport: mock === undefined ? 'live' : 'offline', env: deps.env });
     deps.out(`ledger ${mode} ${path}`);
@@ -104,7 +122,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       mkdirSync(dirname(trajectory), { recursive: true });
       writeFileSync(trajectory, '');
       const { record } = await run(task, MODEL, {
-        tasks: nodeTaskSource({ testMode: false }),
+        tasks,
         client,
         world: { read: async () => new Uint8Array(readFileSync(join(REPO, 'fixtures/world.ndjson.gz'))) },
         worldHash: (JSON.parse(readFileSync(join(REPO, 'fixtures/manifest.json'), 'utf8')) as { world: { state_hash: string } }).world.state_hash,
@@ -131,7 +149,16 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   }
 }
 
-function succeeded(r: { status?: string; state_hash?: { final?: unknown; replay_final?: unknown } }): boolean {
+interface Prior {
+  task_id?: string;
+  model_requested?: string;
+  effort?: string;
+  mock?: string;
+  status?: string;
+  state_hash?: { final?: unknown; replay_final?: unknown };
+}
+
+function succeeded(r: Prior): boolean {
   return r.status === 'COMPLETED' && r.state_hash?.final != null && r.state_hash.replay_final === r.state_hash.final;
 }
 
