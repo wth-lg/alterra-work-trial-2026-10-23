@@ -127,7 +127,7 @@ function missRecording(checks: readonly Check[], misses: Miss[]): Check[] {
         return await c.fn(ctx);
       } catch (e) {
         if (!(e instanceof JudgeCacheMiss)) throw e;
-        const key = /judge cache miss (\S+)/.exec(e.message)?.[1] ?? e.message;
+        const key = /judge cache miss ([0-9a-f]+)/.exec(e.message)?.[1] ?? e.message;
         misses.push({ check: c.id, key });
         return { met: 'unknown', evidence: { judge_cache_miss: key } };
       }
@@ -229,7 +229,8 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask): Promise<Matri
   const lines: string[] = [`matrix ${task.id}`];
   const fail = (what: string) => failures.push(what);
   const byKind = (k: CaseKind) => results.filter((r) => r.case.kind === k);
-  const noteProblems = (r: CaseResult) => r.problems.forEach((p) => fail(`${r.case.kind} ${r.case.id}: ${p}`));
+  const nameOf = (c: Case) => (c.id === c.kind ? c.kind : `${c.kind} ${c.id}`);
+  const noteProblems = (r: CaseResult) => r.problems.forEach((p) => fail(`${nameOf(r.case)}: ${p}`));
 
   const oracle = byKind('oracle')[0];
   if (oracle === undefined) {
@@ -293,7 +294,7 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask): Promise<Matri
   for (const t of uncovered) fail(`trap ${t} has no mutant`);
   for (const m of task.mutants) if (!task.declares.traps.includes(m.trap)) fail(`mutant ${m.id} names trap ${m.trap}, which task.toml [matrix] traps does not declare`);
 
-  const misses = results.flatMap((r) => r.misses.map((m) => ({ ...m, case: `${r.case.kind} ${r.case.id}` })));
+  const misses = results.flatMap((r) => r.misses.map((m) => ({ ...m, case: nameOf(r.case) })));
   lines.push(`judge cache: ${misses.length} miss${misses.length === 1 ? '' : 'es'}`);
   for (const m of misses) lines.push(`  miss ${m.case}: ${m.check} (cache key ${m.key})`);
 
