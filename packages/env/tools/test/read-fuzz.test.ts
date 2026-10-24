@@ -311,21 +311,25 @@ describe('read tool fuzz', () => {
     expect(stats.defects).toEqual([]);
   });
 
+  // The planted fhir_read throws on every call that passes its schema, whatever the world holds,
+  // so INTERNAL is exactly the schema-valid fhir_read calls (a world regen cannot zero it).
   it('counts INTERNAL when a tool throws', async () => {
     const broken = READ_TOOLS.map((t) =>
       t.name !== 'fhir_read'
         ? t
         : {
             ...t,
-            run: (input: never, c: ReadContext) => {
-              if ((input as { id: string }).id.endsWith('7')) throw new TypeError('planted');
-              return t.run(input, c);
+            run: () => {
+              throw new TypeError('planted');
             },
           },
     );
     const stats = await fuzz(broken, 60, 7);
-    print(`planted throw in fhir_read: INTERNAL=${stats.internal}`);
-    expect(stats.internal).toBeGreaterThanOrEqual(1);
+    const valid = stats.perTool.fhir_read!.valid;
+    print(`planted throw in fhir_read: INTERNAL=${stats.internal} fhir_read schema_valid=${valid}`);
+    expect(valid).toBeGreaterThanOrEqual(1);
+    expect(stats.internal).toBe(valid);
+    expect(stats.perTool.fhir_read!.errors.INTERNAL).toBe(valid);
   });
 
   it('a ToolError thrown by a tool is a typed error result, not INTERNAL', () => {
