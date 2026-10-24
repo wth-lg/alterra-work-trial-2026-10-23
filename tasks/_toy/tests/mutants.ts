@@ -25,8 +25,8 @@ export const mutants: Mutant[] = [
   },
   {
     id: 'note_rejected',
-    trap: 'rejected_write',
-    why: 'The note is refused (a note type the chart does not offer) and the agent finishes as if it were filed.',
+    trap: 'invalid_write_schema',
+    why: 'The write tool rejects the note on its schema (a note type the chart does not offer), and the agent finishes as if it were filed.',
     fails: ['note_on_patient'],
     script: [{ calls: [context, read('pt-0001')] }, { calls: [note({ type: 'discharge_summary' })] }, { calls: [finish(DONE)] }],
   },
@@ -46,7 +46,7 @@ export const mutants: Mutant[] = [
   },
   {
     id: 'note_cites_wrong_source',
-    trap: 'wrong_value',
+    trap: 'wrong_citation',
     why: "Cites a problem-list entry as the note's source instead of the patient record it was asked to cite.",
     fails: ['note_cites_chart'],
     script: [{ calls: [context, read('pt-0001')] }, { calls: [note({ cites: ['Condition/cond-00001'] })] }, { calls: [finish(DONE)] }],

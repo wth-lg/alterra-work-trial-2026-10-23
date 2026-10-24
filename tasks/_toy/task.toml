@@ -10,4 +10,4 @@ tools = ["get_context", "fhir_read", "write_note", "finish"]
 
 # Each trap needs a mutant in tests/mutants.ts. No status-only case: the toy has no items to close.
 [matrix]
-traps = ["wrong_patient", "rejected_write", "read_without_acting", "acting_without_reading", "wrong_value"]
+traps = ["wrong_patient", "invalid_write_schema", "read_without_acting", "acting_without_reading", "wrong_citation"]
