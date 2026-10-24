@@ -15,7 +15,10 @@
 //                            settled at the worst case: usage is unknown, and the partial
 //                            answer is discarded, never appended to the conversation
 // Retried: 408, 409, 429, 5xx (529 included), an error event mid-stream, a dropped stream, a
-// network error; up to maxAttempts, waiting retry-after or an exponential backoff. A 400
+// network error; up to maxAttempts, waiting retry-after or an exponential backoff. An abort is
+// never retried: send takes a per-request signal, combined with the grant's, and once either
+// has aborted the call throws the abort reason. Aborted before the reserve, nothing is
+// reserved or sent; aborted in flight, the attempt is settled at the worst case. A 400
 // closes the grant, which stops every client of the batch; any other 4xx fails the call
 // only. Headers are never logged, and the key is redacted from every log line and error
 // message.
@@ -42,8 +45,8 @@
 //     proxy
 //   - Node's http, https, http2, net and tls modules with a host built at runtime (lint flags a
 //     literal API host passed to them)
-import type { Usage } from './cost.ts';
-import { assertClientGrant, type BatchGrant, type Ledger, type ReserveRequest } from './ledger.ts';
+import { usageCostUsd, type Usage } from './cost.ts';
+import { assertClientGrant, type BatchGrant, type Ledger, type Reservation, type ReserveRequest } from './ledger.ts';
 import { redactText } from './redact.ts';
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
@@ -422,6 +425,36 @@ export interface ClientOptions {
   maxAttempts?: number;
 }
 
+export interface SendOptions {
+  // Aborts this call; combined with the grant's signal.
+  signal?: AbortSignal;
+  // Called with each attempt's settled amount, as the ledger records it (the priced usage, or
+  // the worst case when usage is unknown or cannot be priced), so a caller's cost equals the
+  // ledger's, aborted and retried attempts included.
+  onSettle?: (usd: number) => void;
+}
+
+// What an aborted call throws: the signal's reason when it is an Error (a SpendRefused from the
+// grant, an AbortError DOMException from AbortController.abort()), else an AbortError.
+function abortReason(signal: AbortSignal): Error {
+  const r: unknown = signal.reason;
+  return r instanceof Error ? r : new DOMException(r === undefined ? 'This operation was aborted' : String(r), 'AbortError');
+}
+
+const sleepUnlessAborted = (sleep: (ms: number) => Promise<void>, ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(abortReason(signal));
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    sleep(ms).then(
+      () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      },
+      reject,
+    );
+  });
+
 export interface CallResult {
   status: number;
   message: Message;
@@ -457,19 +490,31 @@ export class MessagesClient {
 
   // Sends history + params and, on a complete answer that is not a refusal, appends it to
   // history. Anything else leaves history as it was.
-  async send(history: MessageParam[], params: MessageParams): Promise<CallResult> {
+  async send(history: MessageParam[], params: MessageParams, opts: SendOptions = {}): Promise<CallResult> {
     const body = requestBody(history, params);
     const req = reserveFor(body, checkRequest(params, body), this.#trial);
+    const signal = opts.signal ? AbortSignal.any([this.#grant.signal, opts.signal]) : this.#grant.signal;
+    const settle = async (res: Reservation, usage: Usage | null) => {
+      await this.#grant.settle(res, usage);
+      opts.onSettle?.((usage === null ? null : usageCostUsd(usage)) ?? res.worst_usd);
+    };
     for (let attempt = 1; ; attempt++) {
+      if (signal.aborted) throw abortReason(signal);
       const res = await this.#grant.reserve(req);
       let out: { status: number; message: Message };
       try {
-        out = await sendOnce(this.#fetch, this.#apiKey, body, this.#grant.signal);
+        out = await sendOnce(this.#fetch, this.#apiKey, body, signal);
       } catch (e) {
+        // Aborted in flight: the request may have reached the API, so the worst case, and no retry.
+        if (signal.aborted) {
+          await settle(res, null);
+          this.#log(`attempt ${attempt}: aborted`);
+          throw abortReason(signal);
+        }
         const known = e instanceof ApiError;
         // An HTTP error status is not billed; a broken stream or lost connection may be.
-        await this.#grant.settle(res, known && !e.partial ? { input_tokens: 0, output_tokens: 0 } : null);
-        const err = known ? e : this.#grant.signal.aborted ? (e as Error) : new ApiError(`network error: ${(e as Error).message}`, { status: null, type: null, retryable: true, stopsBatch: false, partial: true });
+        await settle(res, known && !e.partial ? { input_tokens: 0, output_tokens: 0 } : null);
+        const err = known ? e : new ApiError(`network error: ${(e as Error).message}`, { status: null, type: null, retryable: true, stopsBatch: false, partial: true });
         err.message = redactText(err.message, [this.#apiKey]);
         if (err.stack) err.stack = redactText(err.stack, [this.#apiKey]);
         this.#log(`attempt ${attempt}: ${err.message}`);
@@ -478,10 +523,10 @@ export class MessagesClient {
           throw err;
         }
         if (!(err instanceof ApiError) || !err.retryable || attempt >= this.#maxAttempts) throw err;
-        await this.#sleep(err.retryAfter !== null ? Math.min(err.retryAfter * 1000, RETRY_AFTER_MAX_MS) : Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS));
+        await sleepUnlessAborted(this.#sleep, err.retryAfter !== null ? Math.min(err.retryAfter * 1000, RETRY_AFTER_MAX_MS) : Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS), signal);
         continue;
       }
-      await this.#grant.settle(res, out.message.usage);
+      await settle(res, out.message.usage);
       const { message } = out;
       if (message.model !== MODEL) {
         this.#log(`attempt ${attempt}: response model ${message.model} is not ${MODEL}`);
