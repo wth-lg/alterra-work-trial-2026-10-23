@@ -225,4 +225,3 @@ describe('drugOf on EHR-style names', () => {
     expect(isDrug({ text: 'amoxicillin-clavulanate 875-125 mg' }, { ingredient: 'amoxicillin 500 MG / clavulanate 125 MG' })).toBe(false);
   });
 });
-
