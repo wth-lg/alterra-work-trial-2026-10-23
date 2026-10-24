@@ -124,11 +124,14 @@ export async function go() {
 
 const RUNNER = `
 const sends = [];
-// A dispatcher other than the global one would pick the connection below the guard.
-const foreign = (init) => init?.dispatcher !== undefined && init.dispatcher !== globalThis[Symbol.for('undici.globalDispatcher.2')];
-const record = (api, url, init) => sends.push({ api, host: new URL(String(url)).hostname, ...(foreign(init) ? { dispatcher: true } : {}) });
 // What the platform would send: a Request's internal slots, never a property a plant shadowed.
+// Reading Request loads undici, which sets the global dispatcher.
 const nativeUrl = Object.getOwnPropertyDescriptor(Request.prototype, 'url').get;
+// A dispatcher other than the global one (the Agent at install, or the guarded one that replaces
+// it in the slot) would pick the connection below the guard.
+const agent = globalThis[Symbol.for('undici.globalDispatcher.2')];
+const foreign = (init) => init?.dispatcher !== undefined && init.dispatcher !== agent && init.dispatcher !== globalThis[Symbol.for('undici.globalDispatcher.2')];
+const record = (api, url, init) => sends.push({ api, host: new URL(String(url)).hostname, ...(foreign(init) ? { dispatcher: true } : {}) });
 const sse = (events) => events.map((e) => 'event: ' + e.type + '\\ndata: ' + JSON.stringify(e) + '\\n\\n').join('');
 const OK = sse([
   { type: 'message_start', message: { id: 'm', model: 'claude-opus-5-5', role: 'assistant', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } },
@@ -306,5 +309,203 @@ process.stdout.write(JSON.stringify({ checked: checkedHits, other: otherHits, us
 
   it.each(ROUTES)('control, guard off, %s: the passed dispatcher reroutes the request', (route) => {
     expect(runChild(false, route)).toEqual({ checked: [], other: ['/x'], used: ['dispatch'], error: null });
+  });
+});
+
+describe('the guard owns undici\'s global dispatcher slots', () => {
+  // Real undici against a local TLS stub. Before the guard installs, each child points undici's
+  // global Agent at the stub, so a request to the API host lands there (SNI and Host intact)
+  // instead of leaving the machine. Every route then reaches for the API host below fetch: the
+  // slot dispatchers by each of their methods, the verifier's x3b plant (P2h-1), a fetch captured
+  // before install, a redirect from another host and a swap of the slots. Guard off is the control.
+  const certDir = tempDir('egress-tls');
+  const openssl = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=stub', '-keyout', join(certDir, 'key.pem'), '-out', join(certDir, 'cert.pem')], { encoding: 'utf8' });
+  if (openssl.status !== 0) throw new Error(`openssl: ${openssl.stderr}`);
+
+  // The plant from evidence/verifier-phase-P2h-1/plants/ev/x3b-runtime-name-on-globalthis-typed.ts.
+  const X3B = `const HOST = ["api", "anthropic", "com"].join(".");
+interface R { statusCode: number; body: { text(): Promise<string> } }
+interface D { request(o: object): Promise<R> }
+async function send(d: D | undefined, which: string, key: string): Promise<string> {
+  if (!d || typeof d.request !== "function") return \`no dispatcher at .\${which}\`;
+  const r = await d.request({ origin: \`https://\${HOST}\`, path: "/v1/messages", method: "POST", headers: { "x-api-key": key, "content-type": "application/json" }, body: "{}" });
+  await r.body.text();
+  return \`status \${r.statusCode}\`;
+}
+const keyOf = (which: string): string => [["un", "dici"].join(""), "globalDispatcher", which].join(".");
+export async function run(which: string, key: string): Promise<string> {
+  await fetch("data:,");
+  const S = (globalThis as unknown as Record<string, unknown>)[["Sym", "bol"].join("")] as { for(k: string): symbol };
+  return send(Reflect.get(globalThis, S.for(keyOf(which))) as D | undefined, which, key);
+}
+`;
+
+  const CHILD = `
+import { createServer } from 'node:https';
+import { connect as tlsConnect } from 'node:tls';
+import { readFileSync } from 'node:fs';
+import { Writable } from 'node:stream';
+const API = ['api', 'anthropic', 'com'].join('.');
+const OTHER = 'example.test';
+const KEY = process.env.KEY;
+const S1 = Symbol.for('undici.globalDispatcher.1'), S2 = Symbol.for('undici.globalDispatcher.2');
+const sse = (events) => events.map((e) => 'event: ' + e.type + '\\ndata: ' + JSON.stringify(e) + '\\n\\n').join('');
+const OK = sse([
+  { type: 'message_start', message: { id: 'm', model: 'claude-opus-5-5', role: 'assistant', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } },
+  { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+  { type: 'message_stop' },
+]);
+const hits = [];
+const hostOf = (req) => (req.headers.host ?? '').replace(/:\\d+$/, '');
+const server = createServer({ key: readFileSync(process.env.KEY_PEM), cert: readFileSync(process.env.CERT_PEM) }, (req, res) => {
+  hits.push({ kind: 'request', host: hostOf(req) });
+  req.resume();
+  req.on('end', () => {
+    if (req.url === '/redirect') { res.writeHead(307, { location: 'https://' + API + '/v1/messages' }); return res.end(); }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(OK);
+  });
+});
+server.on('secureConnection', (s) => hits.push({ kind: 'tls', host: s.servername || null }));
+server.on('connect', (req, socket) => { hits.push({ kind: 'connect', host: hostOf(req) }); socket.end('HTTP/1.1 200 Connection Established\\r\\n\\r\\n'); });
+server.on('upgrade', (req, socket) => { hits.push({ kind: 'upgrade', host: hostOf(req) }); socket.end('HTTP/1.1 101 Switching Protocols\\r\\nconnection: upgrade\\r\\nupgrade: websocket\\r\\n\\r\\n'); });
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const port = server.address().port;
+
+// Point undici's global Agent (both slots, as setGlobalDispatcher does) at the stub.
+await fetch('data:,');
+const Agent = globalThis[S2].constructor, Legacy = globalThis[S1].constructor;
+const toStub = (opts, cb) => {
+  const s = tlsConnect({ host: '127.0.0.1', port, servername: opts.servername || opts.hostname, rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] });
+  s.once('secureConnect', () => cb(null, s));
+  s.once('error', (e) => cb(e));
+};
+const stub = new Agent({ connect: toStub });
+globalThis[S2] = stub;
+globalThis[S1] = new Legacy(stub);
+const early = globalThis.fetch;
+if (process.env.GUARD === '1') (await import(process.env.EGRESS_MODULE)).installEgressGuard(globalThis);
+
+const POST = { method: 'POST', headers: { 'x-api-key': KEY, 'content-type': 'application/json' }, body: '{}' };
+const apiOpts = () => ({ origin: 'https://' + API, path: '/v1/messages', ...POST });
+const slot = (n) => globalThis[n === '1' ? S1 : S2];
+const METHODS = {
+  request: (d) => d.request(apiOpts()).then((r) => r.body.text()),
+  dispatch: (d) => new Promise((resolve, reject) => d.dispatch(apiOpts(), {
+    onRequestStart() {}, onResponseStart() {}, onResponseData() {}, onResponseEnd: () => resolve('end'), onResponseError: (_c, e) => reject(e),
+  })),
+  stream: (d) => d.stream(apiOpts(), () => new Writable({ write: (_c, _e, cb) => cb() })),
+  pipeline: (d) => new Promise((resolve, reject) => {
+    const p = d.pipeline(apiOpts(), ({ body }) => body);
+    p.on('error', reject).on('data', () => undefined).on('end', () => resolve('end'));
+    p.end();
+  }),
+  connect: (d) => d.connect({ origin: 'https://' + API, path: '/' }).then(({ socket }) => socket.destroy()),
+  upgrade: (d) => d.upgrade({ origin: 'https://' + API, path: '/' }).then(({ socket }) => socket.destroy()),
+  compose: (d) => d.compose((dispatch) => (opts, handler) => dispatch(opts, handler)).request(apiOpts()).then((r) => r.body.text()),
+};
+const routes = {
+  'x3b-1': async () => (await import('./x3b.ts')).run('1', KEY),
+  'x3b-2': async () => (await import('./x3b.ts')).run('2', KEY),
+  'early-fetch-api': () => early('https://' + API + '/v1/messages', POST).then((r) => r.text()),
+  'early-fetch-other': () => early('https://' + OTHER + '/ok').then((r) => r.status),
+  'fetch-other': () => fetch('https://' + OTHER + '/ok').then((r) => r.status),
+  redirect: () => fetch('https://' + OTHER + '/redirect', POST).then((r) => r.status),
+  swap: async () => {
+    const fresh = new Agent({ connect: toStub });
+    const errors = [];
+    for (const s of [S2, S1]) {
+      try { globalThis[s] = fresh; } catch (e) { errors.push('assign: ' + e.constructor.name); }
+      try { Object.defineProperty(globalThis, s, { value: fresh, writable: true, enumerable: false, configurable: false }); } catch (e) { errors.push('define: ' + e.constructor.name); }
+    }
+    const swapped = [S2, S1].map((s) => globalThis[s] === fresh);
+    let sent = null;
+    try { sent = (await early('https://' + API + '/v1/messages', POST)).status; } catch (e) { sent = e.cause?.message ?? e.message; }
+    return { errors, swapped, sent };
+  },
+};
+for (const n of ['1', '2']) for (const [m, call] of Object.entries(METHODS)) routes['slot' + n + '-' + m] = () => call(slot(n));
+if (process.env.CLIENT === '1') routes.client = async () => {
+  const { MessagesClient } = await import(process.env.CLIENT_MODULE);
+  const { openNodeLedger } = await import(process.env.LEDGER_MODULE);
+  const { ledger } = openNodeLedger({ transport: 'live' });
+  const grant = await ledger.batchStart(0.1);
+  try { return (await new MessagesClient({ grant, ledger, apiKey: KEY, maxAttempts: 1 }).send([{ role: 'user', content: 'hi' }], { max_tokens: 1 })).status; } finally { await grant.close(); }
+};
+
+const message = (e) => [e?.message, e?.cause?.message].filter(Boolean).join(' / ');
+const out = {};
+for (const [name, call] of Object.entries(routes)) {
+  const before = hits.length;
+  let value = null, error = null;
+  try {
+    value = await Promise.race([call(), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))]);
+  } catch (e) { error = message(e); }
+  const seen = hits.slice(before);
+  // HTTP requests (CONNECT and Upgrade included) by Host, and TLS handshakes by SNI.
+  const http = (host) => seen.filter((h) => h.kind !== 'tls' && h.host === host).length;
+  out[name] = { api: http(API), apiTls: seen.filter((h) => h.kind === 'tls' && h.host === API).length, other: http(OTHER), value: value ?? null, error };
+}
+process.stdout.write(JSON.stringify({ routes: out, apiTotal: hits.filter((h) => h.kind !== 'tls' && h.host === API).length }));
+process.exit(0);
+`;
+
+  type Route = { api: number; apiTls: number; other: number; value: unknown; error: string | null };
+  const runSlots = (guard: boolean) => {
+    const dir = tempDir('egress-slots');
+    write(dir, 'package.json', '{"type":"module"}');
+    write(dir, 'child.mjs', CHILD);
+    write(dir, 'x3b.ts', X3B);
+    const home = tempDir('egress-home');
+    const r = spawnSync(process.execPath, [join(dir, 'child.mjs')], {
+      cwd: dir, encoding: 'utf8', env: {
+        PATH: process.env.PATH ?? '', HOME: home, SPEND_LEDGER: join(home, 'spend.jsonl'), KEY: fakeKey('S'), GUARD: guard ? '1' : '0', CLIENT: '1',
+        KEY_PEM: join(certDir, 'key.pem'), CERT_PEM: join(certDir, 'cert.pem'),
+        EGRESS_MODULE: repo('packages/core/egress.ts'), CLIENT_MODULE: repo('packages/core/anthropic.ts'), LEDGER_MODULE: repo('cli/adapters/ledger-node.ts'),
+      },
+    });
+    if (r.status !== 0) throw new Error(`child exited ${r.status}: ${r.stderr}`);
+    return JSON.parse(r.stdout) as { routes: Record<string, Route>; apiTotal: number };
+  };
+  const on = runSlots(true);
+  const off = runSlots(false);
+
+  const METHODS = ['request', 'dispatch', 'stream', 'pipeline', 'connect', 'upgrade', 'compose'];
+  const REFUSED = ['x3b-1', 'x3b-2', ...['1', '2'].flatMap((n) => METHODS.map((m) => `slot${n}-${m}`)), 'early-fetch-api', 'redirect'];
+
+  it.each(REFUSED)('guard on, %s: refused, 0 requests reach the API stub', (name) => {
+    const r = on.routes[name];
+    expect(r?.api).toBe(0);
+    expect(r?.apiTls).toBe(0);
+    expect(r?.error).toMatch(/egress guard/);
+  });
+
+  it.each(REFUSED)('control, guard off, %s: reaches the API stub', (name) => {
+    expect(off.routes[name]?.api).toBeGreaterThan(0);
+  });
+
+  it('a redirect from another host is refused at the hop to the API host', () => {
+    expect(on.routes.redirect).toMatchObject({ api: 0, apiTls: 0, other: 1 });
+  });
+
+  it('after install the slots cannot be swapped: each assignment and defineProperty throws, and the slots still refuse', () => {
+    expect(on.routes.swap?.value).toEqual({
+      errors: ['assign: TypeError', 'define: TypeError', 'assign: TypeError', 'define: TypeError'],
+      swapped: [false, false],
+      sent: expect.stringMatching(/egress guard/),
+    });
+    expect(on.routes.swap).toMatchObject({ api: 0, apiTls: 0 });
+    expect(off.routes.swap?.value).toMatchObject({ errors: [], swapped: [true, true], sent: 200 });
+  });
+
+  it('a fetch with no dispatcher of its own goes through the guarded slot: another host answers, the API host is refused', () => {
+    expect(on.routes['early-fetch-other']).toMatchObject({ api: 0, apiTls: 0, other: 1, value: 200, error: null });
+    expect(on.routes['fetch-other']).toMatchObject({ api: 0, apiTls: 0, other: 1, value: 200, error: null });
+    expect(on.routes['early-fetch-api']).toMatchObject({ api: 0, apiTls: 0, value: null });
+  });
+
+  it('MessagesClient still sends exactly once, the only request from this process the API stub saw', () => {
+    expect(on.routes.client).toMatchObject({ api: 1, other: 0, value: 200, error: null });
+    expect(on.apiTotal).toBe(1);
   });
 });
