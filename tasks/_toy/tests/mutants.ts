@@ -20,7 +20,7 @@ export const mutants: Mutant[] = [
     script: [
       { calls: [context, read('pt-0002')] },
       { calls: [note({ patient: 'pt-0002', cites: ['Patient/pt-0002'] })] },
-      { calls: [finish('Signed in as Maya Okafor, MD, I wrote a progress note on the chart of Henry Koepp.')] },
+      { calls: [finish('Signed in as Maya Okafor, MD, I wrote a progress note on the chart of Harold Vance.')] },
     ],
   },
   {
