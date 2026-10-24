@@ -2,8 +2,10 @@
 // checks, emits the graded record as the last trial event for every outcome, and returns the
 // same record. `pnpm cli run-one --mock` writes outcome, gate checks and rubric scores into its
 // record, equal to a direct grader call on the trajectory it wrote, and a run() that throws
-// before any spend still leaves an ENV_ERROR INTERNAL record.
-import { readFileSync } from 'node:fs';
+// before any spend still leaves an ENV_ERROR INTERNAL record. A check that throws is the
+// grader's fault (GRADER_ERROR) and a judge client error is INFRA_API: both are graded last
+// with the trial's real cost, turns and hashes. A regrade checks the world and replay hashes.
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { tempDir, write } from '../../../scripts/test/helpers.ts';
@@ -12,6 +14,7 @@ import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { main, type Deps } from '../../../cli/run-one.ts';
 import { gate, judged, rubric, type Check } from '../../grader/check.ts';
 import { MessagesClient, type Transport } from '../anthropic.ts';
+import { stateHash } from '../../env/hash.ts';
 import { parseEvent, terminalEvent, type GradedEvent, type TrialEvent } from '../events.ts';
 import { admitStore, createLedger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 import { gradeTrajectory, run, type RunOptions, type TrialRecord } from '../run.ts';
@@ -43,24 +46,24 @@ const CHECKS: Check[] = [
 const VERDICT = '{"verdict":"met","quote":"Patient/pt-0001"}';
 
 // Trial requests (they carry tools) get the scenario; judge requests get VERDICT.
-function routed(trial: Transport) {
+function routed(trial: Transport, judge: (n: number) => Response = (n) => okResponse({ text: VERDICT }, 100 + n)) {
   let judgeCalls = 0;
   const transport: Transport = async (request) => {
     const body = JSON.parse(await request.clone().text()) as { tools?: unknown };
     if (body.tools !== undefined) return trial(request);
     judgeCalls++;
-    return okResponse({ text: VERDICT }, 100 + judgeCalls);
+    return judge(judgeCalls);
   };
   return { transport, judgeCalls: () => judgeCalls };
 }
 
-async function trial(over: Partial<RunOptions> = {}) {
+async function trial(over: Partial<RunOptions> = {}, judge?: (n: number) => Response) {
   const store = new MemoryStore();
   admitStore(store);
   let id = 0;
   const ledger = createLedger({ store, clock: { now: () => 't' }, newId: () => `id-${++id}`, source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
   const grant = await ledger.batchStart(6);
-  const r = routed(scriptedTransport(SCENARIOS.toy).transport);
+  const r = routed(scriptedTransport(SCENARIOS.toy).transport, judge);
   let clock = Date.UTC(2026, 9, 23, 12);
   const client = new MessagesClient({ grant, ledger, apiKey: 'test-key-not-real', fetch: (q) => ((clock += 4000), r.transport(q)), sleep: async () => {} });
   const events: TrialEvent[] = [];
@@ -71,7 +74,9 @@ async function trial(over: Partial<RunOptions> = {}) {
   return { result, events, judgeCalls: r.judgeCalls, rows: store.rows };
 }
 
-const GRADE_KEYS = ['grader_version', 'outcome', 'valid', 'checks', 'score', 'judge', 'attribution'] as const;
+const GRADE_KEYS = ['grader_version', 'outcome', 'valid', 'fault', 'checks', 'score', 'judge', 'attribution', 'error'] as const;
+// A gate that dereferences a resource the model never created: a grader bug.
+const THROWS = gate({ id: 'G2', category: 'action', traces_to: 'instruction L4', decisive_ids: [], fn: (ctx) => ({ met: ctx.final.get('MedicationRequest', 'mr-never')!.status === 'active', evidence: {} }) });
 const gradeOf = (r: Pick<TrialRecord, (typeof GRADE_KEYS)[number]>) => Object.fromEntries(GRADE_KEYS.map((k) => [k, r[k]]));
 
 describe('run() grades', () => {
@@ -125,6 +130,50 @@ describe('run() grades', () => {
     expect(terminalEvent(events)!.type).toBe(outcome === 'CANCELLED' ? 'cancelled' : 'error');
     expect(result.record.outcome).toBe(outcome);
     expect(judgeCalls()).toBe(0);
+  });
+
+  it('a check that throws: GRADER_ERROR, graded last, with the real cost, turns, tool calls, models and hashes', async () => {
+    const { result, events, rows } = await trial({ checks: [CHECKS[0]!, THROWS, ...CHECKS.slice(1)] });
+    const last = events.at(-1) as GradedEvent;
+    expect(last.type).toBe('graded');
+    expect(last.record).toEqual(result.record);
+    expect(result.record).toMatchObject({ status: 'COMPLETED', outcome: 'GRADER_ERROR', valid: false, fault: 'grader', score: null, attribution: null, turns: 2, models_returned: ['claude-opus-5-5'], error: { check: 'G2' } });
+    expect(result.record.cost_usd).toBeGreaterThan(0);
+    expect(result.record.tool_calls).toBeGreaterThan(0);
+    expect(result.record.state_hash.initial).toBe(MANIFEST.world.state_hash);
+    expect(result.record.state_hash.final).not.toBeNull();
+    expect(result.record.state_hash.replay_final).toBe(result.record.state_hash.final);
+    const settled = rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0);
+    expect(result.record.cost_usd + result.record.judge_cost_usd).toBeCloseTo(settled, 12);
+  });
+
+  it.each([
+    ['401', 401, 'authentication_error', false],
+    ['billing 400', 400, 'invalid_request_error', true],
+  ] as const)('a judge %s: INFRA_API, invalid, not cached, graded last with the trial facts', async (_name, status, type, stops) => {
+    const { result, events } = await trial({}, () => new Response(JSON.stringify({ type: 'error', error: { type, message: `${status} from the judge` } }), { status, headers: { 'content-type': 'application/json' } }));
+    expect(events.at(-1)).toMatchObject({ type: 'graded', record: { outcome: 'INFRA_API', valid: false, fault: 'infra', error: { check: 'R1', stops_batch: stops } } });
+    expect(result.record.judge.cache).toEqual([]);
+    expect(result.record.cost_usd).toBeGreaterThan(0);
+    expect(result.record.turns).toBe(2);
+  });
+});
+
+describe('regrade checks the hashes', () => {
+  it('a different world or a different replay is a grader error with the reason, never a silent grade', async () => {
+    const { result, events } = await trial();
+    const tasks = nodeTaskSource({ testMode: true });
+    const world = { read: async () => WORLD };
+    const regrade = (record: TrialRecord, evs: readonly TrialEvent[] = events) => gradeTrajectory('_toy', { tasks, world, checks: CHECKS, events: evs, record });
+    const otherWorld = await regrade({ ...result.record, state_hash: { ...result.record.state_hash, initial: 'f'.repeat(64) } });
+    expect(otherWorld).toMatchObject({ outcome: 'GRADER_ERROR', valid: false, fault: 'grader', checks: [] });
+    expect(otherWorld.error!.message).toMatch(/initial state hash .* is not the record's f{64}/);
+    const otherFinal = await regrade({ ...result.record, state_hash: { ...result.record.state_hash, final: 'e'.repeat(64), replay_final: 'e'.repeat(64) } });
+    expect(otherFinal).toMatchObject({ outcome: 'GRADER_ERROR', valid: false });
+    expect(otherFinal.error!.message).toMatch(/replayed state hash .* is not the record's final e{64}/);
+    // The record's own trajectory regrades to its own grade.
+    expect(await regrade(result.record)).toEqual(gradeOf(result.record));
+    expect(await stateHash((await (await import('../../env/fixture-source.ts')).loadStore(world)).resources())).toBe(result.record.state_hash.initial);
   });
 });
 
@@ -187,5 +236,31 @@ describe('cli run-one grades', () => {
     expect(record).toMatchObject({ status: 'ENV_ERROR', detail: 'INTERNAL', outcome: 'ENV_ERROR', valid: false, checks: [], score: null, cost_usd: 0, turns: 0 });
     const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as LedgerRow);
     expect(rows.filter((r) => r.kind === 'reserve')).toHaveLength(0);
+  });
+
+  it('a check that throws is recorded as GRADER_ERROR with the real cost and turns, and the trajectory ends graded', async () => {
+    const dir = tempDir('run-one-graded');
+    const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') }, { checks: async () => [CHECKS[0]!, THROWS] });
+    expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
+    const record = JSON.parse(readFileSync(join(dir, `trials/${KEY}.json`), 'utf8')) as TrialRecord & { trajectory: string };
+    expect(record).toMatchObject({ status: 'COMPLETED', outcome: 'GRADER_ERROR', valid: false, fault: 'grader', turns: 2 });
+    expect(record.cost_usd).toBeGreaterThan(0);
+    const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as LedgerRow);
+    expect(record.cost_usd).toBeCloseTo(rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0), 12);
+    const events = parseTrajectory(readFileSync(join(dir, record.trajectory), 'utf8'));
+    expect(events.at(-1)).toMatchObject({ type: 'graded', record: { outcome: 'GRADER_ERROR' } });
+  });
+
+  it('never writes the ENV_ERROR INTERNAL record once the ledger shows a settle for the trial', async () => {
+    const dir = tempDir('run-one-graded');
+    // A run() that spends through the trial's client and then throws.
+    const spendThenThrow: Deps['run'] = async (_task, _model, opts) => {
+      await opts.client.send([{ role: 'user', content: 'hi' }], { max_tokens: 64, tools: [{ name: 't', description: 'd', input_schema: { type: 'object' } }] });
+      throw new Error('harness bug after spend');
+    };
+    const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') }, { run: spendThenThrow });
+    expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
+    expect(existsSync(join(dir, `trials/${KEY}.json`))).toBe(false);
+    expect(h.lines.join('\n')).toMatch(/run\(\) threw after spend: 1 settled call for mock:run-one:_toy\/claude-opus-5-5\/high\/mock-toy\/0; no record written/);
   });
 });

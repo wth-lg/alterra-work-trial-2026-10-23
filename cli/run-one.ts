@@ -20,11 +20,15 @@
 // and each judge item makes at most two bounded calls. batchStart refuses it, before any call,
 // when the ledger's exposure plus the projection would cross $450. Each event is appended to the
 // trajectory as it arrives, so a crash leaves a valid prefix, and the last line is the graded
-// record; the record (outcome, gate checks, rubric scores included) is written at the end. If
-// run() throws (the task cannot be resolved again, before any spend), the record says ENV_ERROR
-// INTERNAL: never a valid trial, never the model's failure. A trial key whose record exists is
-// not run again (live mode checks for the key first). Exit 0 when the trial completed and
-// replay_final equals final; 1 otherwise; 2 on a usage error, an unknown task included.
+// record; the record (outcome, gate checks, rubric scores included) is written at the end. A
+// check that throws or a judge call that fails does not make run() throw: the trial is graded
+// GRADER_ERROR or INFRA_API with its real cost and turns. If run() throws (the task cannot be
+// resolved again, before any spend), the record says ENV_ERROR INTERNAL: never a valid trial,
+// never the model's failure. That record is written only while the ledger shows no call for the
+// trial: after a call, run-one writes no record and says so, so no record claims $0 for spend.
+// A trial key whose record exists is not run again (live mode checks for the key first). Exit 0
+// when the trial completed, was graded validly and replay_final equals final; 1 otherwise; 2 on
+// a usage error, an unknown task included.
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -40,7 +44,7 @@ import type { Check } from '../packages/grader/check.ts';
 import { judgeAllowanceUsd } from '../packages/grader/judge.ts';
 import { isScenario, scenarioTransport, type ScenarioName } from '../apps/web/src/harness/scenarios.ts';
 import { nodeNow } from './adapters/clock-node.ts';
-import { openNodeLedger } from './adapters/ledger-node.ts';
+import { openNodeLedger, readRows } from './adapters/ledger-node.ts';
 import { nodeTaskSource } from './adapters/tasks-node.ts';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
@@ -60,6 +64,8 @@ export interface Deps {
   checks?: (task: string) => Promise<readonly Check[]>;
   // Default every tasks/*/task.toml, outside test mode.
   tasks?: TaskSource;
+  // The trial runner; default packages/core/run.ts run().
+  run?: typeof run;
 }
 
 // tasks/<id>/tests/grader.ts exports `checks`; a task without one has no checks.
@@ -152,7 +158,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       const started = nodeNow();
       let record: TrialRecord;
       try {
-        ({ record } = await run(task, MODEL, {
+        ({ record } = await (deps.run ?? run)(task, MODEL, {
           tasks,
           client,
           world: { read: async () => new Uint8Array(readFileSync(join(REPO, 'fixtures/world.ndjson.gz'))) },
@@ -166,6 +172,13 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
         }));
       } catch (e) {
         deps.out(`run-one: run() threw: ${redactText((e as Error).message, [key])}`);
+        // ENV_ERROR INTERNAL with cost 0 is true only before any call: never write it after one.
+        const calls = readRows(path).filter((r) => r.trial === label && (r.kind === 'settle' || r.kind === 'reserve'));
+        const settled = calls.filter((r) => r.kind === 'settle').length;
+        if (calls.length > 0) {
+          deps.out(`run-one: run() threw after spend: ${settled} settled call${settled === 1 ? '' : 's'} for ${label}; no record written, the trajectory holds what ran`);
+          return 1;
+        }
         record = internalErrorRecord({ trialId: label, taskId: task, worldHash, effort, started, ended: nodeNow() });
       }
       const full = { ...record, ...(mock === undefined ? {} : { mock }), trajectory: trajectoryRel };
@@ -175,6 +188,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       deps.out(`models_returned ${JSON.stringify(record.models_returned)}; final ${record.state_hash.final}; replay_final ${record.state_hash.replay_final}`);
       const gates = record.checks.filter((c) => c.kind === 'gate');
       deps.out(`outcome ${record.outcome}, score ${record.score === null ? 'n/a' : record.score.toFixed(3)}, gates ${gates.filter((c) => c.met === true).length}/${gates.length}, judge ${record.judge.calls} calls (${record.judge.unknown} unknown) ${money(record.judge_cost_usd)}`);
+      if (record.error) deps.out(`not graded (${record.fault}): ${record.error.check ?? 'trial'}: ${redactText(record.error.message, [key])}${record.error.stops_batch ? '; the batch stops' : ''}`);
       deps.out(`record ${recordFile}`);
       deps.out(`trajectory ${trajectory}`);
       return succeeded(record) ? 0 : 1;
@@ -193,11 +207,12 @@ interface Prior {
   effort?: string;
   mock?: string;
   status?: string;
+  valid?: boolean;
   state_hash?: { final?: unknown; replay_final?: unknown };
 }
 
 function succeeded(r: Prior): boolean {
-  return r.status === 'COMPLETED' && r.state_hash?.final != null && r.state_hash.replay_final === r.state_hash.final;
+  return r.status === 'COMPLETED' && r.valid !== false && r.state_hash?.final != null && r.state_hash.replay_final === r.state_hash.final;
 }
 
 function usage(deps: Deps, problem: string): number {

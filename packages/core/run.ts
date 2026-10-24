@@ -14,7 +14,9 @@
 // packages/grader) with the task's checks, judge items through the trial's own client, and the
 // record, grade included, is emitted as the graded event, last for every outcome, and
 // returned. An invalid trial (INVALID, INFRA, CANCELLED, ENV_ERROR) runs no check and no judge
-// call. A check that throws is a grader bug: it propagates, with no graded event.
+// call. Grading does not throw: a check that throws grades the trial GRADER_ERROR and a judge
+// call the client failed grades it INFRA_API, both invalid, both graded last with the cost,
+// turns, tool calls, models and hashes the trial really had.
 import { ANTHROPIC_VERSION, MODEL, type MessageParam, type MessageParams } from './anthropic.ts';
 import { PER_TRIAL_CAP_USD } from './cost.ts';
 import { createEmitter, type TrialEvent, type TrialStatus } from './events.ts';
@@ -22,9 +24,8 @@ import { errorText, newOutcome, runLoop, type LoopOutcome, type TrialClient } fr
 import { taskVersion, type Task, type TaskSource } from './tasks.ts';
 import { toolLog } from './trajectory.ts';
 import type { Check } from '../grader/check.ts';
-import { grade, gradeWith, ungraded, type Grade } from '../grader/grade.ts';
-import { Judge } from '../grader/judge.ts';
-import type { TrialFacts } from '../grader/outcome.ts';
+import { grade, gradeWith, judgeFor, ungraded, type Grade } from '../grader/grade.ts';
+import { isValid, trialOutcome, type TrialFacts } from '../grader/outcome.ts';
 import { clock, NOW_PROMPT } from '../env/clock.ts';
 import { loadStore, type FixtureSource } from '../env/fixture-source.ts';
 import { stateHash } from '../env/hash.ts';
@@ -234,15 +235,17 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
     summary: ctx?.session.summary ?? null,
     resumed: false,
   };
-  const judge = new Judge({ client: opts.judge === undefined ? opts.client : opts.judge });
-  const graded = await gradeWith({ checks: opts.checks ?? [], initial: initialState, final: finalState, events, trial: facts }, judge);
+  const checks = opts.checks ?? [];
+  const judge = judgeFor(checks, { judge: opts.judge === undefined ? opts.client : opts.judge });
+  const graded = await gradeWith({ checks, initial: initialState, final: finalState, events, trial: facts }, judge);
   const record: TrialRecord = { ...facts, ended: iso(opts.now()), judge_cost_usd: judge.costUsd, ...graded };
   emit({ type: 'graded', turn: outcome.turns, record });
   return { record, events };
 }
 
 // The record of a trial run() threw on before it started (the task could not be resolved):
-// ENV_ERROR INTERNAL, nothing spent, never a valid trial.
+// ENV_ERROR INTERNAL, nothing spent, never a valid trial. Never for a trial that spent: run()
+// grades every trial it started, and run-one refuses this record once the ledger shows a call.
 export function internalErrorRecord(t: { trialId: string; taskId: string; worldHash: string; effort: Effort; started: number; ended: number }): TrialRecord {
   const o = newOutcome();
   return {
@@ -269,7 +272,9 @@ export interface GradeTrajectoryOptions {
 
 // Grades a recorded trial again from its trajectory: the initial state from the world, the
 // final state by replaying the tool log on it, judge answers from the record's cache. On the
-// trajectory a trial wrote, it returns the grade run() recorded.
+// trajectory a trial wrote, it returns the grade run() recorded. It never grades a different
+// state silently: when the world does not hash to the record's initial hash, or the replay to
+// its final hash, the grade is GRADER_ERROR with the reason.
 export async function gradeTrajectory(taskId: string, opts: GradeTrajectoryOptions): Promise<Grade> {
   const task = await opts.tasks.get(taskId);
   if (opts.definitions !== undefined && opts.definitions !== indexedBundle) {
@@ -279,8 +284,18 @@ export async function gradeTrajectory(taskId: string, opts: GradeTrajectoryOptio
   const bytes = await opts.world.read();
   const source: FixtureSource = { read: async () => bytes };
   const initial = [...(await loadStore(source)).resources()];
+  const input = { checks: opts.checks, initial, events: opts.events, trial: opts.record };
+  const gradeOpts = { cache: opts.record.judge?.cache ?? [] };
+  const early = trialOutcome(opts.record);
+  // An invalid trial is not graded: no state to compare.
+  if (early !== null && !isValid(early)) return grade({ ...input, final: null }, gradeOpts);
+  const h = opts.record.state_hash;
+  const initialHash = await stateHash(initial);
+  if (initialHash !== h.initial) return ungraded('GRADER_ERROR', { check: null, message: `regrade: initial state hash ${initialHash} is not the record's ${h.initial}`, stops_batch: false });
   const replayed = await replay(source, task, taskTools(task), opts.events);
-  return grade({ checks: opts.checks, initial, final: replayed && [...replayed.resources()], events: opts.events, trial: opts.record }, { cache: opts.record.judge?.cache ?? [] });
+  const replayHash = replayed && (await stateHash(replayed.resources()));
+  if (replayed === null || replayHash !== h.final) return ungraded('GRADER_ERROR', { check: null, message: `regrade: replayed state hash ${replayHash} is not the record's final ${h.final}`, stops_batch: false });
+  return grade({ ...input, final: [...replayed.resources()] }, gradeOpts);
 }
 
 // Re-executes the trajectory's tool log against a fresh store and session, with the tools the
