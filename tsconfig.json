@@ -17,5 +17,7 @@
   ],
   // Listed by name: exclude does not apply to files, and scripts/fixtures stays excluded.
   "files": ["scripts/fixtures/donewhen/stub-cli.ts"],
-  "exclude": ["node_modules", "**/node_modules", "scripts/fixtures"]
+  // cli/zz-nested-config-* is the directory scripts/test/ci-guard.test.ts plants and deletes;
+  // keeping it out of the program stops a concurrent tsc run from failing on a deleted file.
+  "exclude": ["node_modules", "**/node_modules", "scripts/fixtures", "cli/zz-nested-config-*"]
 }
