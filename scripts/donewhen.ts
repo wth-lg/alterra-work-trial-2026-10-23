@@ -17,8 +17,10 @@
 // Clause (1) passes when `runner-check --mock` exits 0 and README.md names LOCAL_START_COMMAND
 // (apps/web/src/surface/command.ts) and the hosted URL. Clause (2) passes when cli/run-one.ts,
 // cli/run.ts, apps/runner/main.ts and a Worker module under apps/web/src (a file named *worker*)
-// each reach packages/core/run.ts through their relative imports, and runner-check reports
-// events_equal: the runner streams the trajectory run-one writes.
+// each reach packages/core/run.ts through their relative value imports (`import type`, `export
+// type` and imports inside comments do not count: none loads the module), and runner-check
+// reports events_equal: the runner streams the trajectory run-one writes. runner-check --mock
+// runs once; both clauses read its result.
 //
 // Test hooks, honored only when NODE_ENV=test: DONEWHEN_CLI replaces `node cli/index.ts`
 // (space-separated command prefix); DONEWHEN_MIN_TASKS replaces the minimum of 5 tasks;
@@ -38,8 +40,11 @@ const README_SECTIONS = ['findings', 'surprises', 'changes', 'next steps'];
 const CORE_RUN = 'packages/core/run.ts';
 // The entry points clause (2) follows to packages/core/run.ts.
 const RUN_ENTRIES = ['cli/run-one.ts', 'cli/run.ts', 'apps/runner/main.ts'];
-// A relative module specifier in a static import or export, or a dynamic import().
-const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)['"](\.{1,2}\/[^'"]+)['"]/g;
+// A relative module specifier in a static import or re-export that is not `type`-only, a
+// dynamic import() or a side-effect import.
+const RELATIVE_IMPORT = /\b(?:import|export)\s+(?!type\b)[^;'"]*?\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\s*\(?\s*['"](\.{1,2}\/[^'"]+)['"]/g;
+// Block comments, and line comments that start a line or follow whitespace (not the // of a URL).
+const COMMENTS = /\/\*[\s\S]*?\*\/|(^|\s)\/\/.*$/gm;
 const RUNNER_CHECK = ['runner-check', '--mock', '--json'];
 const NOT_BUILT = 127;
 
@@ -110,8 +115,8 @@ function reachesCoreRun(rel: string): boolean {
     if (file === target) return existsSync(file);
     if (seen.has(file) || !existsSync(file)) continue;
     seen.add(file);
-    for (const m of readFileSync(file, 'utf8').matchAll(RELATIVE_IMPORT)) {
-      const next = resolve(dirname(file), m[1] as string);
+    for (const m of readFileSync(file, 'utf8').replace(COMMENTS, '$1').matchAll(RELATIVE_IMPORT)) {
+      const next = resolve(dirname(file), (m[1] ?? m[2]) as string);
       if (/\.tsx?$/.test(next)) todo.push(next);
     }
   }

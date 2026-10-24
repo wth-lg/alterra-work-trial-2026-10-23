@@ -123,6 +123,35 @@ describe('donewhen', () => {
     expect(donewhen(root, ALL_STUBS).clause(2)).toMatch(/^FAIL/);
   });
 
+  it.each([
+    ['a type-only import', "import type { Run } from '../../packages/core/run.ts';\nexport {};\n"],
+    ['an export type', "export type { Run } from '../../packages/core/run.ts';\n"],
+    ['a line comment', "// import { run } from '../../packages/core/run.ts';\nexport {};\n"],
+    ['a block comment', "/* import { run } from '../../packages/core/run.ts'; */\nexport {};\n"],
+  ])('clause 2 counts value imports only: %s of packages/core/run.ts does not count', (_what, text) => {
+    const root = completeRepo();
+    write(root, 'apps/runner/main.ts', text);
+    expect(donewhen(root, ALL_STUBS).clause(2)).toMatch(/^FAIL/);
+  });
+
+  it('clause 2 counts a value import, a re-export and a dynamic import', () => {
+    for (const text of [
+      "import { type Run, run } from '../../packages/core/run.ts';\n",
+      "export { run } from '../../packages/core/run.ts';\n",
+      "const m = await import('../../packages/core/run.ts');\n",
+      "import {\n  run, // the loop\n} from '../../packages/core/run.ts';\n",
+    ]) {
+      const root = completeRepo();
+      write(root, 'apps/runner/main.ts', text);
+      expect(donewhen(root, ALL_STUBS).clause(2), text).toMatch(/^PASS/);
+    }
+  });
+
+  it('runs runner-check --mock once for clauses 1 and 2', () => {
+    const r = donewhen(completeRepo(), ALL_STUBS);
+    expect(r.calls.split('\n').filter((l) => l === 'runner-check --mock --json')).toHaveLength(1);
+  });
+
   it('clause 2 fails without a CLI run entry point', () => {
     const root = completeRepo();
     rmSync(join(root, 'cli/run.ts'));
