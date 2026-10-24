@@ -8,7 +8,7 @@ import {
   ALLERGY, APPT, AT, CODE, ct, creatinineOrder, diphenhydramine, DONE, finish, medication, message, note, oldOrders, ORACLE_MESSAGE, PT, prednisone, read, READS, REACTION_NOTE, RX,
 } from '../solution/steps.ts';
 
-// `loses` is checked by mutants.test.ts until this branch has wth-lg/p11-matrix-loses.
+// `loses` is checked by the matrix (pnpm cli matrix): each alternative loses exactly what it declares.
 export const alternatives: Array<Agent & { loses: readonly string[] }> = [
   {
     id: 'one_request_per_dose',
