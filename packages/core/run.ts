@@ -187,6 +187,7 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
         client: opts.client, params, history, tools, ctx, now: opts.now, timeout: opts.timeout ?? ((ms) => AbortSignal.timeout(ms)), emit,
         caps: { maxTurns: opts.maxTurns ?? task.maxTurns, maxCostUsd: costCap(opts.maxCostUsd), maxWallMs: opts.maxWallMs ?? MAX_WALL_MS },
         stateHash: () => stateHash(store.resources()),
+        out: outcome,
         ...(opts.signal ? { signal: opts.signal } : {}),
       });
       finalState = [...store.resources()];
@@ -202,8 +203,9 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
       }
     }
   } catch (e) {
-    // The environment failed outside a tool: its fault, not the model's. What the loop
-    // measured (turns, usage, cost) stays in the record.
+    // The environment failed outside a tool (an onEvent sink that throws mid-loop included):
+    // its fault, not the model's. The loop fills `outcome` as it goes, so what it measured up
+    // to the throw (turns, tool calls, usage, cost, models) stays in the record.
     outcome.status = 'ENV_ERROR';
     outcome.stop = null;
     outcome.terminal = { type: 'error', status: 'ENV_ERROR', code: 'INTERNAL', message: errorText(e) };

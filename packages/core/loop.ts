@@ -53,6 +53,10 @@ export interface LoopInput {
   signal?: AbortSignal;
   emit: (body: EventBody) => void;
   stateHash: () => Promise<string>;
+  // The outcome to fill in, kept current as the loop goes (each settle, request, response and
+  // tool call), so a caller still holds what was spent if the loop throws (an emit that
+  // throws). Default newOutcome().
+  out?: LoopOutcome;
 }
 
 export type Terminal =
@@ -114,7 +118,7 @@ export const newOutcome = (): LoopOutcome => ({
 export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
   const { client, params, history, tools, ctx, caps, now, timeout, signal, emit } = input;
   const started = now();
-  const out = newOutcome();
+  const out = input.out ?? newOutcome();
   const end = (status: TrialStatus, terminal: Terminal | null, stop: LoopOutcome['stop'] = null): LoopOutcome =>
     Object.assign(out, { status, terminal, stop });
   // Messages already carried by a request or response event.
@@ -134,8 +138,9 @@ export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
     const elapsed = now() - started;
     if (elapsed >= caps.maxWallMs) return end('LIMIT', { type: 'limit', limit: 'wall_clock', cap: caps.maxWallMs, value: elapsed });
 
-    const turn = ++out.turns;
+    const turn = out.turns + 1;
     emit({ type: 'request', turn, messages_from: logged, messages: history.slice(logged), ...(turn === 1 ? { params } : {}) });
+    out.turns = turn;
     const wall = timeout(caps.maxWallMs - elapsed);
     let r: CallResult;
     try {
@@ -147,12 +152,7 @@ export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
     }
     const m = r.message;
     const priced = usageCostUsd(m.usage);
-    emit({
-      type: 'response', turn, id: m.id, model: m.model, stop_reason: m.stop_reason, stop_details: (m.stop_details ?? null) as Record<string, unknown> | null,
-      content: m.content, usage: m.usage, attempts: r.attempts, cost_usd: priced,
-    });
-    // The answer is in history now and in the response event.
-    logged = history.length;
+    // The outcome first, then the event: an emit that throws leaves the outcome current.
     if (!out.models_returned.includes(m.model)) out.models_returned.push(m.model);
     out.api_retries += r.attempts - 1;
     out.stop_reason = m.stop_reason;
@@ -162,12 +162,16 @@ export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
     out.usage.cache_read += u.cache_read_input_tokens ?? 0;
     out.usage.output += u.output_tokens;
     if (priced === null) unpriced = true;
+    if (r.refusal) out.refusal_category = r.refusal.category;
+    emit({
+      type: 'response', turn, id: m.id, model: m.model, stop_reason: m.stop_reason, stop_details: (m.stop_details ?? null) as Record<string, unknown> | null,
+      content: m.content, usage: m.usage, attempts: r.attempts, cost_usd: priced,
+    });
+    // The answer is in history now and in the response event.
+    logged = history.length;
     emit({ type: 'usage', turn, total: { ...out.usage }, cost_usd: out.cost_usd });
 
-    if (r.refusal) {
-      out.refusal_category = r.refusal.category;
-      return end('REFUSAL', null);
-    }
+    if (r.refusal) return end('REFUSAL', null);
     const uses = m.content.filter((b): b is ToolUse & typeof b => b.type === 'tool_use');
     const truncated = m.stop_reason === 'max_tokens';
     maxTokensInARow = truncated ? maxTokensInARow + 1 : 0;

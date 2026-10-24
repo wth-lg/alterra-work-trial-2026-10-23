@@ -147,6 +147,29 @@ describe('run() grades', () => {
     expect(result.record.cost_usd + result.record.judge_cost_usd).toBeCloseTo(settled, 12);
   });
 
+  it('a sink that throws on the 3rd event (the first response): ENV_ERROR INTERNAL with the real cost, turns and models', async () => {
+    let n = 0;
+    const { result, rows } = await trial({ onEvent: () => { if (++n === 3) throw new Error('trajectory write failed'); } });
+    expect(result.record).toMatchObject({ status: 'ENV_ERROR', detail: 'INTERNAL', outcome: 'ENV_ERROR', valid: false, turns: 1, models_returned: ['claude-opus-5-5'] });
+    const settled = rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0);
+    expect(settled).toBeGreaterThan(0);
+    expect(result.record.cost_usd).toBeCloseTo(settled, 12);
+    expect(result.record.usage.output).toBeGreaterThan(0);
+  });
+
+  it.each([2, 4, 5, 6, 7, 8])('a sink that throws on event %i: the record carries what the ledger settled', async (at) => {
+    let n = 0;
+    const { result, rows } = await trial({ onEvent: () => { if (++n === at) throw new Error('trajectory write failed'); } });
+    expect(result.record).toMatchObject({ outcome: 'ENV_ERROR', valid: false });
+    const settled = rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0);
+    expect(result.record.cost_usd).toBeCloseTo(settled, 12);
+    // Every request sent counts as a turn (one reserve each: the toy trial has no retries and,
+    // invalid, no judge call), and every tool call the loop ran.
+    expect(result.record.turns).toBe(rows.filter((r) => r.kind === 'reserve').length);
+    expect(result.record.tool_calls).toBe(result.events.filter((e) => e.type === 'tool_result' && e.executed).length);
+    expect(result.record.models_returned).toEqual(result.events.some((e) => e.type === 'response') ? ['claude-opus-5-5'] : []);
+  });
+
   it.each([
     ['401', 401, 'authentication_error', 'invalid x-api-key'],
     ['billing 400', 400, 'invalid_request_error', 'Your credit balance is too low to access the Anthropic API.'],
