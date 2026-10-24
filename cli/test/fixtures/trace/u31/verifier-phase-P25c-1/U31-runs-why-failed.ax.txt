@@ -1,0 +1,8 @@
+heading "Runs"
+text "final-1 7/12 passed, Wilson 95% 32-81%"
+row "renal-dose-review trial 1 PASS"
+row "renal-dose-review trial 3 FAIL model order_dose_adjusted failed: expected an order for 250 mg, every 12 h, found 500 mg every 8 h"
+row "renal-dose-review trial 7 FAIL model note_on_patient failed: expected Communication on pt-0001, found none"
+row "results-inbox trial 2 LIMIT model turn limit reached: 40 turns"
+row "results-inbox trial 9 REFUSAL model refused: I can't place this order without a"
+row "crc-care-gap trial 4 FAIL model G1 failed: expected Task for colonoscopy, found none"

@@ -48,7 +48,9 @@ route. A route that needs a run-specific trial uses a token that the UI resolves
 - `run=session`: the runs started by this local runner process. The UI builds it from
   `GET /api/runs`, which lists the runs the runner started since its process began, in start
   order; a runner restart empties it. On the hosted site, where there is no runner, the Runs
-  view shows `No runs in this session`. Owner P15.
+  view shows `No runs in this session`. Owner P15. It includes the P25c forced-fail smoke run
+  (run id `smoke-<n>`, see "P25c follow-ups"), which is a valid FAIL, so `first-nonpass` can
+  select it with the one definition above.
 
 ## Routes
 
@@ -98,8 +100,11 @@ accessible name or text node, so they share one line of the snapshot.
   by an ASCII hyphen. A 12-trial sample shows `/12`. It shows on each Overview task row, on the
   Runs header (over the whole run), on each per-task row of the Runs view and on each interval
   label of the Findings chart. Each task row and interval label holds the task id and its pass
-  rate in one accessible name: `<task id> <k>/<N> passed, Wilson 95% <lo>-<hi>%`. On final-1 N
-  is 20 per task, so the per-task patterns under Patterns keep `/20`. This replaces the P13
+  rate in one accessible name: `<task id> <k>/<N> passed, Wilson 95% <lo>-<hi>%`. The Runs
+  header holds the run id and the whole run's pass rate in one accessible name:
+  `<run id> <k>/<N> passed, Wilson 95% <lo>-<hi>%`. On final-1 N is 20 per task and 120 over
+  the run, so the per-task patterns under Patterns keep `/20` and the header pattern `/120`.
+  This replaces the P13
   placeholder copy in apps/web/src/shell/views.ts ("pass k of 10", "ten trial swatches"), which
   P14 removes.
 - The six task ids, in Overview order: `renal-dose-review`, `results-inbox`, `crc-care-gap`,
@@ -132,8 +137,17 @@ accessible name or text node, so they share one line of the snapshot.
 ### P14a, P16: reasons and attribution
 
 - The reason on each non-pass row of the Runs view and in the trial header is the one sentence
-  `explainTrial` returns, which starts `<check id> failed: expected <value>, found <value>`. A
-  value may hold commas. The pattern is listed under Patterns.
+  `explainTrial` returns. Every valid non-pass trial has one, in one of three forms:
+  - a trial with a failed gate check (FAIL, or LIMIT or REFUSAL with a failed check):
+    `<check id> failed: expected <value>, found <value>`, for the decisive check. A check id is
+    the gate check's id as the task's grader names it, a letter then letters, digits or
+    underscores (`G1`, `note_on_patient`). A value may hold commas.
+  - a LIMIT with no failed gate check, by the limit that stopped the loop (packages/core/events.ts
+    LIMITS): `turn limit reached: <n> turns`, `cost limit reached: $<v> of $<cap>`,
+    `time limit reached: <s> s of <cap> s` or `output limit reached: <n> cut-off responses in a row`.
+  - a REFUSAL with no failed gate check: `refused: <first words>`, the first 12 words of the
+    model's refusal text.
+  One pattern under Patterns matches all three forms.
 - The Attribution tab's criteria table shows, for each criterion, the text `<id>: met` or
   `<id>: not met` (M1-M5), then its evidence; M5 shows `<id>: pending` on an unaudited trial.
   Criterion sentences come from FAULT_DEFINITIONS and are not copied here, because
@@ -178,10 +192,13 @@ so a repeated item cannot meet the count of another.
 - One row of the Attribution criteria table on an audited trial, one pattern per criterion
   (owner P16): `\bM1: (?:met|not met)\b`, `\bM2: (?:met|not met)\b`, `\bM3: (?:met|not met)\b`,
   `\bM4: (?:met|not met)\b`, `\bM5: (?:met|not met)\b`.
-- `\b[A-Z]+[0-9]+ failed: expected [^\n]+?, found `: a reason naming the decisive check, its
-  expected value (commas allowed) and what was found. Row U31 needs it on the Runs view at least
-  36 times, the fewest non-pass rows final-1 can have (6 tasks, 20 valid trials each, at most
-  14 passes each). Owner P14a (text), P14 and P16 (rendering).
+- `\b(?:[A-Za-z][A-Za-z0-9_]* failed: expected [^\n]+?, found |(?:turn|cost|time|output) limit reached: |refused: )`:
+  a reason in any of the three forms under "P14a, P16: reasons and attribution". Row U31 needs
+  it once on the Runs view and once in the trial header; `U31-reason-count.txt` checks that
+  every valid non-pass row shows one. Owner P14a (text), P14 and P16 (rendering).
+- `\bfinal-1 (?:[0-9]|[1-9][0-9]|1[01][0-9]|120)/120 passed, Wilson 95% [0-9]{1,3}-[0-9]{1,3}%`:
+  the Runs header of final-1 with the whole run's pass rate (row U28). The per-task rows do not
+  match it. Owner P14.
 - `\bmatrix: ([0-9]+)/\1 probe verdicts as expected\b`: the Grader validation count line with
   every probe as expected. Owner P14.
 - `\bScore (?:0\.[0-9]{2}|1\.00)\b`: a Score card with a value. Owner P16 (trial), P15 (live).
@@ -202,7 +219,8 @@ holds the exact line below when the check passes.
   then a last line `N rows not actionable in the UI: <n>`. The expect is
   `N rows not actionable in the UI: 0`.
 - `U33-ui-audit.txt`, from P25c step (3): a table of every deviation (screen, screenshot,
-  severity). A deviation is open when its severity is must-fix and no retaken screenshot shows
+  severity). The audit's scope is layout, density, clarity, palette (stone neutrals and one blue
+  accent near #5C85FB, no other colour), logos (none) and font (the self-hosted OFL font). A deviation is open when its severity is must-fix and no retaken screenshot shows
   it fixed. The last line is `must-fix open: <n>`. The expect is `must-fix open: 0`.
 - `U14-storage-count.txt`, from the devtools snippet after Forget key, run on both surfaces: the
   lines `local runner: sk-ant- values in storage: <n>` and
@@ -213,6 +231,11 @@ holds the exact line below when the check passes.
   verdict, then a last line `phases without a VERIFIED report: <n>`. The expect is
   `phases without a VERIFIED report: 0`. P25c writes it so that `trace-check --final` in the
   P25c gate can read it; P26 checks the phases after it.
+- `U31-reason-count.txt`: three lines. `valid non-pass trials in final-1: <n>`, with n from
+  results/runs/final-1/summary.json (valid trials minus passes, summed over the six tasks);
+  `non-pass rows with a reason on Runs: <m>`, with m the non-pass rows of
+  `U31-runs-why-failed.ax.txt` that match the reason pattern under Patterns; then a last line
+  `non-pass rows without a reason: <n-m>`. The expect is `non-pass rows without a reason: 0`.
 
 ## Writeup (P24)
 
@@ -240,12 +263,19 @@ directory, under exactly this name, or `trace-check --final` reports it missing.
 2. Forced-fail smoke trial: on the local runner, after the six live trials, P25c starts one
    smoke trial through the mocked Messages client that `runner-check --mock` uses (P15 exposes
    it on the runner when it starts with `CLINENV_FORCED_FAIL=1`), scripted to end without the
-   task's required order, so its gate fails with no live call and no spend. This makes
-   `run=session&trial=first-nonpass` land on a non-pass trial with no audit row whatever the
-   six live trials did, so U23's `not human-audited` check is deterministic. Its record carries
-   the mocked model, not `claude-opus-5-5`, and has no ledger rows; the P25c gate's check of
-   "six records, each with models_returned [claude-opus-5-5]" counts the live records and
-   allows this one.
+   task's required order, so its gate fails with no live call and no spend. The mock reports
+   `claude-opus-5-5` as its response model, so models_returned is [claude-opus-5-5], the
+   record is valid and its outcome is FAIL on the gate (an unexpected model would make it
+   INVALID, which `first-nonpass` skips). This makes `run=session&trial=first-nonpass` land on a
+   valid non-pass trial with no audit row whatever the six live trials did, so U23's
+   `not human-audited` check is deterministic, with the one definition of `first-nonpass`.
+   The model does not mark it as a smoke run; these do: its run id starts `smoke-` (`smoke-<n>`),
+   its record carries the field `mock: true`, and it has no ledger rows. The P25c gate's check
+   of "six records, each with models_returned [claude-opus-5-5]" and its match of ledger
+   settle rows to trial records count only records without `mock: true`, so the smoke record
+   is not one of the six. The record lives only in the runner's session store, the
+   CLINENV_RUNS_DIR of the P25c session in the audited clone; it is never written under
+   results/, and P25c never commits it (`git -C <clone> status --porcelain` stays empty).
 3. Each command-output file: run the command from the root of the audited clone, and save its
    full output and a last line `exit: <code>`. Where a file names two commands, run them in
    order into the same file.
@@ -290,10 +320,10 @@ directory, under exactly this name, or `trace-check --final` reports it missing.
 - U32: `U32-writeup-audit.txt` from `grep -qF '>Audit against research and public environments</h2>' docs/writeup.html`
 - U34: `U34-docs-check.txt` from `pnpm docs:check`
 
-### Result-line files (5)
+### Result-line files (6)
 
 `U2-rail-reach.txt`, `U25-needs-actions.txt`, `U33-ui-audit.txt`, `U14-storage-count.txt`,
-`U6-phase-verdicts.txt`.
+`U6-phase-verdicts.txt`, `U31-reason-count.txt`.
 
 ### Snapshots on the hosted site, step (1)
 
@@ -354,14 +384,34 @@ Each row's screenshot (.png) and accessibility snapshot (.ax.txt), taken on its 
 
 ### Other phases
 
+Strings this file names that no merged code renders or serves yet, with the phase that builds
+each (apps/runner does not exist yet):
+
+| String | Owner |
+|---|---|
+| `GET /api/runs` and the `run=session` token | P15 |
+| `CLINENV_FORCED_FAIL=1` and the smoke run (`smoke-<n>`, `mock: true`, model `claude-opus-5-5`) | P15 |
+| the spend meter, `Session spend $<a> of $<b> cap` | P15 |
+| the matrix count line, `matrix: <k>/<n> probe verdicts as expected` | P14 |
+| the Runs header, `<run id> <k>/<N> passed, Wilson 95% <lo>-<hi>%` | P14 |
+| the three reason forms, including `turn limit reached: <n> turns` and `refused: <first words>` | P14a |
+| the Score card value, `Score <s>` | P16 |
+| `U31-reason-count.txt` | P25c |
+
 - P14: render the matrix count line, the oracle badge on Reference solution, the per-task pass
-  rate rows with N read from the run, the Runs list with no paging, and the W7 summary text, as
-  this file says.
+  rate rows and the Runs header with N read from the run, the Runs list with no paging, and the
+  W7 summary text, as this file says.
+- P14a: `explainTrial` returns a reason for every valid non-pass trial, in the three forms under
+  "P14a, P16: reasons and attribution"; a LIMIT or REFUSAL with no failed gate check gets the
+  limit or refusal sentence.
 - P14 or P17i: confirm that renal-dose-review's Policy tab starts with `RBC-PHARM-07`, or switch
   row U4 to a dosing-criterion string from the policy.
 - P15: serve `GET /api/runs` (the runs this runner process started) and resolve `run=session`
-  from it; add the forced-fail smoke trial behind `CLINENV_FORCED_FAIL=1`; render the spend
-  meter text.
+  from it; add the forced-fail smoke trial behind `CLINENV_FORCED_FAIL=1`, whose mock reports
+  `claude-opus-5-5` and whose record has run id `smoke-<n>` and `mock: true`, is written only
+  under CLINENV_RUNS_DIR and writes no ledger rows; render the spend meter text.
+- P17: name each gate check with an id that matches `[A-Za-z][A-Za-z0-9_]*`, as the reason
+  pattern needs.
 - P16: render the trial tabs as listed under Query parameters (`grading` the default), the
   Score value, the empty first-nonpass text and the State diff manifest line.
 - P24: add `What is new in this design` and `Audit against research and public environments`

@@ -1761,7 +1761,7 @@
         }
       },
       "phase": "P13",
-      "note": "Colour, logos and font do not reach the accessibility tree, so no ax expect can check them; the tokens test checks the palette and font, and the P25c screenshot shows the screen."
+      "note": "Colour, logos and font do not reach the accessibility tree, so no ax expect can check them; the tokens test checks the palette and font, and the U33 audit, whose scope names palette, logos and font, checks the rendered screen."
     },
     {
       "id": "U12",
@@ -2191,7 +2191,7 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=session&trial=first-nonpass",
-        "action": "On the local runner, after the audit's live trials and the forced-fail smoke trial, open the first non-pass trial of this runner session: its header shows the not human-audited marker; then press Forget key: the key gate returns.",
+        "action": "On the local runner, after the audit's live trials and the forced-fail smoke trial (a valid FAIL on claude-opus-5-5, run id smoke-<n>, mock: true), open the first non-pass trial of this runner session: its header shows the not human-audited marker; then press Forget key: the key gate returns.",
         "surface": "local"
       },
       "evidence": [
@@ -2372,7 +2372,7 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=final-1",
-        "action": "Open Runs on final-1: the header shows k/N with its Wilson 95% interval, the pass definition and the denominator rule, and each of the six per-task rows shows its k/20 and interval.",
+        "action": "Open Runs on final-1: the header shows the run id with k/120 and its Wilson 95% interval, the pass definition and the denominator rule, and each of the six per-task rows shows its k/20 and interval.",
         "surface": "any"
       },
       "evidence": [
@@ -2384,6 +2384,12 @@
           "command": {
             "cmd": "pnpm cli summary results/runs/final-1 --require model=claude-opus-5-5,valid=20,replay=all",
             "exit": 0
+          }
+        },
+        {
+          "ax_match": {
+            "file": "verifier-phase-P25c-1/U28-runs-header.ax.txt",
+            "pattern": "\\bfinal-1 (?:[0-9]|[1-9][0-9]|1[01][0-9]|120)/120 passed, Wilson 95% [0-9]{1,3}-[0-9]{1,3}%"
           }
         },
         {
@@ -2536,32 +2542,38 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=runs&run=final-1",
-        "action": "Open Runs, final-1: each non-pass row shows, with no click, the outcome, the label and the reason (decisive check id, expected and found); open the first non-pass trial: its header shows the same reason.",
+        "action": "Open Runs, final-1: each non-pass row shows, with no click, the outcome, the label and the reason (the failed check with expected and found, or the limit or refusal sentence when no check failed); open the first non-pass trial: its header shows the same reason.",
         "surface": "any"
       },
       "evidence": [
         "verifier-phase-P25c-1/U31-runs-why-failed.png",
         "verifier-phase-P25c-1/U31-runs-why-failed.ax.txt",
         "verifier-phase-P25c-1/U31-trial-attribution-header.png",
-        "verifier-phase-P25c-1/U31-trial-attribution-header.ax.txt"
+        "verifier-phase-P25c-1/U31-trial-attribution-header.ax.txt",
+        "verifier-phase-P25c-1/U31-reason-count.txt"
       ],
       "expect": [
         {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/U31-reason-count.txt",
+            "text": "non-pass rows without a reason: 0"
+          }
+        },
+        {
           "ax_match": {
             "file": "verifier-phase-P25c-1/U31-runs-why-failed.ax.txt",
-            "pattern": "\\b[A-Z]+[0-9]+ failed: expected [^\\n]+?, found ",
-            "min_matches": 36
+            "pattern": "\\b(?:[A-Za-z][A-Za-z0-9_]* failed: expected [^\\n]+?, found |(?:turn|cost|time|output) limit reached: |refused: )"
           }
         },
         {
           "ax_match": {
             "file": "verifier-phase-P25c-1/U31-trial-attribution-header.ax.txt",
-            "pattern": "\\b[A-Z]+[0-9]+ failed: expected [^\\n]+?, found "
+            "pattern": "\\b(?:[A-Za-z][A-Za-z0-9_]* failed: expected [^\\n]+?, found |(?:turn|cost|time|output) limit reached: |refused: )"
           }
         }
       ],
       "phase": "P16",
-      "note": "min_matches 36 is the fewest non-pass rows final-1 can have: 6 tasks, 20 valid trials each, at most 14 passes each (pass rate 0.70). The Runs view lists every trial without paging, so the snapshot holds every non-pass row."
+      "note": "The count comes from the run, not a constant: P25c writes U31-reason-count.txt with the valid non-pass trials in final-1 (from summary.json), the non-pass rows of the Runs snapshot that show a reason, and the difference, which must be 0. The Runs view lists every trial without paging, so the snapshot holds every non-pass row."
     },
     {
       "id": "U32",
@@ -2626,7 +2638,7 @@
       "ui_required": true,
       "ui": {
         "route": "/?view=overview",
-        "action": "Walk every screen in the audit and compare it with the reference workspace: layout, density and clarity.",
+        "action": "Walk every screen in the audit and compare it with the reference workspace: layout, density, clarity, palette (stone neutrals and one blue accent), logos (none) and font (the self-hosted OFL font).",
         "surface": "any"
       },
       "evidence": [

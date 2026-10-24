@@ -349,3 +349,60 @@ describe('trace-check: every UI row checks its screen (builder-45)', () => {
     expect(text).not.toMatch(/^A1: /m);
   });
 });
+
+// The repo's own rows and contract, run against fixture evidence (verifier-phase-P9t-3 D1, D2).
+const REPO = fileURLToPath(new URL('../../', import.meta.url));
+const U31_EVIDENCE = fileURLToPath(new URL('./fixtures/trace/u31/', import.meta.url));
+const CONTRACT = 'docs/requirements/ui-contract.md';
+const repoRow = (id: string): TraceRow => row((JSON.parse(readFileSync(join(REPO, TRACE), 'utf8')) as { rows: TraceRow[] }).rows, id);
+const repoContract = readFileSync(join(REPO, CONTRACT), 'utf8');
+const matchElements = (r: TraceRow) => (Array.isArray(r.expect) ? r.expect : [r.expect]).flatMap((e) => ('ax_match' in e ? [e.ax_match] : []));
+const COUNT = 'verifier-phase-P25c-1/U31-reason-count.txt';
+
+// The clean fixture with the repo's U31 expect and evidence on its U1 row, the repo contract
+// appended to its contract, and a Runs snapshot whose non-pass rows are snake_case gate
+// failures, a LIMIT with every gate met and a REFUSAL.
+function withRepoU31(): string {
+  const dir = copy();
+  const u31 = repoRow('U31');
+  editRows(dir, (rows) => {
+    Object.assign(row(rows, 'U1'), { expect: u31.expect, evidence: u31.evidence });
+  });
+  writeFileSync(join(dir, CONTRACT), `${readFileSync(join(dir, CONTRACT), 'utf8')}\n${repoContract}`);
+  cpSync(U31_EVIDENCE, join(dir, 'evidence'), { recursive: true });
+  return dir;
+}
+
+describe('trace-check: the repo U31 and U23 rules (builder-50)', () => {
+  it('U31 passes on snake_case check ids, a LIMIT and a REFUSAL, with no constant floor', async () => {
+    const dir = withRepoU31();
+    const { code, text } = await check(dir, ...final(dir));
+    expect(text).toMatch(/trace-check: OK/);
+    expect(code).toBe(0);
+    const runs = matchElements(repoRow('U31')).find((m) => m.file.endsWith('U31-runs-why-failed.ax.txt'));
+    const snapshot = readFileSync(join(U31_EVIDENCE, 'verifier-phase-P25c-1/U31-runs-why-failed.ax.txt'), 'utf8');
+    expect(snapshot.match(new RegExp(runs!.pattern, 'g'))?.length).toBe(5);
+  });
+
+  it('--final exits 1 on U31 when the reason count file reports a non-pass row without a reason', async () => {
+    const dir = withRepoU31();
+    writeFileSync(join(dir, 'evidence', COUNT), 'valid non-pass trials in final-1: 6\nnon-pass rows with a reason on Runs: 5\nnon-pass rows without a reason: 1\n');
+    const { code, text } = await check(dir, ...final(dir));
+    expect(code).toBe(1);
+    expect(text).toMatch(/^U1: expect\[\d+\] ax_text not met: expected "non-pass rows without a reason: 0" in verifier-phase-P25c-1\/U31-reason-count\.txt/m);
+  });
+
+  it('U28 checks the whole-run header k/N apart from the per-task rows', () => {
+    const header = matchElements(repoRow('U28')).filter((m) => new RegExp(m.pattern).test('final-1 70/120 passed, Wilson 95% 49-67%'));
+    expect(header).toHaveLength(1);
+    expect(new RegExp(header[0]!.pattern).test('renal-dose-review 12/20 passed, Wilson 95% 39-78%')).toBe(false);
+  });
+
+  it('the forced-fail smoke trial is a valid FAIL on claude-opus-5-5, marked smoke and kept out of results/', () => {
+    const step = /^2\. Forced-fail smoke trial:[\s\S]*?(?=^\d\. )/m.exec(repoContract)?.[0] ?? '';
+    expect(step).toMatch(/`claude-opus-5-5`/);
+    expect(step).not.toMatch(/mocked model, not/);
+    for (const s of ['`smoke-`', '`mock: true`', 'CLINENV_RUNS_DIR', 'results/', 'never commits']) expect(step).toContain(s);
+    expect(repoContract).toContain('`trial=first-nonpass`: the first valid trial whose outcome is not PASS');
+  });
+});
