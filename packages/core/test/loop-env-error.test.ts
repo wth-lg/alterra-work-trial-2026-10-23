@@ -14,9 +14,9 @@ import { taskSource } from '../tasks.ts';
 import { toJsonl } from '../trajectory.ts';
 
 // Which call of each function throws (1-based); 0 for none.
-const fail = vi.hoisted(() => ({ stateHash: 0, loadStore: 0, taskVersion: 0, calls: { stateHash: 0, loadStore: 0, taskVersion: 0 } }));
+const fail = vi.hoisted(() => ({ stateHash: 0, loadStore: 0, taskVersions: 0, calls: { stateHash: 0, loadStore: 0, taskVersions: 0 } }));
 
-function counted<A extends unknown[], R>(name: 'stateHash' | 'loadStore' | 'taskVersion', fn: (...a: A) => R): (...a: A) => R {
+function counted<A extends unknown[], R>(name: 'stateHash' | 'loadStore' | 'taskVersions', fn: (...a: A) => R): (...a: A) => R {
   return (...a) => {
     if (++fail.calls[name] === fail[name]) throw new Error(`injected ${name} failure`);
     return fn(...a);
@@ -33,7 +33,7 @@ vi.mock('../../env/fixture-source.ts', async (orig) => {
 });
 vi.mock('../tasks.ts', async (orig) => {
   const m = await orig<typeof import('../tasks.ts')>();
-  return { ...m, taskVersion: counted('taskVersion', m.taskVersion) };
+  return { ...m, taskVersions: counted('taskVersions', m.taskVersions) };
 });
 
 const root = new URL('../../../', import.meta.url);
@@ -75,14 +75,14 @@ async function trial(worldRead: () => Promise<Uint8Array> = async () => WORLD) {
 }
 
 beforeEach(() => {
-  Object.assign(fail, { stateHash: 0, loadStore: 0, taskVersion: 0, calls: { stateHash: 0, loadStore: 0, taskVersion: 0 } });
+  Object.assign(fail, { stateHash: 0, loadStore: 0, taskVersions: 0, calls: { stateHash: 0, loadStore: 0, taskVersions: 0 } });
 });
 
 describe('an environment exception in run()', () => {
   it('the write scenario runs clean with nothing injected (calls: 2 loadStore, 4 stateHash)', async () => {
     const { result } = await trial();
     expect(result.record.status).toBe('COMPLETED');
-    expect(fail.calls).toEqual({ stateHash: 4, loadStore: 2, taskVersion: 1 });
+    expect(fail.calls).toEqual({ stateHash: 4, loadStore: 2, taskVersions: 1 });
   });
 
   it.each([
@@ -93,7 +93,7 @@ describe('an environment exception in run()', () => {
     ['stateHash (after a write)', { stateHash: 2 }, false],
     ['stateHash (final)', { stateHash: 3 }, false],
     ['stateHash (replay)', { stateHash: 4 }, false],
-    ['taskVersion', { taskVersion: 1 }, false],
+    ['taskVersions', { taskVersions: 1 }, false],
   ] as const)('%s ends as ENV_ERROR INTERNAL with a record and a last error event', async (_site, inject, badWorld) => {
     Object.assign(fail, inject);
     const { result, events } = await trial(badWorld ? async () => Promise.reject(new Error('injected world read failure')) : undefined);

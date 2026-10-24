@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { tempDir, write } from '../../../scripts/test/helpers.ts';
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
-import { parseTask, taskVersion } from '../tasks.ts';
+import { parseTask, taskVersions } from '../tasks.ts';
 
 const toml = (id: string) => `[task]\nid = "${id}"\ntitle = "Task ${id}"\nmax_turns = 12\n`;
 
@@ -47,7 +47,8 @@ describe('TaskSource over tasks/*/task.toml', () => {
     await expect(parseTask({ id: 'a', files: { ...files, 'task.toml': `${toml('a')}[judge]\neffort = "max"\n` } })).rejects.toThrow(/effort must be one of low, medium, high/);
   });
 
-  it('parseTask checks the id and the fields; taskVersion covers the files and the world hash', async () => {
+  it('parseTask checks the id and the fields; task_version covers the files and the world hash', async () => {
+    const taskVersion = async (t: Awaited<ReturnType<typeof parseTask>>, world: string) => (await taskVersions(t, world)).task_version;
     const files = { 'task.toml': toml('a'), 'instruction.md': 'Do a.\n' };
     const a = await parseTask({ id: 'a', files });
     await expect(parseTask({ id: 'b', files })).rejects.toThrow(/id "a" .* directory b/);
@@ -57,5 +58,21 @@ describe('TaskSource over tasks/*/task.toml', () => {
     expect(await taskVersion(a, 'h1')).not.toBe(await taskVersion(edited, 'h1'));
     expect(await taskVersion(a, 'h1')).not.toBe(await taskVersion(a, 'h2'));
     expect(await taskVersion(a, 'h1')).toBe(await taskVersion(await parseTask({ id: 'a', files: { 'instruction.md': 'Do a.\n', 'task.toml': toml('a') } }), 'h1'));
+  });
+
+  it('env_version covers what the agent sees and the world; grader_task_version covers every other file', async () => {
+    const files = { 'task.toml': toml('a'), 'instruction.md': 'Do a.\n', 'policy/p.md': 'P\n', 'overlay.ts': 'o', 'tests/grader.ts': 'g', 'expected.ts': 'e', 'policy.ts': 'd', 'solution/solve.ts': 's', 'x.test.ts': 't' };
+    const base = await taskVersions(await parseTask({ id: 'a', files }), 'h1');
+    const changed = async (path: keyof typeof files, world = 'h1') => taskVersions(await parseTask({ id: 'a', files: { ...files, [path]: `${files[path]}\n` } }), world);
+    for (const p of ['task.toml', 'instruction.md', 'policy/p.md', 'overlay.ts'] as const) {
+      const v = await changed(p);
+      expect([p, v.env_version !== base.env_version, v.grader_task_version === base.grader_task_version, v.task_version !== base.task_version]).toEqual([p, true, true, true]);
+    }
+    for (const p of ['tests/grader.ts', 'expected.ts', 'policy.ts', 'solution/solve.ts', 'x.test.ts'] as const) {
+      const v = await changed(p);
+      expect([p, v.env_version === base.env_version, v.grader_task_version !== base.grader_task_version, v.task_version !== base.task_version]).toEqual([p, true, true, true]);
+    }
+    const world = await taskVersions(await parseTask({ id: 'a', files }), 'h2');
+    expect([world.env_version !== base.env_version, world.grader_task_version === base.grader_task_version]).toEqual([true, true]);
   });
 });

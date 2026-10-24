@@ -13,11 +13,15 @@
 //   grader_error=N   at most N records whose current grade (the last regrade, else the recorded
 //                    outcome) is GRADER_ERROR. GRADER_ERROR is settled, never re-queued as a
 //                    model trial; the records that were GRADER_ERROR in an earlier grade are
-//                    printed as history, never required
+//                    printed as history, never required. The policy: fix the grader, regrade
+//                    the run offline (cli/regrade.ts), disclose the history; a final run passes
+//                    grader_error=0 and replay=all (replay compares env_version only)
 //   mode=M           the manifest's mode is M (mode=live)
 // With any requirement, every task the run must hold has records: those of --task (all, or a
 // comma list), else the manifest's task_versions; and a run that is not live is a violation
-// unless --allow-mock is given. --json prints only the summary on stdout (the lines go to stderr). Exit 0 when every
+// unless --allow-mock is given. Each task line names the env_versions its records ran at and the
+// grader_task_versions of their current grades (packages/core/tasks.ts), first 12 characters.
+// Trials are named by trialName, as replay.json names them. --json prints only the summary on stdout (the lines go to stderr). Exit 0 when every
 // requirement holds; 1 on a violation or a missing run; 2 on a usage error.
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -41,8 +45,11 @@ const defaults: Deps = { out: (l) => process.stdout.write(`${l}\n`), err: (l) =>
 const USAGE = 'usage: pnpm cli summary <run> [--require valid=N,band=a-b,env_error_raw=N,grader_error=N,model=M,replay=all,mode=live] [--task all|<id,...>] [--allow-mock] [--json]';
 
 // A record as cli regrade leaves it: its regrades[] entries appended.
+// A run-one record has no index: summary names it by its trajectory, as replay does (trialName).
 const toTrial = (r: BatchRecord & { regrades?: RegradeGrade[] }): SummaryTrial => ({
-  task_id: r.task_id, task_version: r.task_version ?? null, index: r.index, outcome: r.outcome, model_requested: r.model_requested,
+  task_id: r.task_id, task_version: r.task_version ?? null, env_version: r.env_version ?? null, grader_task_version: r.grader_task_version ?? null,
+  ...(typeof r.index === 'number' ? { index: r.index } : {}), ...(r.trajectory ? { trajectory: r.trajectory } : {}), ...(r.trial_id ? { trial_id: r.trial_id } : {}),
+  outcome: r.outcome, model_requested: r.model_requested,
   models_returned: r.models_returned ?? [], state_hash: r.state_hash, tool_errors: r.tool_errors ?? {}, cost_usd: r.cost_usd ?? 0,
   judge_cost_usd: r.judge_cost_usd ?? 0, score: r.score ?? null,
   ...(r.regrades ? { regrades: r.regrades } : {}),
@@ -122,9 +129,14 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     const w = t.wilson95 === null ? 'n/a' : `${pct(t.wilson95.lo)}-${pct(t.wilson95.hi)}`;
     const recorded = Object.entries(t.recorded_outcomes).filter(([o]) => isValid(o));
     const disclosed = t.regraded === 0 ? '' : `  regraded ${t.regraded} (recorded ${t.recorded_outcomes.PASS ?? 0}/${recorded.reduce((a, [, n]) => a + n, 0)})`;
-    say(`${id.padEnd(width)}  ${t.passes}/${t.trials}  Wilson 95% ${w}  ENV_ERROR raw ${t.env_error_raw}  re-queued ${t.requeued}${disclosed}`);
+    const short = (vs: string[]) => (vs.length === 0 ? '(none)' : vs.map((v) => v.slice(0, 12)).join(','));
+    say(`${id.padEnd(width)}  ${t.passes}/${t.trials}  Wilson 95% ${w}  ENV_ERROR raw ${t.env_error_raw}  re-queued ${t.requeued}${disclosed}  env ${short(t.env_versions)}  grader ${short(t.grader_task_versions)}`);
   }
-  say(`GRADER_ERROR ${s.totals.grader_error} at the current grade; history ${s.totals.grader_error_history} (GRADER_ERROR in an earlier grade, disclosed only). A GRADER_ERROR is never re-queued as a model trial: regrade grades it again`);
+  say(
+    `GRADER_ERROR ${s.totals.grader_error} at the current grade; history ${s.totals.grader_error_history} (GRADER_ERROR in an earlier grade, disclosed only). ` +
+      'A GRADER_ERROR is a grader bug, never re-queued as a model trial: fix the grader, regrade the whole run offline (pnpm cli regrade), and disclose the history; ' +
+      'a final run requires grader_error=0 and replay=all, and replay compares env_version only, so a grader fix does not break it',
+  );
   for (const v of s.violations) say(`violation: ${v}`);
   say(`summary: ${s.violations.length === 0 ? 'every requirement holds' : `${s.violations.length} violation(s)`}; wrote ${join(dir, 'summary.json')}`);
   if (json) deps.out(JSON.stringify(s));
