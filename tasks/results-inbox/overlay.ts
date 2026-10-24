@@ -3,7 +3,7 @@
 //
 //   item  slot     patient                          result
 //   1     pt-0013  Linda Marsh, 1958-04-17          CT abdomen/pelvis of 2026-06-04: 5 mm RLL nodule
-//   2     pt-0007  Leslie Parisian (Synthea name)   renal ultrasound: Bosniak I cyst, no follow-up
+//   2     pt-0007  Leslie Parisian (Synthea name)   renal ultrasound: simple cyst, no follow-up
 //   3     pt-0006  Raj Patel                        positive FIT; Dr. Lin's GI referral exists
 //   4     pt-0008  Walter Brennan                   BMP: K 6.4, specimen hemolyzed
 //   5     pt-0010  Denise Holloway, CKD 3b          BMP: K 6.2, not hemolyzed
@@ -22,8 +22,10 @@
 // Patel's 2021 colonoscopy goes, since a screening FIT four years after one is implausible.
 // Denise Holloway's CKD stage 1 and 2 entries become CKD 3b, and her base creatinine and MDRD
 // eGFR results, which Synthea left contradicting each other, become a stable CKD 3b series.
-// Leslie Parisian's duplicate simvastatin goes, and so does the 1965 Linda Marsh's tubal ligation
-// dated 2020, which her new birth date puts at 55.
+// Leslie Parisian's creatinine (3.1 and 2.8 mg/dL beside MDRD eGFRs of 79, with no kidney
+// disease on his chart) becomes the 0.95 mg/dL those eGFRs imply, so his renal ultrasound has
+// no unplanned kidney problem behind it. His duplicate simvastatin goes, and so does the 1965
+// Linda Marsh's tubal ligation dated 2020, which her new birth date puts at 55.
 import type { Resource } from '../../packages/env/store.ts';
 import type { Overlay, WorldReader } from '../../packages/env/overlay.ts';
 
@@ -190,18 +192,20 @@ const item = (n: number, pt: string, focus: string, received: string, from: { re
 const K: [string, string] = ['2823-3', 'Potassium [Moles/volume] in Serum or Plasma'];
 const BMP: [string, string] = ['51990-0', 'Basic metabolic panel - Blood'];
 
-// A basic metabolic panel's eight results; `k` carries the potassium's value, flag and note.
+// A basic metabolic panel's eight results, each flagged from its reference range; `k` carries
+// the potassium's value, its critical flag and note.
 function bmp(tag: string, pt: string, enc: string, at: string, issued: string, v: { na: number; k: number; cl: number; co2: number; bun: number; cr: number; glu: number; ca: number }, kExtra: Partial<R<'Observation'>>, kInterp: Interp): Resource[] {
-  const o = (key: string, code: [string, string], value: number, unit: string, range: [number, number], interp: Interp = 'N', extra: Partial<R<'Observation'>> = {}) =>
+  const flag = (value: number, [low, high]: [number, number]): Interp => (value > high ? 'H' : value < low ? 'L' : 'N');
+  const o = (key: string, code: [string, string], value: number, unit: string, range: [number, number], interp: Interp = flag(value, range), extra: Partial<R<'Observation'>> = {}) =>
     lab(`obs-t2-${tag}-${key}`, pt, enc, code, at, issued, value, unit, range, interp, extra);
   return [
     o('na', ['2951-2', 'Sodium [Moles/volume] in Serum or Plasma'], v.na, 'mmol/L', [136, 145]),
     o('k', K, v.k, 'mmol/L', [3.5, 5.1], kInterp, kExtra),
     o('cl', ['2075-0', 'Chloride [Moles/volume] in Serum or Plasma'], v.cl, 'mmol/L', [98, 107]),
     o('co2', ['2028-9', 'Carbon dioxide, total [Moles/volume] in Serum or Plasma'], v.co2, 'mmol/L', [22, 29]),
-    o('bun', ['3094-0', 'Urea nitrogen [Mass/volume] in Serum or Plasma'], v.bun, 'mg/dL', [7, 20], v.bun > 20 ? 'H' : 'N'),
-    o('cr', ['2160-0', 'Creatinine [Mass/volume] in Serum or Plasma'], v.cr, 'mg/dL', pt === 'pt-0010' ? [0.57, 1.11] : [0.74, 1.35], v.cr > (pt === 'pt-0010' ? 1.11 : 1.35) ? 'H' : 'N'),
-    o('glu', ['2345-7', 'Glucose [Mass/volume] in Serum or Plasma'], v.glu, 'mg/dL', [70, 99], v.glu > 99 ? 'H' : 'N'),
+    o('bun', ['3094-0', 'Urea nitrogen [Mass/volume] in Serum or Plasma'], v.bun, 'mg/dL', [7, 20]),
+    o('cr', ['2160-0', 'Creatinine [Mass/volume] in Serum or Plasma'], v.cr, 'mg/dL', pt === 'pt-0010' ? [0.57, 1.11] : [0.74, 1.35]),
+    o('glu', ['2345-7', 'Glucose [Mass/volume] in Serum or Plasma'], v.glu, 'mg/dL', [70, 99]),
     o('ca', ['17861-6', 'Calcium [Mass/volume] in Serum or Plasma'], v.ca, 'mg/dL', [8.6, 10.3]),
   ];
 }
@@ -253,7 +257,7 @@ Allergies: no known drug allergies.
 Social history: married, works full time in a warehouse. Tobacco: former smoker, 35 pack-years; quit in 2019. Alcohol: rarely, no longer drinks to excess.
 Family history: father with COPD.
 
-Examination: BP 124/78, HR 72, BMI 27. Lungs clear. Heart regular. Abdomen soft.
+Examination: BP 101/69, HR 88, BMI 28. Lungs clear. Heart regular. Abdomen soft.
 
 Assessment and plan: health maintenance. Influenza vaccine given. Basic metabolic panel drawn. Return in 1 year.
 
@@ -282,7 +286,7 @@ Left kidney 11.0 cm. Normal echogenicity. No mass, stone or hydronephrosis.
 Bladder: unremarkable.
 
 Impression:
-1.8 cm simple cyst of the right kidney (Bosniak I). No follow-up imaging needed.
+1.8 cm simple cyst of the right kidney. No follow-up imaging needed.
 
 Electronically signed: Hannah Cole, MD, Radiology, 2026-10-20 10:42`;
 
@@ -345,13 +349,19 @@ const overlay: Overlay = {
       })
       .map((r) => ({ resourceType: r.resourceType, id: r.id! }));
 
-    // Denise Holloway's base creatinine results become a stable CKD 3b series; Synthea's MDRD
-    // eGFR results, which no longer match them, go.
-    const holloway = [...world.resources()].filter((r): r is R<'Observation'> => r.resourceType === 'Observation' && r.subject?.reference === 'Patient/pt-0010');
-    const creatinine = holloway
-      .filter((o) => (o.code?.coding ?? []).some((c) => c.system === LOINC && (c.code === '2160-0' || c.code === '38483-4')))
-      .map((o): Resource => ({ ...o, valueQuantity: { ...o.valueQuantity, value: (o.effectiveDateTime ?? '') < '2025-01-01' ? 1.38 : 1.46 } }));
-    const mdrd = holloway.filter((o) => (o.code?.coding ?? []).some((c) => c.code === '33914-3')).map((o) => ({ resourceType: 'Observation', id: o.id! }));
+    // A patient's base creatinine results, set by date.
+    const observations = (pt: string) => [...world.resources()].filter((r): r is R<'Observation'> => r.resourceType === 'Observation' && r.subject?.reference === `Patient/${pt}`);
+    const creatinineOf = (pt: string, value: (at: string) => number) =>
+      observations(pt)
+        .filter((o) => (o.code?.coding ?? []).some((c) => c.system === LOINC && (c.code === '2160-0' || c.code === '38483-4')))
+        .map((o): Resource => ({ ...o, valueQuantity: { ...o.valueQuantity, value: value(o.effectiveDateTime ?? '') } }));
+    // Denise Holloway's become a stable CKD 3b series; Synthea's MDRD eGFR results, which no
+    // longer match them, go. Leslie Parisian's become the 0.95 mg/dL his MDRD eGFRs of 79 imply
+    // (MDRD at 67 and 68, male), which stay.
+    const creatinine = [...creatinineOf('pt-0010', (at) => (at < '2025-01-01' ? 1.38 : 1.46)), ...creatinineOf('pt-0007', () => 0.95)];
+    const mdrd = observations('pt-0010')
+      .filter((o) => (o.code?.coding ?? []).some((c) => c.code === '33914-3'))
+      .map((o) => ({ resourceType: 'Observation', id: o.id! }));
     const gone = new Set(mdrd.map((o) => `Observation/${o.id}`));
     const panels = [...world.resources()]
       .filter((r): r is R<'DiagnosticReport'> => r.resourceType === 'DiagnosticReport' && (r.result ?? []).some((x) => gone.has(x.reference ?? '')))
@@ -414,7 +424,9 @@ const overlay: Overlay = {
       report('dr-t2-bmp-c-1022', 'pt-0008', 'enc-t2-lab-c-1022', ['LAB', 'Laboratory'], BMP, '2026-10-22T14:35:00-04:00', '2026-10-22T18:40:00-04:00', CLINIC, {
         results: ['na', 'k', 'cl', 'co2', 'bun', 'cr', 'glu', 'ca'].map((k) => `obs-t2-c-${k}`),
       }),
-      item(4, 'pt-0008', 'DiagnosticReport/dr-t2-bmp-c-1022', '2026-10-22T18:40:00-04:00', CLINIC, 'Basic metabolic panel (2026-10-22): potassium 6.4 mmol/L, critical high'),
+      item(4, 'pt-0008', 'DiagnosticReport/dr-t2-bmp-c-1022', '2026-10-22T18:40:00-04:00', CLINIC, 'Basic metabolic panel (2026-10-22): potassium 6.4 mmol/L, critical high', [
+        { time: '2026-10-22T18:50:00-04:00', text: 'Lab: critical value called to the clinic at 18:50; the office was closed and the ordering provider could not be reached. Filed to the inbox.' },
+      ]),
 
       // Item 5: Denise Holloway, CKD 3b, lisinopril started on 10-06; true hyperkalemia.
       condition('cond-t2-ckd3b', 'pt-0010', '700379002', 'Chronic kidney disease stage 3B (disorder)', '2026-02-03T09:00:00-05:00'),
@@ -423,17 +435,17 @@ const overlay: Overlay = {
         id: 'mr-t2-lisinopril',
         status: 'active',
         intent: 'order',
-        medicationCodeableConcept: { coding: [{ system: RXNORM, code: '314077', display: 'lisinopril 20 MG Oral Tablet' }], text: 'lisinopril 20 MG Oral Tablet' },
+        medicationCodeableConcept: { coding: [{ system: RXNORM, code: '314076', display: 'lisinopril 10 MG Oral Tablet' }], text: 'lisinopril 10 MG Oral Tablet' },
         subject: subject('pt-0010'),
         authoredOn: '2026-10-06T10:00:00-04:00',
         requester: OKAFOR,
         reasonCode: [{ text: 'Microalbuminuria due to type 2 diabetes mellitus' }],
         dosageInstruction: [
           {
-            text: '20 mg by mouth once daily',
+            text: '10 mg by mouth once daily',
             timing: { repeat: { frequency: 1, period: 1, periodUnit: 'd' } },
             route: { coding: [{ system: SNOMED, code: '26643006', display: 'Oral route' }], text: 'oral' },
-            doseAndRate: [{ doseQuantity: { value: 20, unit: 'mg', system: UCUM, code: 'mg' } }],
+            doseAndRate: [{ doseQuantity: { value: 10, unit: 'mg', system: UCUM, code: 'mg' } }],
           },
         ],
       },
@@ -442,7 +454,9 @@ const overlay: Overlay = {
       report('dr-t2-bmp-d-1022', 'pt-0010', 'enc-t2-lab-d-1022', ['LAB', 'Laboratory'], BMP, '2026-10-22T15:15:00-04:00', '2026-10-22T18:45:00-04:00', CLINIC, {
         results: ['na', 'k', 'cl', 'co2', 'bun', 'cr', 'glu', 'ca'].map((k) => `obs-t2-d-${k}`),
       }),
-      item(5, 'pt-0010', 'DiagnosticReport/dr-t2-bmp-d-1022', '2026-10-22T18:45:00-04:00', CLINIC, 'Basic metabolic panel (2026-10-22): potassium 6.2 mmol/L, critical high'),
+      item(5, 'pt-0010', 'DiagnosticReport/dr-t2-bmp-d-1022', '2026-10-22T18:45:00-04:00', CLINIC, 'Basic metabolic panel (2026-10-22): potassium 6.2 mmol/L, critical high', [
+        { time: '2026-10-22T18:55:00-04:00', text: 'Lab: critical value called to the clinic at 18:55; the office was closed and the ordering provider could not be reached. Filed to the inbox.' },
+      ]),
 
       // Item 6: Tomás Ruiz, 16, knee X-ray with an aggressive lesion.
       condition('cond-t2-knee-pain', 'pt-0053', '30989003', 'Knee pain (finding)', '2026-10-22T16:00:00-04:00'),

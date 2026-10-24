@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { nodeTaskSource } from '../../cli/adapters/tasks-node.ts';
 import { matrixEnv } from '../../cli/matrix.ts';
 import { loadStore } from '../../packages/env/fixture-source.ts';
+import type { Resource } from '../../packages/env/store.ts';
 import { lintWorld } from '../../packages/env/lint/index.ts';
 import type { WorldView } from '../../packages/grader/matrix/types.ts';
 import { expected } from './expected.ts';
@@ -34,6 +35,44 @@ describe('results-inbox', () => {
     expect(d.items.hemolyzed_k).toMatchObject({ hemolyzed: true, by: '2026-10-26' });
     expect(d.items.critical_k).toMatchObject({ hemolyzed: false, by: '2026-10-23' });
     expect(d.items.bone.by).toBe('2026-11-05');
+  });
+
+  // RBC-RAD-05 §2 in general (clinical F6, review M2): the world with Linda Marsh's H&P smoking
+  // line, or the CT's nodule size, rewritten.
+  const HP = 'doc-t2-hp-lm58';
+  const b64 = (t: string) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
+  const unb64 = (d: string) => new TextDecoder().decode(Uint8Array.from(atob(d), (c) => c.charCodeAt(0)));
+  const swap = (id: string, edit: (text: string) => string, extra: Resource[] = []): WorldView => {
+    const changed = all.map((r) => {
+      if (r.id !== id) return r;
+      const x = structuredClone(r) as Resource & { content?: Array<{ attachment: { data: string } }>; presentedForm?: Array<{ data: string }> };
+      const att = x.content?.[0]?.attachment ?? x.presentedForm![0]!;
+      att.data = b64(edit(unb64(att.data)));
+      return x;
+    });
+    const rs = [...extra, ...changed];
+    return { get: (type, rid) => rs.find((r) => r.resourceType === type && r.id === rid), all: (type) => (type === undefined ? rs : rs.filter((r) => r.resourceType === type)) };
+  };
+  const smoker = (line: string, extra: Resource[] = []) => (derive(swap(HP, (t) => t.replace(/Tobacco: [^.]*\./, `Tobacco: ${line}`), extra)) as typeof expected).items.nodule;
+
+  it('classifies every smoking history under RBC-RAD-05 §2', () => {
+    expect(smoker('current smoker, 10 pack-years.')).toMatchObject({ risk: 'high', action: 'order' });
+    expect(smoker('former smoker, 10 pack-years; quit in 2001.')).toMatchObject({ risk: 'low', action: 'close' });
+    expect(smoker('former smoker, 10 pack-years; quit in 2015.')).toMatchObject({ risk: 'high' });
+    expect(smoker('former smoker, 25 pack-years; quit in 1990.')).toMatchObject({ risk: 'high' });
+    expect(smoker('never smoker.')).toMatchObject({ risk: 'low' });
+  });
+
+  it('takes the most recent note that states a smoking history, not the first in store order', () => {
+    const old = structuredClone(all.find((r) => r.id === HP)!) as Resource & { date?: string; content: Array<{ attachment: { data: string } }> };
+    old.id = 'doc-test-old-hp';
+    old.date = '2019-01-01T10:00:00-05:00';
+    old.content[0]!.attachment.data = b64('Tobacco: never smoker.');
+    expect(smoker('former smoker, 35 pack-years; quit in 2019.', [old])).toMatchObject({ risk: 'high', sources: [expected.items.nodule.sources[0], `DocumentReference/${HP}`] });
+  });
+
+  it('applies RBC-RAD-05 §2 only to a nodule under 6 mm', () => {
+    expect(() => derive(swap('dr-t2-ct-0604', (t) => t.replaceAll('5 mm solid nodule', '7 mm solid nodule')))).toThrow(/7 mm nodule is outside RBC-RAD-05 §2/);
   });
 
   // The overlay cannot read instruction.md or the policy files, so their prompt-date, weekday and

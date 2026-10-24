@@ -51,10 +51,13 @@ const fullName = (p: Patient | undefined) => {
   return `${n?.given?.[0] ?? ''} ${n?.family ?? ''}`.trim();
 };
 
-// RBC-RAD-05 §2: the smoking history a note of the patient states, if any.
+// RBC-RAD-05 §2: the smoking history the patient's most recent note that states one gives, if
+// any (by note date, then id; never store order).
 function smoking(world: WorldView, patient: string): { note: string; pack_years: number | null; quit_year: number | null; never: boolean } | undefined {
-  for (const d of world.all('DocumentReference') as readonly (R & { subject?: Ref })[]) {
-    if (d.subject?.reference !== patient) continue;
+  const notes = (world.all('DocumentReference') as readonly (R & { subject?: Ref; date?: string })[])
+    .filter((d) => d.subject?.reference === patient)
+    .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || (a.id! < b.id! ? -1 : 1));
+  for (const d of notes) {
     const text = noteText(d as never) ?? '';
     const packs = /(\d+(?:\.\d+)?)\s*pack-years?/i.exec(text);
     const quit = /quit\s+(?:in\s+)?(\d{4})/i.exec(text);
@@ -84,10 +87,14 @@ export function derive(world: WorldView): Json {
         const nodule = /(\d+)\s*mm solid nodule/i.exec(text);
         if (nodule) {
           // §2 and §1: the risk from the chart's smoking history, the window from the index study.
+          // Low risk is a never smoker, or fewer than 20 pack-years and quit 15 or more years ago;
+          // every other history is high risk, a current smoker (no quit year) included.
+          if (Number(nodule[1]) >= 6) throw new Error(`${key(report)}: a ${nodule[1]} mm nodule is outside RBC-RAD-05 §2`);
           const history = smoking(world, patient);
           if (!history) throw new Error(`${patient}: no smoking history in a note`);
-          const years = history.quit_year === null ? Infinity : Number(NOW_DATE.slice(0, 4)) - history.quit_year;
-          const high = !history.never && ((history.pack_years ?? 0) >= 20 || years < 15);
+          const years = history.quit_year === null ? 0 : Number(NOW_DATE.slice(0, 4)) - history.quit_year;
+          const low = history.never || (history.pack_years !== null && history.pack_years < 20 && years >= 15);
+          const high = !low;
           const index = clinicDate(report.effectiveDateTime!);
           const due = plusMonths(index, 12);
           out.nodule = {

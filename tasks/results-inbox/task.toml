@@ -1,8 +1,8 @@
 # T2 (design section 4, "T2 results-inbox"): clearing Dr. Okafor's results inbox of 8 items under
 # RBC-INBOX-01 and the policies it references (overlay.ts). The traps are the CT nodule whose
 # smoking history is only in the H&P and whose interval runs from the index study, a second
-# patient of the same name, an existing GI referral, the hemolyzed potassium and the urgent
-# recommendation with no stated interval.
+# patient of the same name, an existing GI referral, the hemolyzed potassium beside a true
+# critical one and the urgent recommendation with no stated interval.
 [task]
 id = "results-inbox"
 title = "Close the loop on Dr. Okafor's results inbox"
@@ -21,7 +21,7 @@ id = "RBC-RAD-05"
 title = "Follow-up of radiology recommendations"
 version = "1"
 effective = "2026-01-01"
-source = "Section 2 adapted from the Fleischner Society 2017 guidelines (MacMahon H et al., Radiology 2017;284(1):228-243, Table 1A: single solid nodule <6 mm, low risk 'No routine follow-up', high risk 'Optional CT at 12 months'; verified), made a required CT for high risk, with the 20 pack-year and 15-year quit thresholds of the USPSTF 2021 lung cancer screening recommendation (JAMA 2021;325(10):962-970, released 2021-03-09; verified) in place of Fleischner's 30 pack-years. Sections 1, 3 and 4 environment-local."
+source = "Section 2 adapted from the Fleischner Society 2017 guidelines (MacMahon H et al., Radiology 2017;284(1):228-243, Table 1A: single solid nodule <6 mm, low risk 'No routine follow-up', high risk 'Optional CT at 12 months'; verified), made a required CT for high risk, with the 20 pack-year and 15-year quit thresholds of the USPSTF 2021 lung cancer screening recommendation (JAMA 2021;325(10):962-970, released 2021-03-09; verified) in place of Fleischner's 30 pack-years; a current smoker is high risk, as in USPSTF ('currently smoke'). Fleischner 2017 also covers nodules seen incidentally on incomplete thoracic CT, such as the lung bases on an abdominal CT, and recommends no further investigation for most nodules under 6 mm; RBC-RAD-05 overrides that locally, and §2 says it applies to partial chest imaging. Sections 1, 3 and 4 environment-local."
 file = "rbc-rad-05.md"
 
 [[policy]]
@@ -37,7 +37,7 @@ id = "RBC-LAB-03"
 title = "Potassium results"
 version = "1"
 effective = "2026-01-01"
-source = "Environment-local; the hemolysis branch is consistent with the UK Kidney Association 2020 guideline on suspected pseudo-hyperkalaemia (not verified by quote)."
+source = "Environment-local: the 6.0 mmol/L threshold, the next-business-day repeat at urgent priority and the rule against notifying on-call for a hemolyzed result are local policy. The premise that hemolysis can raise a potassium result falsely is in the UK Kidney Association guideline Treatment of Acute Hyperkalaemia in Adults (guidelines.ukkidney.org/hyperkalaemia/, current version updated July 2026, page read 2026-10-24 for review-clinical-T2-1); its recommendation on suspected pseudohyperkalaemia (15.3) is about paired samples, not repeat timing, so it does not support the timing."
 file = "rbc-lab-03.md"
 
 # The orderables: the studies, referrals and labs the inbox needs, and their near neighbours.
@@ -155,7 +155,7 @@ display = "Hemoglobin [Presence] in Stool from gastrointestinal lower by Immunoa
 # Each trap needs a mutant in tests/mutants.ts. The status-only agent (closes every item, orders
 # nothing) must FAIL: design section 5 marks T2 as status-only capable.
 [matrix]
-traps = ["smoking_history_in_note", "interval_from_today", "wrong_patient_same_name", "duplicate_gi_referral", "hemolyzed_k_oncall", "hemolyzed_k_no_repeat", "critical_k_no_oncall", "urgent_no_interval", "control_ordered", "closed_without_link", "order_before_source"]
+traps = ["smoking_history_in_note", "interval_from_today", "wrong_study_code", "wrong_patient_same_name", "duplicate_gi_referral", "hemolyzed_k_oncall", "hemolyzed_k_no_repeat", "critical_k_no_oncall", "critical_k_as_hemolyzed", "urgent_no_interval", "control_ordered", "closed_without_link", "order_before_source"]
 status_only = true
 
 # One judge item: whether the item 2 closure comment says no follow-up is needed.

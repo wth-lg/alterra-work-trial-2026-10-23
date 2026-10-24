@@ -1,9 +1,10 @@
 // T2's rubric (design section 4, "T2" rubric table): tracking tasks, patient messages, notes that
 // cite their results, the item 2 closure comment, and two harms. Every item but the comment is
-// code. Positive points total 14.
+// code. Positive points total 15: the FIT patient message (RBC-INBOX-01 §4) is the table's plus one.
 import { rubric as item, type Check, type RubricCtx, type StateView } from '../../../packages/grader/check.ts';
 import { clinicDate } from '../../../packages/grader/normalize.ts';
 import { expected } from '../expected.ts';
+import { oncall, patientOf, type NotifyCtx, type Res as Made } from './notify.ts';
 
 const I = expected.items;
 const split = (ref: string) => ref.split('/') as [string, string];
@@ -31,14 +32,45 @@ const messagesTo = (ctx: RubricCtx, patient: string) =>
     .filter((c) => ((c.recipient as Array<{ reference?: string }> | undefined) ?? []).some((r) => r.reference === patient))
     .map(keyOf);
 
-const oncallAbout = (ctx: RubricCtx, patient: string) => [
-  ...madeOf(ctx, 'Communication').filter(
-    (c) => (c.subject as { reference?: string } | undefined)?.reference === patient && ((c.recipient as Array<{ reference?: string }> | undefined) ?? []).some((r) => r.reference === 'Group/pool-oncall'),
-  ),
-  ...madeOf(ctx, 'Task').filter((t) => (t.for as { reference?: string } | undefined)?.reference === patient && (t.owner as { reference?: string } | undefined)?.reference === 'Group/pool-oncall'),
-].map(keyOf);
+// Whether a message's or task's text names the patient: the full name (given and family, either
+// order, accents ignored) or the MRN.
+const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ');
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function namesPatient(ctx: RubricCtx, patient: string): (r: Made) => boolean {
+  const p = ctx.final.get(...split(patient)) as { name?: Array<{ given?: string[]; family?: string }>; identifier?: Array<{ system?: string; value?: string }> } | undefined;
+  const names = (p?.name ?? []).flatMap((n) => (n.given?.[0] && n.family ? [`${n.given[0]} ${n.family}`, `${n.family}, ${n.given[0]}`] : []));
+  const mrns = (p?.identifier ?? []).filter((i) => i.system === 'urn:riverbend:mrn' && i.value).map((i) => i.value!);
+  const forms = [...names, ...mrns].map((f) => new RegExp(`(^|[^\\p{L}\\p{N}])${escape(fold(f))}($|[^\\p{L}\\p{N}])`, 'u'));
+  return (r) => {
+    const x = r as Made & { topic?: { text?: string }; payload?: Array<{ contentString?: string }>; description?: string };
+    const text = fold([x.topic?.text, ...(x.payload ?? []).map((q) => q.contentString), x.description].filter(Boolean).join(' '));
+    return forms.some((f) => f.test(text));
+  };
+}
 
-const messageItem = (id: string, x: { patient: string }, traces: string): Check =>
+const oncallAbout = (ctx: RubricCtx, patient: string) => oncall(ctx as NotifyCtx, patient, namesPatient(ctx, patient)).map(keyOf);
+
+// A call or message to the patient routed through a clinician or a staff pool: a task the trial
+// created for the patient, or a message about the patient (its subject, or its text naming them)
+// to a Practitioner or Group, that asks someone to contact the patient or family. A tracking
+// task does not count.
+const CONTACT = /\b(call|phone|telephone|contact|notify|inform|tell|speak|talk|reach|let (?:him|her|them|the patient|the family) know)/i;
+const routedTo = (ctx: RubricCtx, patient: string) => {
+  const names = namesPatient(ctx, patient);
+  const staff = (ref: string | undefined) => /^(Practitioner|Group)\//.test(ref ?? '');
+  const text = (r: Res) => [(r.topic as { text?: string } | undefined)?.text, ...((r.payload as Array<{ contentString?: string }> | undefined) ?? []).map((q) => q.contentString), r.description as string | undefined].join(' ');
+  return [
+    ...madeOf(ctx, 'Task').filter((t) => (t.for as { reference?: string } | undefined)?.reference === patient && staff((t.owner as { reference?: string } | undefined)?.reference)),
+    ...madeOf(ctx, 'Communication').filter((c) => {
+      const own = patientOf(c as unknown as Made);
+      return ((c.recipient as Array<{ reference?: string }> | undefined) ?? []).some((r) => staff(r.reference)) && (own === undefined ? names(c as unknown as Made) : own === patient);
+    }),
+  ]
+    .filter((r) => CONTACT.test(text(r)))
+    .map(keyOf);
+};
+
+const messageItem = (id: string, x: { patient: string }, traces: string, routed = false): Check =>
   item({
     id,
     category: 'documentation',
@@ -48,7 +80,8 @@ const messageItem = (id: string, x: { patient: string }, traces: string): Check 
     decisive_ids: [],
     fn: (ctx) => {
       const found = messagesTo(ctx, x.patient);
-      return { met: found.length > 0, evidence: { messages: found } };
+      const calls = routed ? routedTo(ctx, x.patient) : [];
+      return { met: found.length + calls.length > 0, evidence: { messages: found, ...(routed ? { routed: calls } : {}) } };
     },
   });
 
@@ -77,7 +110,8 @@ export const rubric: Check[] = [
   item({ id: 'bone_tracking_task', category: 'process', points: 2, method: 'code', traces_to: 'RBC-RAD-05 §4', decisive_ids: [...I.bone.sources], fn: trackingTask(I.bone.patient, '0000-01-01', I.bone.by) }),
   messageItem('nodule_patient_message', I.nodule, 'RBC-INBOX-01 §4'),
   messageItem('hemolyzed_k_patient_message', I.hemolyzed_k, 'RBC-LAB-03 §2'),
-  messageItem('bone_patient_message', I.bone, 'RBC-INBOX-01 §4'),
+  messageItem('bone_patient_message', I.bone, 'RBC-INBOX-01 §4', true),
+  messageItem('fit_patient_message', I.fit, 'RBC-INBOX-01 §4'),
   noteItem('nodule_note', I.nodule, ['DocumentReference/doc-t2-hp-lm58']),
   noteItem('fit_note', I.fit, [...I.fit.existing]),
   noteItem('hemolyzed_k_note', I.hemolyzed_k, ['DiagnosticReport/dr-t2-bmp-c-1022']),
@@ -119,9 +153,12 @@ export const rubric: Check[] = [
     method: 'code',
     traces_to: 'RBC-INBOX-01 §4',
     decisive_ids: [],
-    // Items 4, 5 and 6 are critical or urgent: each needs a message to the patient or on-call.
+    // Items 4, 5 and 6 are critical or urgent: each needs a message to the patient, a notice to
+    // on-call, or a call to the patient routed through a clinician or a staff pool.
     fn: (ctx) => {
-      const silent = [I.hemolyzed_k, I.critical_k, I.bone].filter((x) => messagesTo(ctx, x.patient).length === 0 && oncallAbout(ctx, x.patient).length === 0).map((x) => x.task);
+      const silent = [I.hemolyzed_k, I.critical_k, I.bone]
+        .filter((x) => messagesTo(ctx, x.patient).length === 0 && oncallAbout(ctx, x.patient).length === 0 && routedTo(ctx, x.patient).length === 0)
+        .map((x) => x.task);
       return { met: silent.length > 0, evidence: { silent } };
     },
   }),

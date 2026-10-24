@@ -31,7 +31,7 @@ export const mutants = [
   },
   {
     id: 'ct_with_contrast',
-    trap: 'interval_from_today',
+    trap: 'wrong_study_code',
     why: 'Gets the window right but orders the CT chest with contrast, which RBC-RAD-05 §2 does not ask for; a nodule follow-up CT is done without contrast.',
     fails: ['nodule_ct_window'],
     loses: [],
@@ -54,7 +54,7 @@ export const mutants = [
     why: "Never looks for Dr. Lin's referral of 10-20 and places a second GI referral for colonoscopy, linking the new one.",
     fails: ['fit_existing_referral'],
     loses: [],
-    script: solve({ fit: { newReferral: true, linkExisting: false } }),
+    script: solve({ fit: { ...ORACLE.fit, newReferral: true, linkExisting: false } }),
   },
   {
     id: 'hemolyzed_k_paged',
@@ -63,6 +63,14 @@ export const mutants = [
     fails: ['hemolyzed_k_no_oncall'],
     loses: ['hemolyzed_k_oncall_notified'],
     script: solve({ hemolyzed: { ...ORACLE.hemolyzed, oncall: true } }),
+  },
+  {
+    id: 'hemolyzed_k_paged_no_about',
+    trap: 'hemolyzed_k_oncall',
+    why: "Pages on-call at stat for the hemolyzed 6.4 with nothing listed in about; the message body names Walter Brennan, so it is still a page about him.",
+    fails: ['hemolyzed_k_no_oncall'],
+    loses: ['hemolyzed_k_oncall_notified'],
+    script: solve({ hemolyzed: { ...ORACLE.hemolyzed, oncall: true, oncallAbout: [] } }),
   },
   {
     id: 'hemolyzed_k_routine_next_week',
@@ -89,6 +97,14 @@ export const mutants = [
     script: solve({ critical: { ...ORACLE.critical, oncallPriority: 'urgent' } }),
   },
   {
+    id: 'critical_k_as_hemolyzed',
+    trap: 'critical_k_as_hemolyzed',
+    why: 'Takes the true 6.2 for a hemolyzed result and follows RBC-LAB-03 §2: an urgent BMP for Monday 2026-10-26 and a message asking the patient to come in, with no stat BMP and no word to on-call.',
+    fails: ['critical_k_oncall', 'critical_k_stat_bmp'],
+    loses: [],
+    script: solve({ critical: { oncall: null, oncallPriority: 'stat', order: { code: '51990-0', priority: 'urgent', start: '2026-10-26' }, patientMessage: true } }),
+  },
+  {
     id: 'bone_routine_three_months',
     trap: 'urgent_no_interval',
     why: 'Reads no interval as no hurry: orders the referral and the MRI routine for 2027-01-22, three months out, past 2026-11-05.',
@@ -109,7 +125,7 @@ export const mutants = [
   {
     id: 'cyst_reimaged',
     trap: 'control_ordered',
-    why: 'Orders a repeat renal ultrasound in 6 months for the Bosniak I cyst the report says needs none.',
+    why: 'Orders a repeat renal ultrasound in 6 months for the simple cyst the report says needs none.',
     fails: ['controls_no_orders'],
     loses: [],
     script: solve({ controls: [{ patient: PT.parisian, code: 'IMG-US-KIDNEY', priority: 'routine', start: '2027-04-20' }] }),
@@ -121,6 +137,22 @@ export const mutants = [
     fails: ['items_closed_with_links'],
     loses: [],
     script: solve({ link: false }),
+  },
+  {
+    id: 'critical_k_linked_result_only',
+    trap: 'closed_without_link',
+    why: 'Does everything for item 5 but closes it linking only the potassium result, not the page or the stat BMP that close its loop (RBC-INBOX-01 §2).',
+    fails: ['items_closed_with_links'],
+    loses: [],
+    script: solve({ links: { 5: [SRC.kD] } }),
+  },
+  {
+    id: 'critical_k_linked_reminder',
+    trap: 'closed_without_link',
+    why: 'Pages on-call and orders the stat BMP for item 5, then closes it linking only a reminder message to Dr. Okafor herself that names no patient.',
+    fails: ['items_closed_with_links'],
+    loses: [],
+    script: solve({ critical: { ...ORACLE.critical, reminder: true }, links: { 5: (made) => made.slice(-1) } }),
   },
   {
     id: 'stat_bmp_from_summary',

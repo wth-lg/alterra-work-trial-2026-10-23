@@ -8,6 +8,7 @@ import { gate, type Check, type GateCtx } from '../../../packages/grader/check.t
 import type { GateOf } from '../../../packages/grader/gate-view.ts';
 import { clinicDate } from '../../../packages/grader/normalize.ts';
 import { expected } from '../expected.ts';
+import { ONCALL, oncall as notices, patientOf, type Res } from './notify.ts';
 import { rubric } from './rubric.ts';
 
 const I = expected.items;
@@ -16,7 +17,6 @@ const LOINC = 'http://loinc.org';
 
 type SR = GateOf<'ServiceRequest'>;
 type Task = GateOf<'Task'>;
-type Comm = GateOf<'Communication'>;
 
 const URGENT = ['urgent', 'asap', 'stat'];
 // The codes each order may carry: a CT chest without contrast (the low-dose screening study is
@@ -50,15 +50,25 @@ const startDate = (r: SR) => {
   return s === undefined ? null : clinicDate(s);
 };
 
-// The on-call notifications the trial made about a patient: a message to pool-oncall, or a task
-// pool-oncall owns (design section 5, "action equivalence").
+// The on-call notifications the trial made about a patient (notify.ts): a message to pool-oncall
+// whose subject is the patient, or with no subject and linked by the patient's inbox item, or a
+// task pool-oncall owns for the patient.
 export function oncall(ctx: GateCtx, patient: string): Array<{ id: string; priority: string | null }> {
-  const mine = created(ctx);
-  const comms = ctx.final
-    .all('Communication')
-    .filter((c: Comm) => mine.has(keyOf(c)) && c.subject?.reference === patient && (c.recipient ?? []).some((r) => r.reference === 'Group/pool-oncall'));
-  const tasks = ctx.final.all('Task').filter((t: Task) => mine.has(keyOf(t)) && t.for?.reference === patient && t.owner?.reference === 'Group/pool-oncall');
-  return [...comms, ...tasks].map((r) => ({ id: keyOf(r), priority: r.priority ?? null }));
+  return notices(ctx, patient).map((r) => ({ id: keyOf(r), priority: r.priority ?? null }));
+}
+
+// What closes an actionable item's loop (RBC-INBOX-01 §2): an order, task, message or medication
+// change the trial made for the item's patient, a page to on-call with no patient (the item that
+// links it names the patient), or the existing resource that already does (item 3's referral).
+// The result itself, a note, or a resource of no patient sent elsewhere does not.
+const ACTIONS = ['ServiceRequest', 'Task', 'Communication', 'MedicationRequest'];
+function closesLoop(ctx: GateCtx, mine: Set<string>, x: { patient: string; existing?: readonly string[] }, ref: string): boolean {
+  if (x.existing?.includes(ref)) return true;
+  const [type, id] = split(ref);
+  const r = ctx.final.get(type, id) as Res | undefined;
+  if (!mine.has(ref) || !ACTIONS.includes(type) || r === undefined) return false;
+  const patient = patientOf(r);
+  return patient === x.patient || (patient === undefined && type === 'Communication' && (r.recipient ?? []).some((p) => p.reference === ONCALL));
 }
 
 const item = (ctx: GateCtx, ref: string) => ctx.final.get('Task', split(ref)[1]);
@@ -178,12 +188,10 @@ const gates: Check[] = [
     fn: (ctx) => {
       const mine = created(ctx);
       const open = Object.values(I).filter((x) => item(ctx, x.task)?.status !== 'completed').map((x) => x.task);
-      // An actionable item's closure links something that closes its loop: what the trial made
-      // for it, or the existing resource (item 3's referral). Linking the result itself does not.
-      const actionable = [I.nodule, I.fit, I.hemolyzed_k, I.critical_k, I.bone];
-      const unlinked = actionable
-        .filter((x) => !linked(item(ctx, x.task)).some((r) => mine.has(r) || ('existing' in x && (x.existing as readonly string[]).includes(r))))
-        .map((x) => x.task);
+      // An actionable item's closure links something that closes its loop; an item that needs no
+      // action may link its result or nothing (RBC-INBOX-01 §2 and §3).
+      const actionable: Array<{ task: string; patient: string; existing?: readonly string[] }> = [I.nodule, I.fit, I.hemolyzed_k, I.critical_k, I.bone];
+      const unlinked = actionable.filter((x) => !linked(item(ctx, x.task)).some((r) => closesLoop(ctx, mine, x, r))).map((x) => x.task);
       return { met: open.length === 0 && unlinked.length === 0, evidence: { open, unlinked }, ids: [...open, ...unlinked] };
     },
   }),

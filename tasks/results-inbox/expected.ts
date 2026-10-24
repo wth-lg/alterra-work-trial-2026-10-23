@@ -6,7 +6,7 @@
 //   nodule       5 mm solid nodule on the CT of 2026-06-04; H&P: 35 pack-years, quit 2019, so
 //                high risk (RBC-RAD-05 §2); CT chest 12 months from the index study (§1):
 //                2027-06-04, window 2027-05-04 to 2027-07-04 (from today it would be 2027-10-23)
-//   cyst         Bosniak I, report says no follow-up: close with a comment, no order
+//   cyst         simple renal cyst, report says no follow-up: close with a comment, no order
 //   fit          positive FIT; Dr. Lin's GI referral sr-t2-gi-1020 is active: link it, no new one
 //   hemolyzed_k  K 6.4, hemolyzed (RBC-LAB-03 §2): repeat BMP urgent by the next business day,
 //                Monday 2026-10-26; message the patient; no on-call

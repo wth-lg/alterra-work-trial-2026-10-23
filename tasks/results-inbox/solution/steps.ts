@@ -101,7 +101,7 @@ export function writer() {
 export const calls = (...ws: Write[]): ScriptCall[] => ws.map((w) => w.call);
 
 // The item 2 closure comment, and the normal results'.
-export const CYST_COMMENT = 'Bosniak I simple right renal cyst. The report recommends no follow-up imaging, so no follow-up is needed under RBC-RAD-05 and RBC-INBOX-01 §3.';
+export const CYST_COMMENT = 'Simple right renal cyst. The report recommends no follow-up imaging, so no follow-up is needed under RBC-RAD-05 and RBC-INBOX-01 §3.';
 export const NORMAL_COMMENT = 'Normal result, reviewed and acknowledged.';
 
 export const NOTES = {
