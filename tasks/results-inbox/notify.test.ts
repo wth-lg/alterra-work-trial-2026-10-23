@@ -8,6 +8,7 @@ import { loadMatrixTask, main } from '../../cli/matrix.ts';
 import type { MatrixOptions } from '../../packages/grader/matrix/matrix.ts';
 import type { Agent, MatrixTask } from '../../packages/grader/matrix/types.ts';
 import { ORACLE, solve } from './solution/solve.ts';
+import { PT, SRC, writer } from './solution/steps.ts';
 
 const task = await loadMatrixTask('results-inbox');
 const ONE = { trials: 1, regrades: 1, isolation: false } as const satisfies MatrixOptions;
@@ -17,6 +18,15 @@ async function run(alternatives: Agent[]) {
   const over: Partial<MatrixTask> = { alternatives: [...task.alternatives, ...alternatives] };
   await main(['--task', task.id], { env: {}, out: (l) => lines.push(l), load: async () => ({ ...task, ...over }), options: { ...ONE, cases: alternatives.map((a) => a.id) } });
   return lines.join('\n');
+}
+
+// The oracle with no message to the Ruiz family, plus a task for the RN triage pool about Tomás.
+// Unless the task asks to contact the family, item 6 loses bone_patient_message and is an
+// urgent item no one was told of (urgent_item_unnotified).
+function staffTask(description: string): Agent['script'] {
+  const s = solve({ bone: { ...ORACLE.bone, message: false } });
+  const t = writer().task(PT.ruiz, 'Group/pool-rn-triage', '2026-10-23', 'urgent', description, SRC.xr);
+  return [...s.slice(0, -1), { calls: [t.call] }, s.at(-1)!];
 }
 
 describe('results-inbox notifications', () => {
@@ -29,5 +39,14 @@ describe('results-inbox notifications', () => {
   it('cannot see an unlinked page with no patient from a gate', async () => {
     const text = await run([{ id: 'probe_critical_page_unlinked', why: 'probe', script: solve({ critical: { ...ORACLE.critical, oncallAbout: [] }, links: { 5: (m) => [m[1]!] } }) }]);
     expect(text).toMatch(/alternative probe_critical_page_unlinked: FAIL .*failed: critical_k_oncall\)/);
+  });
+
+  it('does not count a staff task to contact ortho as contacting the patient (-1 and -5 of 15)', async () => {
+    const text = await run([
+      { id: 'probe_contact_ortho', why: 'probe', script: staffTask('Contact ortho to confirm the urgent orthopaedic oncology referral is booked by 2026-11-05.') },
+      { id: 'probe_call_the_mother', why: 'probe', script: staffTask('Call the mother today: Dr. Okafor needs to discuss the knee X-ray and the referral.') },
+    ]);
+    expect(text).toMatch(/alternative probe_contact_ortho: PASS score 0\.600/);
+    expect(text).toMatch(/alternative probe_call_the_mother: PASS score 1\.000/);
   });
 });

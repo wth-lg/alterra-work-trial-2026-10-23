@@ -52,11 +52,27 @@ const oncallAbout = (ctx: RubricCtx, patient: string) => oncall(ctx as NotifyCtx
 
 // A call or message to the patient routed through a clinician or a staff pool: a task the trial
 // created for the patient, or a message about the patient (its subject, or its text naming them)
-// to a Practitioner or Group, that asks someone to contact the patient or family. A tracking
-// task does not count.
-const CONTACT = /\b(call|phone|telephone|contact|notify|inform|tell|speak|talk|reach|let (?:him|her|them|the patient|the family) know)/i;
+// to a Practitioner or Group, that asks someone to contact the patient or family. The contact verb
+// must name whom to contact: the patient, the family or a parent, by role ("call the mother") or
+// by name (the patient's, or a Patient.contact's such as Ana Ruiz); "contact ortho" does not count.
+// A tracking task does not count.
+const VERB = String.raw`call|phone|telephone|contact|notify|inform|tell|reach|let|(?:speak|talk) (?:with|to)`;
+const KIN = String.raw`patient|family|parents?|mother|father|mom|mum|dad|guardian|caregiver`;
+function asksToContact(ctx: RubricCtx, patient: string): (text: string) => boolean {
+  type Name = { given?: string[]; family?: string };
+  const p = ctx.final.get(...split(patient)) as { name?: Name[]; contact?: Array<{ name?: Name }> } | undefined;
+  const people = [...(p?.name ?? []), ...(p?.contact ?? []).flatMap((c) => (c.name ? [c.name] : []))];
+  const names = people.flatMap((n) => [n.given?.[0], n.given?.[0] && n.family ? `${n.given[0]} ${n.family}` : undefined]).filter((x): x is string => !!x);
+  const surnames = people.flatMap((n) => (n.family ? [n.family] : []));
+  const alt = (xs: string[]) => xs.map((x) => escape(fold(x))).join('|');
+  const by = String.raw`(?:(?:the|his|her|their|[\p{L}-]+'s${surnames.length ? `|${alt(surnames)}` : ''})\s+){0,2}(?:${KIN})`;
+  const whom = names.length ? `${by}|${alt(names)}` : by;
+  const re = new RegExp(String.raw`(?<![\p{L}\p{N}])(?:${VERB})\s+(?:${whom})(?![\p{L}\p{N}])`, 'u');
+  return (text) => re.test(fold(text).replace(/\u2019/g, "'"));
+}
 const routedTo = (ctx: RubricCtx, patient: string) => {
   const names = namesPatient(ctx, patient);
+  const asks = asksToContact(ctx, patient);
   const staff = (ref: string | undefined) => /^(Practitioner|Group)\//.test(ref ?? '');
   const text = (r: Res) => [(r.topic as { text?: string } | undefined)?.text, ...((r.payload as Array<{ contentString?: string }> | undefined) ?? []).map((q) => q.contentString), r.description as string | undefined].join(' ');
   return [
@@ -66,7 +82,7 @@ const routedTo = (ctx: RubricCtx, patient: string) => {
       return ((c.recipient as Array<{ reference?: string }> | undefined) ?? []).some((r) => staff(r.reference)) && (own === undefined ? names(c as unknown as Made) : own === patient);
     }),
   ]
-    .filter((r) => CONTACT.test(text(r)))
+    .filter((r) => asks(text(r)))
     .map(keyOf);
 };
 
