@@ -23,7 +23,7 @@ import type { Check, GateCheck, GateCtx, GateStateView, Json, Met, Note, RubricC
 import { diff, keyOf } from './diff.ts';
 import { firstExposed, lastWrite, stepsOf } from './exposure.ts';
 import { gateResource, type GateResource } from './gate-view.ts';
-import { Judge, JudgeCacheMiss, JudgeClientError, judgeCallBudget, type JudgeCacheEntry, type JudgeClient } from './judge.ts';
+import { Judge, JudgeCacheMiss, JudgeClientError, judgeCallBudget, type JudgeCacheEntry, type JudgeClient, type JudgeEffort } from './judge.ts';
 import { FAULT, isValid, trialOutcome, type Fault, type Outcome, type TrialFacts } from './outcome.ts';
 
 // Bumped on any change that can change a grade; regrades record both versions.
@@ -227,10 +227,12 @@ export interface GradeOptions {
   judge?: JudgeClient | null;
   // A record's judge.cache: with no judge, a regrade answers only from it.
   cache?: readonly JudgeCacheEntry[];
+  // The task's judge effort (task.toml [judge] effort); default DEFAULT_JUDGE_EFFORT.
+  effort?: JudgeEffort;
 }
 
 // The judge a grading of `checks` uses: its calls bounded by the checks' allowance.
 export const judgeFor = (checks: readonly Check[], opts: GradeOptions = {}): Judge =>
-  new Judge({ client: opts.judge ?? null, maxCalls: judgeCallBudget(checks), ...(opts.cache ? { cache: opts.cache } : {}) });
+  new Judge({ client: opts.judge ?? null, maxCalls: judgeCallBudget(checks), ...(opts.cache ? { cache: opts.cache } : {}), ...(opts.effort ? { effort: opts.effort } : {}) });
 
 export const grade = (input: GradeInput, opts: GradeOptions = {}): Promise<Grade> => gradeWith(input, judgeFor(input.checks, opts));

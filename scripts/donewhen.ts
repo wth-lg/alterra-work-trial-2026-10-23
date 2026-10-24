@@ -13,7 +13,9 @@
 //   cli spend --json                    {total_usd}, printed as an INFO line
 //
 // Test hooks, honored only when NODE_ENV=test: DONEWHEN_CLI replaces `node cli/index.ts`
-// (space-separated command prefix); DONEWHEN_MIN_TASKS replaces the minimum of 5 tasks.
+// (space-separated command prefix); DONEWHEN_MIN_TASKS replaces the minimum of 5 tasks;
+// DONEWHEN_INCLUDE_UNDERSCORE=1 makes clause (3) count _-prefixed task directories (tasks/_toy),
+// so the real oracle can be checked before any real task exists.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -102,10 +104,11 @@ function hasRubric(taskDir: string): boolean {
 
 function clause3(): Verdict {
   const min = isTest && process.env.DONEWHEN_MIN_TASKS ? Number(process.env.DONEWHEN_MIN_TASKS) : MIN_TASKS;
+  const underscore = isTest && process.env.DONEWHEN_INCLUDE_UNDERSCORE === '1';
   const tasksDir = join(root, 'tasks');
   const ids = existsSync(tasksDir)
     ? readdirSync(tasksDir, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && !e.name.startsWith('_') && !e.name.startsWith('.'))
+        .filter((e) => e.isDirectory() && (underscore || !e.name.startsWith('_')) && !e.name.startsWith('.'))
         .map((e) => e.name)
         .sort()
     : [];

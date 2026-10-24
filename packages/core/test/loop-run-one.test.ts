@@ -2,13 +2,19 @@
 // batchStart is given and opens nothing; a ledger whose exposure plus that projection crosses
 // $450 refuses before any call; a mocked trial writes the record and the trajectory JSONL,
 // meters through the ledger and closes its batch; a rerun of a recorded trial key sends nothing.
+// The toy has a grader (tasks/_toy/tests/grader.ts), so the dry-run projection is the per-trial
+// cap plus its judge allowance (bounded by the judge's body cap), and the mocked trial makes three
+// model calls and two judge calls, each judge call on its own right-sized grant, and PASSes.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { tempDir, write } from '../../../scripts/test/helpers.ts';
 import { scenarioTransport } from '../../../apps/web/src/harness/scenarios.ts';
-import { main, type Deps } from '../../../cli/run-one.ts';
+import { main, projection, type Deps } from '../../../cli/run-one.ts';
+import { checks as TOY_CHECKS } from '../../../tasks/_toy/tests/grader.ts';
 import type { Transport } from '../anthropic.ts';
+import { PER_TRIAL_CAP_USD } from '../cost.ts';
+import { JUDGE_MAX_CALL_USD } from '../../grader/judge.ts';
 import { parseTrajectory } from '../trajectory.ts';
 
 function harness(env: Record<string, string>) {
@@ -37,14 +43,16 @@ describe('cli run-one', () => {
     const dir = tempDir('run-one');
     const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
     expect(await main([...ARGS, '--dry-run', '--out', dir], h.deps)).toBe(0);
-    expect(h.lines).toContain('LIVE_PROJECTION_USD=6.000000');
+    expect(h.lines).toContain(`LIVE_PROJECTION_USD=${projection(TOY_CHECKS).toFixed(6)}`);
     expect(h.calls()).toBe(0);
     expect(existsSync(join(dir, 'spend.jsonl'))).toBe(false);
   });
 
-  it('refuses with 0 calls when ledger + projection = $450.01', async () => {
+  // The loop's grant is the per-trial cap; the dry run's larger projection is the upper bound
+  // spend --check takes, and each judge call is checked against $450 on its own grant.
+  it('refuses with 0 calls when ledger + the per-trial cap = $450.01', async () => {
     const dir = tempDir('run-one');
-    write(dir, 'spend.jsonl', seed(444.01));
+    write(dir, 'spend.jsonl', seed(Number((450.01 - PER_TRIAL_CAP_USD).toFixed(6))));
     const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
     expect(h.calls()).toBe(0);
@@ -57,16 +65,27 @@ describe('cli run-one', () => {
     write(dir, 'spend.jsonl', seed(1));
     const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(0);
-    expect(h.calls()).toBe(2);
+    expect(h.calls()).toBe(5);
     const record = JSON.parse(readFileSync(join(dir, 'trials/_toy/claude-opus-5-5/high/mock-toy/0.json'), 'utf8'));
-    expect(record).toMatchObject({ task_id: '_toy', status: 'COMPLETED', effort: 'high', models_returned: ['claude-opus-5-5'], mock: 'toy', trajectory: 'trajectories/_toy/claude-opus-5-5/high/mock-toy/0.jsonl' });
+    expect(record).toMatchObject({ task_id: '_toy', status: 'COMPLETED', outcome: 'PASS', score: 1, effort: 'high', models_returned: ['claude-opus-5-5'], mock: 'toy', trajectory: 'trajectories/_toy/claude-opus-5-5/high/mock-toy/0.jsonl' });
     expect(record.state_hash.replay_final).toBe(record.state_hash.final);
     const events = parseTrajectory(readFileSync(join(dir, 'trajectories/_toy/claude-opus-5-5/high/mock-toy/0.jsonl'), 'utf8'));
-    expect(events.filter((e) => e.type === 'request')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'request')).toHaveLength(3);
     const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    expect(rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed')).toHaveLength(2);
-    expect(rows.filter((r) => r.kind === 'open')).toHaveLength(1);
-    expect(rows.filter((r) => r.kind === 'close')).toHaveLength(1);
+    expect(rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed')).toHaveLength(5);
+    // The loop's grant holds the per-trial cap; each judge call has its own grant, opened at
+    // that call's worst case from its real request body (under the $1 per-call ceiling) and closed
+    // after.
+    const opens = rows.filter((r) => r.kind === 'open');
+    expect(opens.map((r) => r.projection)).toEqual([6, expect.any(Number), expect.any(Number)]);
+    const judgeReserves = rows.filter((r) => r.kind === 'reserve' && opens.slice(1).some((o) => o.batch_id === r.batch_id));
+    expect(judgeReserves.map((r) => r.cost_usd)).toEqual(opens.slice(1).map((o) => o.projection));
+    for (const o of opens.slice(1)) expect(o.projection).toBeLessThan(JUDGE_MAX_CALL_USD);
+    expect(rows.filter((r) => r.kind === 'close')).toHaveLength(3);
+    // The record carries every settled dollar of the trial: the loop's and the judge's.
+    const settled = rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed').reduce((s, r) => s + r.cost_usd, 0);
+    expect(record.cost_usd + record.judge_cost_usd).toBeCloseTo(settled, 9);
+    expect(h.lines.join('\n')).toMatch(/^spend: projected \$\S+ \(loop cap \$6\.00 \+ 2 judge grants \$\S+\), settled \$\S+ \(loop \$\S+ \+ judge \$\S+\)$/m);
     expect(rows.filter((r) => r.kind === 'reserve' && r.call_id !== 'seed').every((r) => r.trial === 'mock:run-one:_toy/claude-opus-5-5/high/mock-toy/0')).toBe(true);
 
     const again = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
@@ -102,7 +121,7 @@ describe('cli run-one', () => {
     const low = harness(env);
     const lowArgs = ['--task', '_toy', '--model', 'claude-opus-5-5', '--effort', 'low', '--index', '0', '--mock', 'toy', '--out', dir];
     expect(await main(lowArgs, low.deps)).toBe(0);
-    expect(low.calls()).toBe(2);
+    expect(low.calls()).toBe(5);
     expect(low.lines.join('\n')).not.toMatch(/already recorded/);
     const recordLine = low.lines.find((l) => l.startsWith('record '))!;
     expect(JSON.parse(readFileSync(recordLine.slice('record '.length), 'utf8'))).toMatchObject({ effort: 'low', mock: 'toy' });

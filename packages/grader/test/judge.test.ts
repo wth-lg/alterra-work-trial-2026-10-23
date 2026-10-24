@@ -1,16 +1,17 @@
 // The judge request (design section 5, "Judge and hybrid items"): one isolated call per
-// criterion on claude-opus-5-5 at effort low, through the same client and ledger as the trial,
-// with no sampling parameter; the cache key is sha256 over model, effort, prompt version,
-// prompt and the graded text.
+// criterion on claude-opus-5-5 at the task's judge effort (default medium) with max_tokens
+// 16,000, through the same client and ledger as the trial, with no sampling parameter; the cache
+// key is sha256 over model, effort, prompt version, prompt and the graded text; a request whose
+// worst case is over $1 is not sent.
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { MODEL } from '../../core/anthropic.ts';
-import { JUDGE_EFFORT, JUDGE_PROMPT_VERSION, Judge, JudgeClientError, judgeAllowanceUsd, judgeCallBudget } from '../judge.ts';
+import { DEFAULT_JUDGE_EFFORT, JUDGE_MAX_CALL_USD, JUDGE_MAX_TOKENS, JUDGE_PROMPT_VERSION, Judge, JudgeClientError, OVER_BUDGET, judgeAllowanceUsd, judgeCallBudget } from '../judge.ts';
 import { judged, hybrid } from '../check.ts';
 import { scriptedJudge } from './helpers.ts';
 
 describe('judge', () => {
-  it('sends one user turn at effort low, without the gate result or any banned parameter', async () => {
+  it('sends one user turn at effort medium by default and max_tokens 16,000, without the gate result or any banned parameter', async () => {
     const j = scriptedJudge(['{"verdict":"met","quote":"5 mg BID"}']);
     const judge = new Judge({ client: j.client });
     const v = await judge.judge({ criterion: 'States the new apixaban dose.', text: 'Apixaban increased to 5 mg BID.' });
@@ -20,8 +21,10 @@ describe('judge', () => {
     expect(history).toHaveLength(1);
     expect(history[0]!.role).toBe('user');
     expect(JSON.stringify(history[0]!.content)).toContain('States the new apixaban dose.');
-    expect(params.output_config).toEqual({ effort: JUDGE_EFFORT });
-    expect(JUDGE_EFFORT).toBe('low');
+    expect(params.output_config).toEqual({ effort: DEFAULT_JUDGE_EFFORT });
+    expect(DEFAULT_JUDGE_EFFORT).toBe('medium');
+    expect(params.max_tokens).toBe(JUDGE_MAX_TOKENS);
+    expect(JUDGE_MAX_TOKENS).toBe(16_000);
     for (const k of ['temperature', 'top_p', 'top_k', 'model', 'tool_choice', 'tools']) expect(params).not.toHaveProperty(k);
   });
 
@@ -31,11 +34,35 @@ describe('judge', () => {
     await judge.judge({ criterion: 'c', text: 't' });
     const [entry] = judge.entries();
     const prompt = JSON.stringify(j.requests[0]!.history[0]!.content);
-    const expected = createHash('sha256').update(JSON.stringify([MODEL, 'low', JUDGE_PROMPT_VERSION, JSON.parse(prompt), 't'])).digest('hex');
-    expect(entry).toMatchObject({ key: expected, kind: 'judge', model: MODEL, effort: 'low', prompt_version: JUDGE_PROMPT_VERSION });
+    const expected = createHash('sha256').update(JSON.stringify([MODEL, 'medium', JUDGE_PROMPT_VERSION, JSON.parse(prompt), 't'])).digest('hex');
+    expect(entry).toMatchObject({ key: expected, kind: 'judge', model: MODEL, effort: 'medium', prompt_version: JUDGE_PROMPT_VERSION });
     // A second ask of the same question is answered from the cache.
     await judge.judge({ criterion: 'c', text: 't' });
     expect(j.requests).toHaveLength(1);
+  });
+
+  it("asks at the task's effort, which is in the key, so another effort never reuses an answer", async () => {
+    const j = scriptedJudge(['{"verdict":"met","quote":"t"}', '{"verdict":"met","quote":"t"}']);
+    const high = new Judge({ client: j.client, effort: 'high' });
+    await high.judge({ criterion: 'c', text: 't' });
+    expect(j.requests[0]!.params.output_config).toEqual({ effort: 'high' });
+    const [entry] = high.entries();
+    expect(entry!.effort).toBe('high');
+    const medium = new Judge({ client: j.client, cache: high.entries() });
+    await medium.judge({ criterion: 'c', text: 't' });
+    expect(j.requests).toHaveLength(2);
+    expect(medium.entries()[0]!.key).not.toBe(entry!.key);
+  });
+
+  it('refuses before sending a request whose worst case is over $1, and grades it unknown, marked over budget', async () => {
+    const j = scriptedJudge(['{"verdict":"met","quote":"x"}']);
+    const judge = new Judge({ client: j.client });
+    const v = await judge.judge({ criterion: 'c', text: 'x'.repeat(90_000) });
+    expect(j.requests).toHaveLength(0);
+    expect(v.met).toBe('unknown');
+    expect(String(v.evidence.reason)).toMatch(new RegExp(`^${OVER_BUDGET}: worst case \\$1\\.\\d+ > \\$1\\.00 per call$`));
+    expect(judge.entries()[0]).toMatchObject({ answer: null, calls: 0 });
+    expect(JUDGE_MAX_CALL_USD).toBe(1);
   });
 
   it('a met verdict needs a quote; a not_met verdict may have none, since absence cannot be quoted', async () => {

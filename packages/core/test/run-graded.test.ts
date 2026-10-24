@@ -23,6 +23,7 @@ import { parseTrajectory, stripTimestamps, toJsonl } from '../trajectory.ts';
 const root = new URL('../../../', import.meta.url);
 const WORLD = new Uint8Array(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
 const MANIFEST = JSON.parse(readFileSync(new URL('fixtures/manifest.json', root), 'utf8')) as { world: { state_hash: string } };
+const DEFINITIONS = JSON.parse(readFileSync(new URL('fixtures/definitions-pruned.json', root), 'utf8'));
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
@@ -37,13 +38,13 @@ class MemoryStore implements LedgerStore {
 }
 
 // _toy's checks: the patient read before finish (gate), the summary names the patient (judge),
-// and a code item that is not met, so the score is not trivially 1.
+// and a code item that is not met (the toy orders no medication), so the score is not trivially 1.
 const CHECKS: Check[] = [
   gate({ id: 'G1', category: 'retrieval', traces_to: 'instruction L4', decisive_ids: ['pt-0001'], fn: (ctx) => ({ met: ctx.exposedAt('pt-0001') !== null, evidence: { exposed: ctx.exposedAt('pt-0001') !== null } }) }),
   judged({ id: 'R1', points: 2, category: 'documentation', traces_to: 'instruction L5', decisive_ids: [], criterion: 'The summary names the patient that was read.', text: (ctx) => ctx.final_text ?? '' }),
-  rubric({ id: 'R2', points: 1, method: 'code', category: 'action', traces_to: 'instruction L6', decisive_ids: [], fn: (ctx) => ({ met: ctx.writes().length > 0, evidence: { writes: ctx.writes().length } }) }),
+  rubric({ id: 'R2', points: 1, method: 'code', category: 'action', traces_to: 'instruction L6', decisive_ids: [], fn: (ctx) => ({ met: ctx.writes().some((k) => k.startsWith('MedicationRequest/')), evidence: { writes: ctx.writes().length } }) }),
 ];
-const VERDICT = '{"verdict":"met","quote":"Patient/pt-0001"}';
+const VERDICT = '{"verdict":"met","quote":"Peter Prosacco"}';
 
 // Trial requests (they carry tools) get the scenario; judge requests get VERDICT.
 function routed(trial: Transport, judge: (n: number) => Response = (n) => okResponse({ text: VERDICT }, 100 + n)) {
@@ -68,7 +69,7 @@ async function trial(over: Partial<RunOptions> = {}, judge?: (n: number) => Resp
   const client = new MessagesClient({ grant, ledger, apiKey: 'test-key-not-real', fetch: (q) => ((clock += 4000), r.transport(q)), sleep: async () => {} });
   const events: TrialEvent[] = [];
   const result = await run('_toy', 'claude-opus-5-5', {
-    tasks: nodeTaskSource({ testMode: true }), client, world: { read: async () => WORLD }, worldHash: MANIFEST.world.state_hash,
+    tasks: nodeTaskSource({ testMode: true }), client, world: { read: async () => WORLD }, worldHash: MANIFEST.world.state_hash, definitions: DEFINITIONS,
     now: () => clock, onEvent: (e) => events.push(e), checks: CHECKS, ...over,
   });
   return { result, events, judgeCalls: r.judgeCalls, rows: store.rows };
@@ -88,13 +89,13 @@ describe('run() grades', () => {
     expect((last as GradedEvent).record).toEqual(result.record);
     expect(result.events.at(-1)).toBe(last);
     expect(events.filter((e) => e.type === 'graded')).toHaveLength(1);
-    expect(result.record).toMatchObject({ status: 'COMPLETED', outcome: 'PASS', valid: true, turns: 2, score: 2 / 3 });
+    expect(result.record).toMatchObject({ status: 'COMPLETED', outcome: 'PASS', valid: true, turns: 3, score: 2 / 3 });
     expect(result.record.cost_usd).toBeGreaterThan(0);
     expect(result.record.checks.map((c) => [c.id, c.met])).toEqual([['G1', true], ['R1', true], ['R2', false]]);
     // The judge ran through the trial's client: metered by the same ledger, at effort low.
     expect(judgeCalls()).toBe(1);
     expect(result.record.judge_cost_usd).toBeGreaterThan(0);
-    expect(rows.filter((r) => r.kind === 'settle')).toHaveLength(3);
+    expect(rows.filter((r) => r.kind === 'settle')).toHaveLength(4);
     // The terminal-event helper skips graded.
     expect(terminalEvent(events)).toBe(events.at(-2));
   });
@@ -137,7 +138,7 @@ describe('run() grades', () => {
     const last = events.at(-1) as GradedEvent;
     expect(last.type).toBe('graded');
     expect(last.record).toEqual(result.record);
-    expect(result.record).toMatchObject({ status: 'COMPLETED', outcome: 'GRADER_ERROR', valid: false, fault: 'grader', score: null, attribution: null, turns: 2, models_returned: ['claude-opus-5-5'], error: { check: 'G2' } });
+    expect(result.record).toMatchObject({ status: 'COMPLETED', outcome: 'GRADER_ERROR', valid: false, fault: 'grader', score: null, attribution: null, turns: 3, models_returned: ['claude-opus-5-5'], error: { check: 'G2' } });
     expect(result.record.cost_usd).toBeGreaterThan(0);
     expect(result.record.tool_calls).toBeGreaterThan(0);
     expect(result.record.state_hash.initial).toBe(MANIFEST.world.state_hash);
@@ -206,7 +207,7 @@ describe('run() grades', () => {
     expect(events.at(-1)).toMatchObject({ type: 'graded', record: { outcome: 'INFRA_API', valid: false, fault: 'infra', error: { check: 'R1', stops_batch: true } } });
     expect(result.record.judge.cache).toEqual([]);
     expect(result.record.cost_usd).toBeGreaterThan(0);
-    expect(result.record.turns).toBe(2);
+    expect(result.record.turns).toBe(3);
   });
 });
 
@@ -294,7 +295,7 @@ describe('cli run-one grades', () => {
     const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') }, { checks: async () => [CHECKS[0]!, THROWS] });
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
     const record = JSON.parse(readFileSync(join(dir, `trials/${KEY}.json`), 'utf8')) as TrialRecord & { trajectory: string };
-    expect(record).toMatchObject({ status: 'COMPLETED', outcome: 'GRADER_ERROR', valid: false, fault: 'grader', turns: 2 });
+    expect(record).toMatchObject({ status: 'COMPLETED', outcome: 'GRADER_ERROR', valid: false, fault: 'grader', turns: 3 });
     expect(record.cost_usd).toBeGreaterThan(0);
     const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as LedgerRow);
     expect(record.cost_usd).toBeCloseTo(rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0), 12);

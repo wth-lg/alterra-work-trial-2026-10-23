@@ -1,8 +1,9 @@
 // The same mocked trial in a Chromium Worker and in Node (plan phase P7): each scenario through
 // packages/core/worker-host.ts in the harness trial Worker, and through run() in this Node
 // process, must give the same trajectory JSONL once timestamps are stripped, and the same final
-// hash. The toy scenario runs tasks/_toy; the write scenario commits one create_task on the
-// harness task _write (write-task.ts), so hash parity after a write is checked too. Both sides
+// hash. The toy scenario runs tasks/_toy, whose note is one committed write_note; the write
+// scenario commits one create_task on the harness task _write (write-task.ts), so hash parity
+// after a write is checked for both. Both sides
 // answer from apps/web/src/harness/scenarios.ts and meter through the tab ledger (in-memory
 // here, since Node has no sessionStorage); nothing calls the API.
 import { readFileSync } from 'node:fs';
@@ -40,7 +41,7 @@ async function nodeTrial(task: string, scenario: ScenarioName) {
   }
 }
 
-for (const [task, scenario, writes] of [['_toy', 'toy', 0], ['_write', 'write', 1]] as const) {
+for (const [task, scenario, writes] of [['_toy', 'toy', 1], ['_write', 'write', 1]] as const) {
   test(`the ${scenario} scenario in a Chromium Worker gives the same trajectory and final hash as in Node`, async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto('./harness.html');

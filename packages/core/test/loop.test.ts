@@ -50,6 +50,7 @@ async function trial(script: Script, over: Partial<RunOptions> = {}, task = '_to
     client,
     world: { read: async () => WORLD },
     worldHash: MANIFEST.world.state_hash,
+    definitions: DEFINITIONS,
     now: () => clock,
     onEvent: (e) => events.push(e),
     ...over,
@@ -163,7 +164,7 @@ describe('run() with a mocked API', () => {
     const { result, events } = await trial(SCENARIOS.toy);
     checkStream(events, result.events);
     const r = result.record;
-    expect(r).toMatchObject({ status: 'COMPLETED', stop: 'finish', task_id: '_toy', effort: 'high', models_returned: ['claude-opus-5-5'], turns: 2, tool_calls: 3 });
+    expect(r).toMatchObject({ status: 'COMPLETED', stop: 'finish', task_id: '_toy', effort: 'high', models_returned: ['claude-opus-5-5'], turns: 3, tool_calls: 4 });
     expect(r.state_hash.initial).toBe(MANIFEST.world.state_hash);
     expect(r.state_hash.replay_final).toBe(r.state_hash.final);
     expect(r.task_version).toMatch(/^[0-9a-f]{64}$/);

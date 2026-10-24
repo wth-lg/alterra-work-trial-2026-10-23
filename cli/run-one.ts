@@ -15,10 +15,16 @@
 //   --dry-run   prints the projection batchStart is given, and makes no call and opens nothing
 // The trial is graded with the task's checks, tasks/<id>/tests/grader.ts (none when the task
 // has no grader), and its judge items go through the trial's client and ledger.
-// The projection is the per-trial cap ($6) plus the judge allowance for the task's judge and
-// hybrid items: the loop stops a trial once its cost reaches the cap, one trial makes no reruns,
-// and each judge item makes at most two bounded calls. batchStart refuses it, before any call,
-// when the ledger's exposure plus the projection would cross $450. Each event is appended to the
+// The dry run's projection is the per-trial cap ($6) plus the judge allowance for the task's
+// judge and hybrid items: the loop stops a trial once its cost reaches the cap, one trial makes no
+// reruns, and each judge item makes at most two calls, each priced at the judge's body cap,
+// because the text the judge grades does not exist yet. It is the upper bound `spend --check`
+// takes. A live run holds less: the loop's grant is the per-trial cap, which batchStart refuses,
+// before any call, when the ledger's exposure plus $6 would cross $450; each judge call then
+// opens its own grant at that call's worst case from its real request (perCallGrantClient),
+// checked against $450 at that moment, under the same trial label. run-one prints both, and
+// exits 1 if the ledger's settled sum for the trial is not the record's cost_usd plus
+// judge_cost_usd. Each event is appended to the
 // trajectory as it arrives, so a crash leaves a valid prefix, and the last line is the graded
 // record; the record (outcome, gate checks, rubric scores included) is written at the end. A
 // check that throws or a judge call that fails does not make run() throw: the trial is graded
@@ -44,7 +50,7 @@ import { DEFAULT_EFFORT, EFFORTS, internalErrorRecord, run, type Effort, type Tr
 import type { TaskSource } from '../packages/core/tasks.ts';
 import { toJsonLine } from '../packages/core/trajectory.ts';
 import type { Check } from '../packages/grader/check.ts';
-import { judgeAllowanceUsd } from '../packages/grader/judge.ts';
+import { judgeAllowanceUsd, perCallGrantClient } from '../packages/grader/judge.ts';
 import { isScenario, scenarioTransport, type ScenarioName } from '../apps/web/src/harness/scenarios.ts';
 import { nodeNow } from './adapters/clock-node.ts';
 import { openNodeLedger, readRows } from './adapters/ledger-node.ts';
@@ -151,9 +157,12 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   try {
     const { ledger, mode, path } = openNodeLedger({ transport: mock === undefined ? 'live' : 'offline', env: deps.env });
     deps.out(`ledger ${mode} ${path}`);
-    const grant = await ledger.batchStart(p);
+    const grant = await ledger.batchStart(PER_TRIAL_CAP_USD);
     try {
-      const client = new MessagesClient({ grant, ledger, apiKey: key, fetch: mock === undefined ? deps.fetch : deps.mock(mock), trial: label, log: (l) => deps.out(l) });
+      const transport = mock === undefined ? deps.fetch : deps.mock(mock);
+      const client = new MessagesClient({ grant, ledger, apiKey: key, fetch: transport, trial: label, log: (l) => deps.out(l) });
+      const judgeGrants: number[] = [];
+      const judge = perCallGrantClient({ ledger, client: (g) => new MessagesClient({ grant: g, ledger, apiKey: key, fetch: transport, trial: label, log: (l) => deps.out(l) }), onGrant: (usd) => judgeGrants.push(usd) });
       const trajectory = join(outDir, trajectoryRel);
       mkdirSync(dirname(trajectory), { recursive: true });
       writeFileSync(trajectory, '');
@@ -171,6 +180,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
           effort,
           trialId: label,
           checks,
+          judge,
           onEvent: (e) => appendFileSync(trajectory, toJsonLine(e)),
         }));
       } catch (e) {
@@ -192,10 +202,20 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       const gates = record.checks.filter((c) => c.kind === 'gate');
       deps.out(`outcome ${record.outcome}, score ${record.score === null ? 'n/a' : record.score.toFixed(3)}, gates ${gates.filter((c) => c.met === true).length}/${gates.length}, judge ${record.judge.calls} calls (${record.judge.unknown} unknown) ${money(record.judge_cost_usd)}`);
       if (record.error) deps.out(`not graded (${record.fault}): ${record.error.check ?? 'trial'}: ${redactText(record.error.message, [key])}${record.error.stops_batch ? '; the batch stops' : ''}`);
+      // A call counts at its highest settle row, as the ledger counts it.
+      const perCall = new Map<string, number>();
+      for (const r of readRows(path)) if (r.trial === label && r.kind === 'settle') perCall.set(r.call_id, Math.max(perCall.get(r.call_id) ?? 0, r.cost_usd));
+      const settled = [...perCall.values()].reduce((sum, x) => sum + x, 0);
+      const granted = judgeGrants.reduce((sum, x) => sum + x, 0);
+      deps.out(`spend: projected ${money(PER_TRIAL_CAP_USD + granted)} (loop cap ${money(PER_TRIAL_CAP_USD)} + ${judgeGrants.length} judge grant${judgeGrants.length === 1 ? '' : 's'} ${money(granted)}), settled ${money(settled)} (loop ${money(record.cost_usd)} + judge ${money(record.judge_cost_usd)})`);
       deps.out(`record ${recordFile}`);
       deps.out(`trajectory ${trajectory}`);
       if (record.sink_error !== undefined) {
         deps.out(`run-one: trajectory write failed: ${redactText(record.sink_error, [key])}; the trajectory is incomplete, the record is written`);
+        return 1;
+      }
+      if (Math.abs(settled - (record.cost_usd + record.judge_cost_usd)) > 1e-9) {
+        deps.out(`run-one: the ledger settled ${money(settled)} for ${label}, and the record says ${money(record.cost_usd + record.judge_cost_usd)}`);
         return 1;
       }
       return succeeded(record) ? 0 : 1;
