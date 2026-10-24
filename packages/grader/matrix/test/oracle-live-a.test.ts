@@ -1,14 +1,13 @@
 // `pnpm cli oracle --live-judge` (plan phase P9, builder-33 item 4) asks the judge through one
 // Judge across the task's cases, so a question two cases share is asked once; each written cache
-// entry records provenance {source: 'live', model, at}; and the offline matrix passes on it.
-// The transport is a mock and the ledger a temp file.
+// entry records provenance {source: 'live', model, at}. (oracle-live-d: the offline matrix
+// passes on such a cache.) The transport is a mock and the ledger a temp file.
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { MODEL } from '../../../core/anthropic.ts';
-import { matrix, TOY } from './harness.ts';
 import { judgeWith, liveJudge } from './oracle-harness.ts';
 
-it('asks each distinct question once, records provenance, and the offline matrix passes on the cache', async () => {
+it('asks each distinct question once and records provenance', async () => {
   const judge = judgeWith(() => 'met');
   const { code, written, ledger, text } = await liveJudge(judge);
   expect(code, text).toBe(0);
@@ -26,8 +25,4 @@ it('asks each distinct question once, records provenance, and the offline matrix
   }
   const rows = readFileSync(ledger, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { kind: string; call_id: string });
   expect(rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed')).toHaveLength(judge.calls);
-
-  const offline = await matrix({ cache: [...entries, ...TOY.cache.filter((e) => !entries.some((x) => x.key === e.key))] }, { trials: 1, regrades: 1, isolation: false, cases: ['one_answer'] });
-  expect(offline.text).toMatch(/^judge cache: 0 misses; source live 4, scripted 10$/m);
-  expect(offline.code).toBe(0);
 });
