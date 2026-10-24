@@ -1,0 +1,7 @@
+# Loop plumbing, not a clinical task: two reads and a finish, so one live trial costs well
+# under $1. `all` skips it outside test mode; `--task _toy` resolves it.
+[task]
+id = "_toy"
+title = "Toy: confirm the signed-in user and one patient's name"
+max_turns = 6
+tools = ["get_context", "fhir_read", "finish"]
