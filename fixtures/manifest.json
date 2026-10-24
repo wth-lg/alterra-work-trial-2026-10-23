@@ -2,18 +2,18 @@
   "now": "2026-10-23T08:00:00-04:00",
   "world": {
     "file": "fixtures/world.ndjson.gz",
-    "state_hash": "0b1b61ad3cc66e5b09d91d029e5abe53fe5818b3b42304e8a51f3eb7681c5053",
-    "ndjson_sha256": "82764cdd0064807254dfa62026dc76da5ace87dbdaea96d5d2cb68dc0da9caa1",
-    "resources": 7490,
+    "state_hash": "f8387483e55c185f43f158815592b81e6dba3cfd8f15e2e20ed56299db01a648",
+    "ndjson_sha256": "6c36eca663e0f4e78a9bff7f293b80032ba44f574ae952f1b805a5eaaa64dabd",
+    "resources": 7492,
     "by_type": {
       "AllergyIntolerance": 40,
-      "Condition": 979,
-      "DiagnosticReport": 506,
-      "DocumentReference": 358,
-      "Encounter": 358,
+      "Condition": 982,
+      "DiagnosticReport": 505,
+      "DocumentReference": 354,
+      "Encounter": 361,
       "Group": 3,
-      "MedicationRequest": 388,
-      "Observation": 3457,
+      "MedicationRequest": 387,
+      "Observation": 3459,
       "Organization": 2,
       "Patient": 60,
       "Practitioner": 3,
@@ -56,13 +56,16 @@
       "Procedure": 1336
     }
   },
-  "overlays": [],
+  "overlays": [
+    "T1"
+  ],
   "inputs": {
     "fixtures/synthea/generate.sh": "9c20f04e81cd71443b418aaa2c2782b47d3f20fffccdce06959da03b40c33fed",
     "packages/env/clock.ts": "ed40c54a55e7dfeb896563636eca1dfd670174f66294b815245e6c621c5452d3",
     "packages/env/overlay.ts": "79ddb1445970e7a1a567e2db0cf778e2b9bfa8ede2ae016e39a04ad0cd18454f",
     "packages/env/world.ts": "cc7dd7c88d47251d63bc5290d7b2faa76ac0f0305aa5f1d94d01384570e8b678",
-    "scripts/fixtures-synthea.ts": "44162b65dc576e507b526132164eda54cb14000936331d48b575f46d9c49d752"
+    "scripts/fixtures-synthea.ts": "44162b65dc576e507b526132164eda54cb14000936331d48b575f46d9c49d752",
+    "tasks/renal-dose-review/overlay.ts": "ab6447cc46121becb1f262f36c02e89c02a527b4fff0f9e5d4e8f832bc90d15e"
   },
   "definitions": {
     "file": "fixtures/definitions-pruned.json",
