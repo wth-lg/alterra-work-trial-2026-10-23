@@ -1,9 +1,11 @@
-// The local runner's health and key contracts: every sample the UI specs route-mock with
+// The local runner's health, key, trial, run and SSE contracts: every sample the UI specs route-mock with
 // passes its validator, and a body with a field missing or mistyped is rejected.
 import { describe, expect, it } from 'vitest';
+import { FINAL_TRIALS_PER_TASK } from '../cost.ts';
 import {
-  ContractError, HEALTH_PATH, KEY_PATH, parseHealth, parseKeyRequest, parseKeyState, parseRunnerError,
-  RUNNER_APP, SAMPLES, TOKEN_HEADER, TOKEN_META,
+  ContractError, HEALTH_PATH, KEY_PATH, MAX_CONCURRENCY, MAX_TRIALS_PER_TASK, parseDryRun, parseHealth, parseKeyRequest, parseKeyState,
+  parseRunnerError, parseRunsList, parseSse, parseSseEnd, parseTrialsAccepted, parseTrialsRefused, parseTrialsRequest, parseTrialView,
+  RUNNER_APP, RUNS_PATH, SAMPLES, sseFrame, SSE_END, TOKEN_HEADER, TOKEN_META, TRIALS_PATH,
 } from '../runner-api.ts';
 
 const without = (o: object, k: string) => Object.fromEntries(Object.entries(o).filter(([name]) => name !== k));
@@ -79,5 +81,69 @@ describe('runner-api validators', () => {
     } catch (e) {
       expect((e as Error).message).not.toContain(key);
     }
+  });
+});
+
+describe('runner-api trial, run and SSE contracts (P12b)', () => {
+  it('accepts every P12b sample', () => {
+    expect(parseTrialsRequest(SAMPLES.trialsRequest)).toEqual(SAMPLES.trialsRequest);
+    expect(parseTrialsAccepted(SAMPLES.trialsAccepted)).toEqual(SAMPLES.trialsAccepted);
+    expect(parseDryRun(SAMPLES.dryRun).projection.total_usd).toBe(SAMPLES.dryRun.projection.total_usd);
+    expect(parseTrialsRefused(SAMPLES.trialsRefused).error.type).toBe('session_cap');
+    expect(parseTrialView(SAMPLES.trial)).toEqual(SAMPLES.trial);
+    expect(parseRunsList(SAMPLES.runs)).toEqual(SAMPLES.runs);
+    expect(parseSseEnd(SAMPLES.sseEnd)).toEqual(SAMPLES.sseEnd);
+    expect([TRIALS_PATH, RUNS_PATH]).toEqual(['api/trials', 'api/runs']);
+  });
+
+  it('takes 1 to 20 trials per task (the final run N) and 1 to 4 concurrency', () => {
+    expect(MAX_TRIALS_PER_TASK).toBe(FINAL_TRIALS_PER_TASK);
+    expect(parseTrialsRequest({ ...SAMPLES.trialsRequest, trials: MAX_TRIALS_PER_TASK }).trials).toBe(20);
+    for (const trials of [0, 21, 1.5, '1', null]) expect(() => parseTrialsRequest({ ...SAMPLES.trialsRequest, trials }), String(trials)).toThrow(ContractError);
+    expect(parseTrialsRequest({ ...SAMPLES.trialsRequest, concurrency: MAX_CONCURRENCY }).concurrency).toBe(4);
+    for (const concurrency of [0, 5]) expect(() => parseTrialsRequest({ ...SAMPLES.trialsRequest, concurrency })).toThrow(ContractError);
+  });
+
+  it('refuses unknown fields, bad task ids, a bad effort or cap, and never echoes a key', () => {
+    const key = ['sk', 'ant', 'api03', 'Z'.repeat(40)].join('-');
+    const bad: unknown[] = [
+      { ...SAMPLES.trialsRequest, extra: key },
+      { ...SAMPLES.trialsRequest, tasks: [] },
+      { ...SAMPLES.trialsRequest, tasks: ['../x'] },
+      { ...SAMPLES.trialsRequest, tasks: ['a', 'a'] },
+      { ...SAMPLES.trialsRequest, effort: 'turbo' },
+      { ...SAMPLES.trialsRequest, session_cap_usd: 0 },
+      { ...SAMPLES.trialsRequest, key: ` ${key}` },
+      { ...SAMPLES.trialsRequest, smoke: 'yes' },
+      { ...SAMPLES.trialsRequest, tasks: [key, 'x y'] },
+    ];
+    for (const b of bad) {
+      try {
+        parseTrialsRequest(b);
+        expect.unreachable(JSON.stringify(b).slice(0, 80));
+      } catch (e) {
+        expect(e).toBeInstanceOf(ContractError);
+        expect((e as Error).message).not.toContain(key);
+      }
+    }
+    expect(parseTrialsRequest({ ...SAMPLES.trialsRequest, key }).key).toBe(key);
+  });
+
+  it('frames and parses the SSE stream: id, event, one data line, comments dropped, a partial frame kept', () => {
+    const a = sseFrame({ id: '0', event: 'request', data: '{"seq":0}' });
+    const end = sseFrame({ id: null, event: SSE_END, data: JSON.stringify(SAMPLES.sseEnd) });
+    expect(a).toBe('id: 0\nevent: request\ndata: {"seq":0}\n\n');
+    const { frames, rest } = parseSse(`${a}: ping\n\n${end}id: 1\nevent: resp`);
+    expect(frames).toEqual([{ id: '0', event: 'request', data: '{"seq":0}' }, { id: null, event: 'end', data: JSON.stringify(SAMPLES.sseEnd) }]);
+    expect(rest).toBe('id: 1\nevent: resp');
+  });
+
+  it('rejects a trial view, runs list or stream end with a missing or mistyped field', () => {
+    for (const k of Object.keys(SAMPLES.trial)) expect(() => parseTrialView(without(SAMPLES.trial, k)), k).toThrow(ContractError);
+    expect(() => parseTrialView({ ...SAMPLES.trial, state: 'done' })).toThrow(ContractError);
+    expect(() => parseRunsList({ runs: [without(SAMPLES.runs.runs[0], 'smoke')] })).toThrow(ContractError);
+    expect(() => parseSseEnd({ state: 'graded' })).toThrow(ContractError);
+    expect(() => parseDryRun({ ...SAMPLES.dryRun, calls: 1 })).toThrow(ContractError);
+    expect(() => parseTrialsAccepted({ ...SAMPLES.trialsAccepted, trial_ids: [] })).toThrow(ContractError);
   });
 });
