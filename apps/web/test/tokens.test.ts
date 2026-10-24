@@ -1,7 +1,11 @@
 // Pins decision (5): Tailwind stone neutrals plus one blue near #5C85FB, no logos, no licensed
 // fonts. Every --color-* token declared in apps/web/src is either the one accent or a stone
-// value copied from Tailwind's own theme; public/ holds only the self-hosted OFL fonts and their
-// licence, and every font file's family (read from its name table) is named in OFL.txt.
+// value copied from Tailwind's own theme (white too: cards are white on a stone-50 page, as in
+// the reference design); the theme resets Tailwind's palette, so only tokens make colour
+// utilities, and no source file names a raw palette class or an arbitrary colour. Text tokens
+// reach 4.5:1 and control borders and the focus ring 3:1 on both backgrounds, light and dark.
+// public/ holds only the self-hosted OFL fonts and their licence, and every font file's family
+// (read from its name table) is named in OFL.txt.
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +116,8 @@ const declarations = (css: string) => [...css.matchAll(/(--color-[\w-]+)\s*:\s*(
 
 const tailwindTheme = readFileSync(join(webRoot, 'node_modules/tailwindcss/theme.css'), 'utf8');
 const STONE = new Set(declarations(tailwindTheme).filter((d) => /^--color-stone-\d+$/.test(d.name)).map((d) => d.value));
+const WHITE = declarations(tailwindTheme).find((d) => d.name === '--color-white')!.value;
+const NEUTRAL = new Set([...STONE, WHITE]);
 
 const cssFiles = files(join(webRoot, 'src')).filter((f) => f.endsWith('.css'));
 const tokens = cssFiles.flatMap((f) => declarations(readFileSync(f, 'utf8')).map((d) => ({ ...d, file: relative(webRoot, f) })));
@@ -136,8 +142,77 @@ describe('colour tokens', () => {
     for (const t of chromatic) expect(deltaE2000(parseColor(t.value).lab, accent), `${t.file} ${t.value}`).toBeLessThanOrEqual(MAX_DELTA_E);
   });
 
-  it('sets every other token to a Tailwind stone value', () => {
-    for (const t of tokens.filter((x) => x.name !== '--color-accent')) expect(STONE.has(t.value), `${t.file} ${t.name}: ${t.value}`).toBe(true);
+  it('sets every other token to a Tailwind stone value or Tailwind white', () => {
+    expect(WHITE).toBe('#fff');
+    for (const t of tokens.filter((x) => x.name !== '--color-accent')) expect(NEUTRAL.has(t.value), `${t.file} ${t.name}: ${t.value}`).toBe(true);
+  });
+});
+
+// --- contrast (WCAG 2.2 relative luminance) -------------------------------------------------
+
+const tokensCss = readFileSync(join(webRoot, 'src/styles/tokens.css'), 'utf8');
+const themeBlock = /@theme\s*{([^}]*)}/.exec(tokensCss)?.[1] ?? '';
+const darkBlock = /@media \(prefers-color-scheme: dark\)\s*{\s*:root\s*{([^}]*)}/.exec(tokensCss)?.[1] ?? '';
+const scheme = (css: string) => Object.fromEntries(declarations(css).map((d) => [d.name.replace('--color-', ''), d.value]));
+const LIGHT = scheme(themeBlock);
+const DARK = { ...LIGHT, ...scheme(darkBlock) };
+
+function luminance(value: string): number {
+  const v = value.trim().toLowerCase();
+  const ok = /^oklch\(\s*([\d.]+)%\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(v);
+  const lin = ok ? oklchToLinear(Number(ok[1]) / 100, Number(ok[2]), Number(ok[3])) : hexToLinear(v);
+  const [r, g, b] = lin.map((c) => Math.min(1, Math.max(0, c))) as Rgb;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+const contrast = (a: string, b: string) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+describe('contrast', () => {
+  it('checks its own maths: black on white is 21:1, stone-500 on stone-100 is about 4.39:1', () => {
+    expect(contrast('#000', '#fff')).toBeCloseTo(21, 5);
+    const stone = (n: number) => declarations(tailwindTheme).find((d) => d.name === `--color-stone-${n}`)!.value;
+    expect(contrast(stone(500), stone(100))).toBeCloseTo(4.39, 1);
+  });
+
+  for (const [name, s] of [['light', LIGHT], ['dark', DARK]] as const) {
+    it(`${name}: text 4.5:1, control borders and the focus ring 3:1, on the page and on cards`, () => {
+      for (const bg of ['canvas', 'surface']) {
+        for (const fg of ['ink', 'ink-muted']) expect(contrast(s[fg]!, s[bg]!), `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        for (const fg of ['line-strong', 'accent']) expect(contrast(s[fg]!, s[bg]!), `${fg} on ${bg}`).toBeGreaterThanOrEqual(3);
+      }
+      expect(contrast(s['on-primary']!, s.primary!), 'on-primary on primary').toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});
+
+// --- no colour outside the tokens --------------------------------------------------------------
+
+const PALETTE = 'slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|black|white';
+const UTILITY = 'text|bg|border(?:-[xytrblse])?|ring|ring-offset|outline|fill|stroke|from|via|to|accent|caret|decoration|divide|placeholder|shadow|inset-shadow';
+// A raw palette class (text-red-500, bg-stone-300/80, hover:bg-white) or an arbitrary colour
+// (text-[#123456], bg-[rgb(1,2,3)], border-[oklch(...)]).
+const RAW_COLOUR = new RegExp(`(?<![\\w-])(?:${UTILITY})-(?:(?:${PALETTE})(?:-\\d{2,3})?(?:\\/\\d+)?(?![\\w-])|\\[(?:#|rgb|hsl|oklch|oklab|lab|lch|color)[^\\]]*\\])`, 'g');
+const rawColours = (text: string) => [...text.matchAll(RAW_COLOUR)].map((m) => m[0]);
+
+describe('colour utilities', () => {
+  it('Tailwind\'s default palette is reset in the theme, so only tokens generate colour utilities', () => {
+    expect(themeBlock).toMatch(/--color-\*\s*:\s*initial\s*;/);
+  });
+
+  it('the raw-colour scan catches planted palette classes and arbitrary colours, and passes token classes', () => {
+    expect(rawColours('<p className="text-red-500 bg-stone-300/80 hover:bg-white border-x-zinc-200 text-[#ff0000]">')).toEqual([
+      'text-red-500', 'bg-stone-300/80', 'bg-white', 'border-x-zinc-200', 'text-[#ff0000]',
+    ]);
+    expect(rawColours('text-ink text-ink-muted bg-surface bg-line/80 border-line-strong text-xs outline-accent text-[13px] bg-canvas')).toEqual([]);
+  });
+
+  it('no file in apps/web/src names a raw palette class or an arbitrary colour', () => {
+    const sources = files(join(webRoot, 'src')).filter((f) => /\.(tsx?|css|html)$/.test(f));
+    expect(sources.length).toBeGreaterThan(0);
+    for (const f of sources) expect(rawColours(readFileSync(f, 'utf8')), relative(webRoot, f)).toEqual([]);
   });
 });
 

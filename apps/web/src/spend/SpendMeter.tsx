@@ -6,7 +6,7 @@ const usd = (v: number) => `$${v.toFixed(2)}`;
 export function SpendMeter() {
   const { cap, spent } = useSessionSpend();
   return (
-    <span className="inline-flex items-center gap-2 text-xs text-ink-muted" title="Session spend against the session cap">
+    <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-ink-muted" title="Session spend against the session cap">
       <span>
         Spend <span className="text-ink">{usd(spent)}</span> of {usd(cap)}
       </span>

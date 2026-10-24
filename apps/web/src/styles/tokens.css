@@ -1,19 +1,23 @@
-/* Decision (5): Tailwind stone neutrals plus one blue accent near #5C85FB. Every colour the
-   shell uses is one of these tokens; apps/web/test/tokens.test.ts pins that the accent is the
-   only chromatic one and that every other value is copied from Tailwind's stone scale. State
-   colours for results (pass, fail, refusal) belong to the views that show them. */
+/* Decision (5): Tailwind stone neutrals plus one blue accent near #5C85FB, as the reference
+   design: white cards with a stone-200 border on a stone-50 page. `--color-*: initial` drops
+   Tailwind's default palette, so these tokens are the only colour utilities that exist;
+   apps/web/test/tokens.test.ts pins that the accent is the only chromatic token, that every
+   other value is copied from Tailwind's stone scale or white, the contrast of each text and
+   control pair, and that no source names a raw palette class. State colours for results
+   (pass, fail, refusal) belong to the views that show them, as named tokens. */
 @theme {
+  --color-*: initial;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
 
   --color-accent: #5c85fb;
 
-  --color-canvas: oklch(97% 0.001 106.424); /* stone-100 */
-  --color-surface: oklch(98.5% 0.001 106.423); /* stone-50 */
+  --color-canvas: oklch(98.5% 0.001 106.423); /* stone-50 */
+  --color-surface: #fff; /* white */
   --color-line: oklch(92.3% 0.003 48.717); /* stone-200 */
-  --color-line-strong: oklch(86.9% 0.005 56.366); /* stone-300 */
+  /* Control borders: 3:1 against the page and the cards (WCAG 1.4.11). */
+  --color-line-strong: oklch(55.3% 0.013 58.071); /* stone-500 */
   --color-ink: oklch(21.6% 0.006 56.043); /* stone-900 */
   --color-ink-muted: oklch(55.3% 0.013 58.071); /* stone-500 */
-  --color-ink-subtle: oklch(70.9% 0.01 56.259); /* stone-400 */
   --color-primary: oklch(26.8% 0.007 34.298); /* stone-800 */
   --color-on-primary: oklch(98.5% 0.001 106.423); /* stone-50 */
 }
@@ -24,10 +28,9 @@
     --color-canvas: oklch(14.7% 0.004 49.25); /* stone-950 */
     --color-surface: oklch(21.6% 0.006 56.043); /* stone-900 */
     --color-line: oklch(26.8% 0.007 34.298); /* stone-800 */
-    --color-line-strong: oklch(37.4% 0.01 67.558); /* stone-700 */
+    --color-line-strong: oklch(55.3% 0.013 58.071); /* stone-500 */
     --color-ink: oklch(97% 0.001 106.424); /* stone-100 */
     --color-ink-muted: oklch(70.9% 0.01 56.259); /* stone-400 */
-    --color-ink-subtle: oklch(55.3% 0.013 58.071); /* stone-500 */
     --color-primary: oklch(92.3% 0.003 48.717); /* stone-200 */
     --color-on-primary: oklch(21.6% 0.006 56.043); /* stone-900 */
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KeyGate } from '../keygate/KeyGate.tsx';
 import { forget, keyStatus, useKeyStatus } from '../keygate/key.ts';
 import { deleteKey } from '../keygate/runner.ts';
@@ -16,6 +16,13 @@ export function App({ surface }: { surface: Surface }) {
   const [notice, setNotice] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState(() => viewFromUrl(location.href));
+  // Set when the gate closes, so focus lands on the view's heading instead of <body>.
+  const [arrived, setArrived] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (arrived && !gate) heading.current?.focus();
+  }, [arrived, gate]);
 
   useEffect(() => {
     const onPop = () => setView(viewFromUrl(location.href));
@@ -39,7 +46,11 @@ export function App({ surface }: { surface: Surface }) {
     setGate(true);
   }
 
-  if (gate) return <KeyGate surface={surface} notice={notice} onDone={() => setGate(false)} onBrowse={() => setGate(false)} />;
+  const leaveGate = () => {
+    setGate(false);
+    setArrived(true);
+  };
+  if (gate) return <KeyGate surface={surface} notice={notice} onDone={leaveGate} onBrowse={leaveGate} />;
 
   return (
     <div className="flex h-screen flex-col bg-canvas">
@@ -53,7 +64,7 @@ export function App({ surface }: { surface: Surface }) {
           }}
         />
         <main className="min-w-0 flex-1 overflow-auto">
-          <EmptyView view={view} />
+          <EmptyView view={view} headingRef={heading} />
         </main>
       </div>
     </div>
