@@ -126,17 +126,16 @@ export const alternatives: Alternative[] = [
     why: 'Keys the final table by patient id instead of name.',
     script: [...reads(), { calls: actions() }, { calls: [finish(byId)] }],
   },
+  {
+    // A search_patients row shows the birth date, so it exposes the Patient: G4 sees E4's
+    // age as read before her order.
+    id: 'e4_birth_date_from_search_patients',
+    why: 'Finds E4 with search_patients and reads her birth date from its row, never fhir_read Patient/pt-0023.',
+    script: [
+      ...reads().map((t) => ({ calls: t.calls.map((c) => (c.name === 'fhir_read' && c.input.id === PT.E4 ? { name: 'search_patients', input: { name: 'Leuschke' } } : c)) })),
+      { calls: actions() },
+      { calls: [finish()] },
+    ],
+  },
 ];
 
-// Correct, but G4 cannot see it yet: E4's birth date read only from search_patients, whose rows
-// show birthDate but tag the Patient as referenced, not exposed. The env PR that tags those
-// rows as exposing the Patient (builder-55) makes it PASS; then it moves into `alternatives`.
-export const pendingExposure: Alternative = {
-  id: 'e4_birth_date_from_search_patients',
-  why: 'Finds E4 with search_patients and reads her birth date from its row, never fhir_read Patient/pt-0023.',
-  script: [
-    ...reads().map((t) => ({ calls: t.calls.map((c) => (c.name === 'fhir_read' && c.input.id === PT.E4 ? { name: 'search_patients', input: { name: 'Leuschke' } } : c)) })),
-    { calls: actions() },
-    { calls: [finish()] },
-  ],
-};

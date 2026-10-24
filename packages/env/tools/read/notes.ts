@@ -1,7 +1,8 @@
 // search_notes (design section 3): keyword search over the text of notes (DocumentReference)
 // and reports (DiagnosticReport presentedForm). BM25 over literal tokens: no stemming, no
-// synonyms. Rows carry a snippet, so a note found here is referenced, not exposed; its full
-// text is exposed only by fhir_read.
+// synonyms. A row shows part of the note's text as {note, snippet}: the snippet is recorded as
+// the text shown, but an excerpt is not the note's decisive content, so the note stays
+// referenced (the exposure rule, registry.ts); fhir_read shows the whole text and exposes it.
 import type { Attachment, DiagnosticReport, DocumentReference, Resource } from '@medplum/fhirtypes';
 import { ToolError } from '../errors.ts';
 import type { Tool } from '../registry.ts';
@@ -33,8 +34,8 @@ export function noteText(resource: Readonly<Resource>): string | undefined {
 // The resource as a read tool returns it: each inline text attachment's base64 `data` is
 // replaced by `size`, its length in bytes, because the base64 is unreadable and costs 4/3 of
 // the text's tokens. With readWith (fhir_search), the attachment also names the tool that
-// returns the text, which tags the resource as referenced, not exposed (registry.ts): design
-// section 3 exposes a note only with its readable text. Other resources come back as stored.
+// returns the text, which tags the resource as referenced, not exposed (registry.ts): a note is
+// exposed only where its readable text is shown. Other resources come back as stored.
 export function withoutNoteData(resource: Readonly<Resource>, readWith: boolean): Readonly<Resource> {
   if (!attachments(resource).some(isText)) return resource;
   const strip = (a: Attachment): Attachment => {
