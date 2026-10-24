@@ -97,6 +97,7 @@ import { checkProjected, PROJECTED_CAP_USD, SpendRefused, totals, type Ledger, t
 import type { TrialClient } from '../../packages/core/loop.ts';
 import { REDACTED, redactText } from '../../packages/core/redact.ts';
 import { run, type RunOptions } from '../../packages/core/run.ts';
+import { taskVersions, type TaskSource } from '../../packages/core/tasks.ts';
 import {
   ContractError, parseKeyRequest, parseTrialsRequest, RUNNER_APP, sseFrame, SSE_END, TOKEN_HEADER, TOKEN_META, VALIDATE_REQUEST, validateWorstCaseUsd,
   type Health, type ProjectionTerms, type RunView, type SseEnd, type TrialsRequest, type TrialState, type TrialView,
@@ -264,6 +265,8 @@ export interface RunnerOptions {
   shutdownWaitMs?: number;
   // The client's retry wait; default a timer.
   sleep?: (ms: number) => Promise<void>;
+  // The task directories; default tasks/.
+  tasksDir?: string;
 }
 
 export interface Runner {
@@ -381,7 +384,9 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
   const mockToy = (label: string): Transport => (label.includes('validate') ? async () => okResponse({ text: 'OK' }, 1) : scenarioTransport('toy').transport);
   const base = opts.transport ?? (opts.mock ? mockToy : () => (request: Request) => fetch(request));
   const transport = (label: string) => upstreamTypeOnly(base(label));
-  const tasks = nodeTaskSource({ testMode: false });
+  // A TaskSource reads the task directories once, so each request builds its own: a task
+  // edited between two batches is graded as edited, at its new env_version.
+  const taskSourceNow = () => nodeTaskSource({ ...(opts.tasksDir === undefined ? {} : { root: opts.tasksDir }), testMode: false });
   const git = gitState(REPO);
   let world: ReturnType<typeof repoWorld> | undefined;
 
@@ -492,7 +497,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   // 400 when a task id is not one of this runner's tasks. The message counts them and never
   // names one: the ids are client text (see the header).
-  async function knownTasks(ids: readonly string[]): Promise<void> {
+  async function knownTasks(tasks: TaskSource, ids: readonly string[]): Promise<void> {
     const found = await Promise.all(ids.map((id) => tasks.get(id).then(() => true, () => false)));
     const unknown = found.filter((ok) => !ok).length;
     if (unknown > 0) throw new HttpError(400, 'invalid_request', `tasks: ${unknown} task ${unknown === 1 ? 'id is not a task' : 'ids are not tasks'} this runner has`);
@@ -513,8 +518,9 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
 
   async function postTrials(body: TrialsRequest, dryRun: boolean): Promise<{ status: number; body: unknown }> {
     if (body.session_cap_usd > PROJECTED_CAP_USD) throw new HttpError(400, 'invalid_request', `the session cap can be at most $${PROJECTED_CAP_USD}`);
-    await knownTasks(body.tasks);
-    if (body.smoke) return startSmoke(body);
+    const tasks = taskSourceNow();
+    await knownTasks(tasks, body.tasks);
+    if (body.smoke) return startSmoke(body, tasks);
     const key = opts.mock ? 'mock-key-not-sent' : (body.key ?? heldKey);
     world ??= repoWorld();
     // Taken before any await, so two requests in flight at once never share a run id.
@@ -623,7 +629,7 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     return { status: 500, body: { error: { type: 'runner_error', message } } };
   }
 
-  async function startSmoke(body: TrialsRequest): Promise<{ status: number; body: unknown }> {
+  async function startSmoke(body: TrialsRequest, tasks: TaskSource): Promise<{ status: number; body: unknown }> {
     if (!forcedFail) throw new HttpError(400, 'invalid_request', 'Smoke trials are turned off in this runner.');
     world ??= repoWorld();
     const w = world;
@@ -636,7 +642,9 @@ export async function startRunner(opts: RunnerOptions): Promise<Runner> {
     const done = (async () => {
       for (const t of entries) {
         if (controller.signal.aborted) break;
-        const k: TrialKey = { task_id: t.taskId, task_version: '', model: MODEL, effort: body.effort, index: t.index };
+        // Keyed on the task's env_version, as planBatch keys a batch's trials (packages/core/batch.ts).
+        const { env_version } = await taskVersions(await tasks.get(t.taskId), w.worldHash);
+        const k: TrialKey = { task_id: t.taskId, env_version, model: MODEL, effort: body.effort, index: t.index };
         await sink.begin(k, 'smoke');
         t.state = 'running';
         const { record } = await run(t.taskId, MODEL, {
