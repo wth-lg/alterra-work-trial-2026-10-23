@@ -13,13 +13,18 @@
 //               with trial labels starting mock:, so the cap checks run as they do live. Its
 //               records have their own mode in the key, so a live run never reads one
 //   --dry-run   prints the projection batchStart is given, and makes no call and opens nothing
-// The projection is the per-trial cap ($6): the loop stops a trial once its cost reaches the cap
-// and one trial makes no reruns and, until P8, no judge calls. batchStart refuses it, before
-// any call, when the ledger's exposure plus the projection would cross $450. Each event is
-// appended to the trajectory as it arrives, so a crash leaves a valid prefix; the record is
-// written at the end. A trial key whose record exists is not run again (live mode checks for the
-// key first). Exit 0 when the trial completed and replay_final equals final; 1 otherwise; 2 on
-// a usage error, an unknown task included.
+// The trial is graded with the task's checks, tasks/<id>/tests/grader.ts (none when the task
+// has no grader), and its judge items go through the trial's client and ledger.
+// The projection is the per-trial cap ($6) plus the judge allowance for the task's judge and
+// hybrid items: the loop stops a trial once its cost reaches the cap, one trial makes no reruns,
+// and each judge item makes at most two bounded calls. batchStart refuses it, before any call,
+// when the ledger's exposure plus the projection would cross $450. Each event is appended to the
+// trajectory as it arrives, so a crash leaves a valid prefix, and the last line is the graded
+// record; the record (outcome, gate checks, rubric scores included) is written at the end. If
+// run() throws (the task cannot be resolved again, before any spend), the record says ENV_ERROR
+// INTERNAL: never a valid trial, never the model's failure. A trial key whose record exists is
+// not run again (live mode checks for the key first). Exit 0 when the trial completed and
+// replay_final equals final; 1 otherwise; 2 on a usage error, an unknown task included.
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -28,8 +33,11 @@ import { MODEL, MessagesClient, type Transport } from '../packages/core/anthropi
 import { money, PER_TRIAL_CAP_USD } from '../packages/core/cost.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import { redactText } from '../packages/core/redact.ts';
-import { DEFAULT_EFFORT, EFFORTS, run, type Effort } from '../packages/core/run.ts';
+import { DEFAULT_EFFORT, EFFORTS, internalErrorRecord, run, type Effort, type TrialRecord } from '../packages/core/run.ts';
+import type { TaskSource } from '../packages/core/tasks.ts';
 import { toJsonLine } from '../packages/core/trajectory.ts';
+import type { Check } from '../packages/grader/check.ts';
+import { judgeAllowanceUsd } from '../packages/grader/judge.ts';
 import { isScenario, scenarioTransport, type ScenarioName } from '../apps/web/src/harness/scenarios.ts';
 import { nodeNow } from './adapters/clock-node.ts';
 import { openNodeLedger } from './adapters/ledger-node.ts';
@@ -48,6 +56,19 @@ export interface Deps {
   fetch: Transport;
   // The transport for --mock <scenario>.
   mock: (name: ScenarioName) => Transport;
+  // The task's checks; default tasks/<id>/tests/grader.ts's `checks`, or none.
+  checks?: (task: string) => Promise<readonly Check[]>;
+  // Default every tasks/*/task.toml, outside test mode.
+  tasks?: TaskSource;
+}
+
+// tasks/<id>/tests/grader.ts exports `checks`; a task without one has no checks.
+async function taskChecks(task: string): Promise<readonly Check[]> {
+  const file = join(REPO, 'tasks', task, 'tests', 'grader.ts');
+  if (!existsSync(file)) return [];
+  const { checks } = (await import(pathToFileURL(file).href)) as { checks?: unknown };
+  if (!Array.isArray(checks)) throw new Error(`${file} does not export checks: Check[]`);
+  return checks as Check[];
 }
 
 const defaults: Deps = {
@@ -57,7 +78,7 @@ const defaults: Deps = {
   mock: (name) => scenarioTransport(name).transport,
 };
 
-export const projection = (): number => PER_TRIAL_CAP_USD;
+export const projection = (checks: readonly Check[] = []): number => PER_TRIAL_CAP_USD + judgeAllowanceUsd(checks);
 
 export async function main(args: string[], deps: Deps = defaults): Promise<number> {
   const opts = new Map<string, string>();
@@ -70,7 +91,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const task = opts.get('--task');
   if (!task) return usage(deps, '--task is required');
   if (!TASK_ID.test(task)) return usage(deps, `--task ${JSON.stringify(task)} is not a task id (letters, digits, _ and - only)`);
-  const tasks = nodeTaskSource({ testMode: false });
+  const tasks = deps.tasks ?? nodeTaskSource({ testMode: false });
   try {
     await tasks.get(task);
   } catch (e) {
@@ -85,9 +106,15 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   if (mock !== undefined && !isScenario(mock)) return usage(deps, `--mock: unknown scenario ${mock}`);
   const outDir = resolve(opts.get('--out') ?? deps.env.CHARTR_RUNS_DIR ?? join(deps.env.HOME || homedir(), '.chartr', 'runs', 'run-one'));
 
-  const p = projection();
+  let checks: readonly Check[];
+  try {
+    checks = await (deps.checks ?? taskChecks)(task);
+  } catch (e) {
+    return usage(deps, `--task: ${(e as Error).message}`);
+  }
+  const p = projection(checks);
   if (opts.has('--dry-run')) {
-    deps.out(`run-one dry run: 1 trial of ${task} at effort ${effort}, per-trial cap ${money(PER_TRIAL_CAP_USD)}`);
+    deps.out(`run-one dry run: 1 trial of ${task} at effort ${effort}, per-trial cap ${money(PER_TRIAL_CAP_USD)}, judge allowance ${money(judgeAllowanceUsd(checks))}`);
     deps.out(`projection ${money(p)}`);
     deps.out(`LIVE_PROJECTION_USD=${p.toFixed(6)}`);
     return 0;
@@ -121,22 +148,33 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       const trajectory = join(outDir, trajectoryRel);
       mkdirSync(dirname(trajectory), { recursive: true });
       writeFileSync(trajectory, '');
-      const { record } = await run(task, MODEL, {
-        tasks,
-        client,
-        world: { read: async () => new Uint8Array(readFileSync(join(REPO, 'fixtures/world.ndjson.gz'))) },
-        worldHash: (JSON.parse(readFileSync(join(REPO, 'fixtures/manifest.json'), 'utf8')) as { world: { state_hash: string } }).world.state_hash,
-        definitions: JSON.parse(readFileSync(join(REPO, 'fixtures/definitions-pruned.json'), 'utf8')),
-        now: nodeNow,
-        effort,
-        trialId: label,
-        onEvent: (e) => appendFileSync(trajectory, toJsonLine(e)),
-      });
+      const worldHash = (JSON.parse(readFileSync(join(REPO, 'fixtures/manifest.json'), 'utf8')) as { world: { state_hash: string } }).world.state_hash;
+      const started = nodeNow();
+      let record: TrialRecord;
+      try {
+        ({ record } = await run(task, MODEL, {
+          tasks,
+          client,
+          world: { read: async () => new Uint8Array(readFileSync(join(REPO, 'fixtures/world.ndjson.gz'))) },
+          worldHash,
+          definitions: JSON.parse(readFileSync(join(REPO, 'fixtures/definitions-pruned.json'), 'utf8')),
+          now: nodeNow,
+          effort,
+          trialId: label,
+          checks,
+          onEvent: (e) => appendFileSync(trajectory, toJsonLine(e)),
+        }));
+      } catch (e) {
+        deps.out(`run-one: run() threw: ${redactText((e as Error).message, [key])}`);
+        record = internalErrorRecord({ trialId: label, taskId: task, worldHash, effort, started, ended: nodeNow() });
+      }
       const full = { ...record, ...(mock === undefined ? {} : { mock }), trajectory: trajectoryRel };
       mkdirSync(dirname(recordFile), { recursive: true });
       writeFileSync(recordFile, `${JSON.stringify(full, null, 2)}\n`);
       deps.out(`status ${record.status}${record.detail ? ` (${record.detail})` : ''}, ${record.turns} turns, ${record.tool_calls} tool calls, cost ${money(record.cost_usd)}`);
       deps.out(`models_returned ${JSON.stringify(record.models_returned)}; final ${record.state_hash.final}; replay_final ${record.state_hash.replay_final}`);
+      const gates = record.checks.filter((c) => c.kind === 'gate');
+      deps.out(`outcome ${record.outcome}, score ${record.score === null ? 'n/a' : record.score.toFixed(3)}, gates ${gates.filter((c) => c.met === true).length}/${gates.length}, judge ${record.judge.calls} calls (${record.judge.unknown} unknown) ${money(record.judge_cost_usd)}`);
       deps.out(`record ${recordFile}`);
       deps.out(`trajectory ${trajectory}`);
       return succeeded(record) ? 0 : 1;

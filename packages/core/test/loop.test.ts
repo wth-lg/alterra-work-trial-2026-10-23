@@ -9,7 +9,7 @@ import { scriptedTransport, SCENARIOS, sse, turnEvents, type Script, type Script
 import { WRITE_TASK } from '../../../apps/web/src/harness/write-task.ts';
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { MessagesClient, type Transport } from '../anthropic.ts';
-import { parseEvent, type TrialEvent } from '../events.ts';
+import { parseEvent, terminalEvent, type TrialEvent } from '../events.ts';
 import { admitStore, createLedger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 import { run, type RunOptions } from '../run.ts';
 import { taskSource } from '../tasks.ts';
@@ -125,8 +125,9 @@ describe('run() with a mocked API', () => {
     checkStream(events, result.events);
     expect(mock.raw).toHaveLength(0);
     expect(result.record.status).toBe('ENV_ERROR');
-    expect(types(events)).toEqual(['state_hash', 'error']);
-    expect(events.at(-1)).toMatchObject({ type: 'error', status: 'ENV_ERROR', code: 'initial_hash_mismatch' });
+    expect(types(events)).toEqual(['state_hash', 'error', 'graded']);
+    expect(terminalEvent(events)).toMatchObject({ type: 'error', status: 'ENV_ERROR', code: 'initial_hash_mismatch' });
+    expect(events.at(-1)!.type).toBe('graded');
     expect(result.record.state_hash.initial).toBe(MANIFEST.world.state_hash);
   });
 
@@ -139,7 +140,8 @@ describe('run() with a mocked API', () => {
     checkStream(events, result.events);
     expect(result.record.status).toBe('LIMIT');
     expect(mock.raw).toHaveLength(calls);
-    expect(events.at(-1)).toMatchObject({ type: 'limit', limit });
+    expect(terminalEvent(events)).toMatchObject({ type: 'limit', limit });
+    expect(events.at(-1)!.type).toBe('graded');
     expect(result.record.state_hash.replay_final).toBe(result.record.state_hash.final);
   });
 
@@ -166,7 +168,8 @@ describe('run() with a mocked API', () => {
     expect(r.state_hash.replay_final).toBe(r.state_hash.final);
     expect(r.task_version).toMatch(/^[0-9a-f]{64}$/);
     expect(r.cost_usd).toBeGreaterThan(0);
-    // Timestamps are the only thing an injected clock changes.
+    // Timestamps, and the graded record's clock-derived fields, are the only thing an injected
+    // clock changes.
     const again = await trial(SCENARIOS.toy, { now: () => 0 });
     expect(stripTimestamps(toJsonl(again.result.events))).toBe(stripTimestamps(toJsonl(result.events)));
   });
@@ -210,6 +213,7 @@ describe('run() with a mocked API', () => {
     checkStream(events, result.events);
     expect(n).toBe(1);
     expect(result.record.status).toBe('LIMIT');
-    expect(events.at(-1)).toMatchObject({ type: 'limit', limit: 'cost', cap: 6 });
+    expect(terminalEvent(events)).toMatchObject({ type: 'limit', limit: 'cost', cap: 6 });
+    expect(events.at(-1)!.type).toBe('graded');
   });
 });

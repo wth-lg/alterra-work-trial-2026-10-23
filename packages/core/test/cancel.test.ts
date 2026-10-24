@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { scriptedTransport, SCENARIOS, stallingTransport, type ScriptedTransport } from '../../../apps/web/src/harness/scenarios.ts';
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { MessagesClient, type Transport } from '../anthropic.ts';
-import { parseEvent, type TrialEvent } from '../events.ts';
+import { parseEvent, terminalEvent, type TrialEvent } from '../events.ts';
 import { admitStore, createLedger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 import { run, type RunOptions } from '../run.ts';
 import { toJsonl } from '../trajectory.ts';
@@ -73,7 +73,8 @@ describe('cancel through opts.signal', () => {
     expect(settles).toHaveLength(1);
     expect(settles[0]).toMatchObject({ call_id: reserves[0]!.call_id, usage: null, cost_usd: reserves[0]!.cost_usd });
     expect(result.record.status).toBe('CANCELLED');
-    expect(events.at(-1)!.type).toBe('cancelled');
+    expect(terminalEvent(events)!.type).toBe('cancelled');
+    expect(events.at(-1)!.type).toBe('graded');
     // The record's cost includes the worst-case settle, so it equals the ledger.
     expect(Math.round(result.record.cost_usd * 1e6)).toBe(settledMicros(store.rows));
     for (const e of events) parseEvent(JSON.parse(JSON.stringify(e)));
@@ -90,7 +91,8 @@ describe('cancel through opts.signal', () => {
     expect(kinds(store.rows, 'settle')).toHaveLength(1);
     expect(kinds(store.rows, 'settle')[0]!.usage).not.toBeNull();
     expect(result.record.status).toBe('CANCELLED');
-    expect(events.at(-1)!.type).toBe('cancelled');
+    expect(terminalEvent(events)!.type).toBe('cancelled');
+    expect(events.at(-1)!.type).toBe('graded');
   });
 
   it('an abort before run() starts makes no call at all', async () => {
@@ -122,7 +124,8 @@ describe('the wall-clock cap in flight', () => {
     expect(kinds(store.rows, 'reserve')).toHaveLength(1);
     expect(kinds(store.rows, 'settle').map((r) => r.usage)).toEqual([null]);
     expect(result.record).toMatchObject({ status: 'LIMIT', detail: 'wall_clock' });
-    expect(events.at(-1)).toMatchObject({ type: 'limit', limit: 'wall_clock', cap: 60_000 });
+    expect(terminalEvent(events)).toMatchObject({ type: 'limit', limit: 'wall_clock', cap: 60_000 });
+    expect(events.at(-1)!.type).toBe('graded');
     expect(Math.round(result.record.cost_usd * 1e6)).toBe(settledMicros(store.rows));
   });
 });
