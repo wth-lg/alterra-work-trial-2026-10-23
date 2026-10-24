@@ -10,10 +10,14 @@ export const MAX_SESSION_CAP_USD = PROJECTED_CAP_USD;
 const µ = (usd: number) => Math.round(usd * 1e6);
 const fmt = (usd: number) => `$${usd.toFixed(2)}`;
 
-// The cap a field's text sets, or null when it is not a number in (0, MAX_SESSION_CAP_USD].
+// The cap a field's text sets, rounded to the cent, or null when that is not in
+// [$0.01, MAX_SESSION_CAP_USD]. The field has no step of its own, so every value this accepts
+// submits.
 export function parseCap(text: string): number | null {
   const v = Number(text.trim());
-  return text.trim() !== '' && Number.isFinite(v) && v > 0 && v <= MAX_SESSION_CAP_USD ? v : null;
+  if (text.trim() === '' || !Number.isFinite(v)) return null;
+  const cents = Math.round(v * 100) / 100;
+  return cents >= 0.01 && cents <= MAX_SESSION_CAP_USD ? cents : null;
 }
 
 export type Admission = { ok: true } | { ok: false; reason: string };
