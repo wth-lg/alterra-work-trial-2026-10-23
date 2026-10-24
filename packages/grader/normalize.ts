@@ -207,7 +207,7 @@ const ALIASES: Array<[RegExp, string]> = [
   [/\bbactrim\b/, 'sulfamethoxazole / trimethoprim'],
 ];
 // Words in an RxNorm or EHR name that describe the form, not the drug.
-const FORM_WORDS = /\b(?:\d+ hr|extended release|delayed release|sustained release|oral|tablet|tablets|capsule|capsules|tab|cap|solution|suspension|injection|xl|er|xr|sr|dr|hcl|hydrochloride)\b/g;
+const FORM_WORDS = /\b(?:\d+ hr|extended release|delayed release|sustained release|oral|tablet|tablets|capsule|capsules|tab|cap|solution|suspension|injection|hfa|xl|er|xr|sr|dr|hcl|hydrochloride)\b/g;
 // Salt words after an ingredient name ('clavulanate potassium', 'hydrocodone bitartrate'); the
 // first word of a name is never one ('potassium chloride' stays).
 const SALT_WORDS = /(?<=\S )(?:potassium|sodium|bitartrate|phosphate|sulfate|maleate|mesylate|besylate)\b/g;
@@ -222,6 +222,20 @@ const STRENGTH = new RegExp(`(\\d+(?:\\.\\d+)?) ?(${STRENGTH_UNIT})\\b(?: per (\
 const PACKAGE = /^(?:nda\d+ )?\d+(?:\.\d+)? ml (?=[a-z])/;
 // Separators between the ingredients of a combination name.
 const COMBINATION = /\s+\/\s+|\s*\/\s*(?=[a-z])|\s+and\s+|\s*\+\s*/;
+// A combination's strengths written together after its names, EHR style
+// ('amoxicillin / clavulanate 875-125 mg', '... 875/125 mg').
+const PAIRED = new RegExp(`^(.+?) (\\d+(?:\\.\\d+)?(?:[-/]\\d+(?:\\.\\d+)?)+) ?(${STRENGTH_UNIT})\\b(.*)$`);
+
+// 'amoxicillin / clavulanate 875-125 mg' -> 'amoxicillin 875 mg / clavulanate 125 mg': each
+// strength goes to the ingredient in its place. Unchanged when the counts differ.
+function splitPaired(s: string): string {
+  const m = PAIRED.exec(s);
+  if (m === null) return s;
+  const names = m[1]!.split(COMBINATION);
+  const values = m[2]!.split(/[-/]/);
+  if (names.length !== values.length) return s;
+  return `${names.map((n, i) => `${n} ${values[i]} ${m[3]}`).join(' / ')}${m[4]}`;
+}
 const RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm';
 
 export interface Ingredient {
@@ -273,6 +287,7 @@ export function drugOf(c: CodeableConcept | string | undefined): Drug | null {
   if (s.startsWith('{')) return null;
   s = s.replace(PACKAGE, '').replace(PER, (_, v: string, u: string, n: string | undefined, d: string) => `${v} ${u} per ${n ?? 1} ${d}`);
   for (const [re, ingredient] of ALIASES) if (re.test(s)) s = s.replace(re, ingredient);
+  s = splitPaired(s);
   const parts = s.split(COMBINATION).map(ingredientOf);
   if (parts.length === 0 || parts.some((p) => p === null)) return null;
   const ingredients = (parts as Ingredient[]).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));

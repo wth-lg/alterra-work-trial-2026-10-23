@@ -206,3 +206,23 @@ describe('codes', () => {
     for (const status of ['stopped', 'cancelled', 'completed', 'entered-in-error', 'on-hold', 'draft']) expect(isActive({ status })).toBe(false);
   });
 });
+
+describe('drugOf on EHR-style names', () => {
+  it('drops salt forms and the HFA, ER and XR dosage-form words', () => {
+    expect(drugOf('albuterol sulfate HFA 90 MCG/ACTUAT')).toEqual({ ingredient: 'albuterol', strength_mg: null, strength: { value: 0.09, unit: 'mg/{actuat}' }, ingredients: [{ name: 'albuterol', strength_mg: null, strength: { value: 0.09, unit: 'mg/{actuat}' } }] });
+    expect(drugOf('albuterol sulfate HFA')).toMatchObject({ ingredient: 'albuterol', strength: null });
+    expect(drugOf('metformin ER 500 mg')).toMatchObject({ ingredient: 'metformin', strength_mg: 500 });
+    expect(drugOf('metformin XR 500 mg')).toMatchObject({ ingredient: 'metformin', strength_mg: 500 });
+    expect(isDrug({ text: 'albuterol sulfate HFA 90 MCG/ACTUAT' }, { ingredient: 'albuterol' })).toBe(true);
+  });
+
+  it('gives each strength of a paired combination strength to its ingredient', () => {
+    const want = { ingredient: 'amoxicillin / clavulanate', strength_mg: null, strength: null, ingredients: [{ name: 'amoxicillin', strength_mg: 875, strength: { value: 875, unit: 'mg' } }, { name: 'clavulanate', strength_mg: 125, strength: { value: 125, unit: 'mg' } }] };
+    expect(drugOf('amoxicillin-clavulanate 875-125 mg')).toEqual(want);
+    expect(drugOf('amoxicillin-clavulanate 875/125 mg')).toEqual(want);
+    expect(drugOf('Amoxicillin-Clavulanate 875-125 MG Oral Tablet')).toEqual(want);
+    expect(isDrug({ text: 'amoxicillin-clavulanate 875-125 mg' }, { ingredient: 'amoxicillin 875 MG / clavulanate 125 MG' })).toBe(true);
+    expect(isDrug({ text: 'amoxicillin-clavulanate 875-125 mg' }, { ingredient: 'amoxicillin 500 MG / clavulanate 125 MG' })).toBe(false);
+  });
+});
+
