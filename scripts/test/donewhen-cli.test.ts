@@ -55,6 +55,12 @@ describe('done-when clauses (5) and (6) with the real summary and audit-check', 
     expect(c.six).toMatch(/^PASS \(6\)/);
   });
 
+  it('clause (5) reads the current grade: 5 FAIL regraded to PASS give t-alpha 10/10 and FAIL', () => {
+    const root = rootWith('fail-regraded-pass');
+    expect(exit(root, SUMMARY)).toBe(1);
+    expect(clauses(root).five).toMatch(/^FAIL \(5\).*summary: exit 1; t-alpha 10\/10, t-beta 5\/10/);
+  });
+
   it('clause (6) FAILs on a missing label, where audit-check exits 1; clause (5) still PASSes', () => {
     const root = rootWith('missing-label');
     expect(exit(root, SUMMARY)).toBe(0);

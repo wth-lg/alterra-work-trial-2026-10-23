@@ -6,11 +6,15 @@
 //
 // The run's mode and expected tasks come from its manifest (task_versions) or --task. Whenever a
 // requirement is given, a task expected and without records is a violation, and so is a run that
-// is not live, unless the caller allows a mock run. grader_error=N checks each record's current
-// grade: its last regrades[] entry, else its outcome, so a run whose grader bug was fixed and
-// regraded can pass. grader_error_history counts the records that were GRADER_ERROR in an earlier
-// grade; it is disclosed, never a requirement. A GRADER_ERROR is settled, never re-queued as a
-// model trial: regrade grades it again from its trajectory.
+// is not live, unless the caller allows a mock run.
+//
+// Every figure reads each record's current grade (currentGrade: its last regrades[] entry, else
+// its recorded outcome and score): valid, passes, refusals, the outcomes histogram, mean_score,
+// grader_error and the valid/band requirements, so a run whose grader bug was fixed and regraded
+// is judged on the fixed grade. The recorded grades are disclosure only: recorded_outcomes,
+// regraded and grader_error_history (the records that were GRADER_ERROR in an earlier grade),
+// never a requirement. A GRADER_ERROR is settled, never re-queued as a model trial: regrade grades
+// it again from its trajectory. audit-check and replay read the grade through currentGrade too.
 //
 // Wilson score interval, z = 1.959964 (two-sided 95%), for k passes in n valid trials, p = k/n:
 //   centre = (p + z²/2n) / (1 + z²/n)
@@ -18,7 +22,8 @@
 //   [centre - half, centre + half]; 5/10 gives 0.2366 to 0.7634.
 import { isValid, OUTCOMES } from './outcomes.ts';
 
-export const SUMMARY_SCHEMA_VERSION = 1;
+// 2: recorded_outcomes and regraded added, and every figure reads the current grade.
+export const SUMMARY_SCHEMA_VERSION = 2;
 export const WILSON_Z = 1.959963984540054;
 
 export interface Interval {
@@ -50,7 +55,33 @@ export interface SummaryTrial {
   judge_cost_usd?: number;
   score: number | null;
   // cli regrade's entries, oldest first; the last is the current grade.
-  regrades?: ReadonlyArray<{ outcome: string }>;
+  regrades?: ReadonlyArray<RegradeGrade>;
+}
+
+// What a cli regrade entry holds of its grade (cli/regrade.ts RegradeEntry). Entries written
+// before checks were stored have no checks.
+export interface RegradeGrade {
+  outcome: string;
+  score?: number | null;
+  valid?: boolean;
+  checks?: ReadonlyArray<{ id: string; met: unknown }>;
+}
+
+export interface CurrentGrade {
+  outcome: string;
+  score: number | null;
+  valid: boolean;
+  // The check results of the current grade; null when its regrade entry did not store them.
+  checks: ReadonlyArray<{ id: string; met: unknown }> | null;
+  regraded: boolean;
+}
+
+// A record's current grade: its last regrades[] entry, else its recorded outcome, score and
+// checks. The one reader of a record's grade for summary, audit-check and replay.
+export function currentGrade(r: { outcome: string; score?: number | null; checks?: ReadonlyArray<{ id: string; met: unknown }> | null; regrades?: ReadonlyArray<RegradeGrade> }): CurrentGrade {
+  const last = r.regrades?.at(-1);
+  if (last === undefined) return { outcome: r.outcome, score: r.score ?? null, valid: isValid(r.outcome), checks: r.checks ?? null, regraded: false };
+  return { outcome: last.outcome, score: last.score ?? null, valid: typeof last.valid === 'boolean' ? last.valid : isValid(last.outcome), checks: last.checks ?? null, regraded: true };
 }
 
 export interface SummaryInput {
@@ -78,7 +109,10 @@ export interface TaskSummary {
   // The rate with refusals left out of the denominator (reported both ways).
   refusals: number;
   refusal_excluded_rate: number | null;
-  outcomes: Record<string, number>;
+  outcomes: Record<string, number>; // by current grade
+  // Disclosure only: the outcomes as first recorded, and the records a regrade graded again.
+  recorded_outcomes: Record<string, number>;
+  regraded: number;
   env_error_raw: number;
   grader_error: number; // records whose current grade is GRADER_ERROR
   grader_error_history: number; // records that were GRADER_ERROR in an earlier grade
@@ -103,7 +137,7 @@ export interface Summary {
   schema_version: number;
   run_id: string;
   tasks: Record<string, TaskSummary>;
-  totals: { records: number; trials: number; passes: number; env_error_raw: number; grader_error: number; grader_error_history: number; requeued: number; internal_errors: number; cost_usd: number };
+  totals: { records: number; trials: number; passes: number; env_error_raw: number; grader_error: number; grader_error_history: number; regraded: number; requeued: number; internal_errors: number; cost_usd: number };
   mode: string | null;
   expected_tasks: { tasks: string[]; from: string } | null;
   models: string[];
@@ -113,12 +147,16 @@ export interface Summary {
   violations: string[];
 }
 
-// A record's current grade, and the grades before it.
-const currentOutcome = (t: SummaryTrial): string => t.regrades?.at(-1)?.outcome ?? t.outcome;
+// The grades before a record's current one.
 const earlierOutcomes = (t: SummaryTrial): string[] => (t.regrades?.length ? [t.outcome, ...t.regrades.slice(0, -1).map((r) => r.outcome)] : []);
 const keyOf = (t: Pick<SummaryTrial, 'task_id' | 'index'>) => `${t.task_id}/${t.index}`;
 const mean = (xs: readonly number[]): number | null => (xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length);
 const sorted = (xs: Iterable<string>) => [...new Set(xs)].sort();
+const histogram = (xs: readonly string[]): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const x of xs) out[x] = (out[x] ?? 0) + 1;
+  return out;
+};
 
 export function summarize(input: SummaryInput): Summary {
   const ids = sorted([...input.trials, ...input.requeued].map((t) => t.task_id).concat(input.expected?.tasks ?? []));
@@ -126,11 +164,10 @@ export function summarize(input: SummaryInput): Summary {
   for (const id of ids) {
     const mine = input.trials.filter((t) => t.task_id === id);
     const requeued = input.requeued.filter((t) => t.task_id === id);
-    const valid = mine.filter((t) => isValid(t.outcome));
-    const passes = valid.filter((t) => t.outcome === 'PASS').length;
-    const refusals = valid.filter((t) => t.outcome === 'REFUSAL').length;
-    const outcomes: Record<string, number> = {};
-    for (const t of mine) outcomes[t.outcome] = (outcomes[t.outcome] ?? 0) + 1;
+    const grades = mine.map(currentGrade);
+    const valid = grades.filter((g) => g.valid);
+    const passes = valid.filter((g) => g.outcome === 'PASS').length;
+    const refusals = valid.filter((g) => g.outcome === 'REFUSAL').length;
     tasks[id] = {
       task_versions: sorted(mine.flatMap((t) => (t.task_version === null ? [] : [t.task_version]))),
       records: mine.length,
@@ -140,12 +177,14 @@ export function summarize(input: SummaryInput): Summary {
       wilson95: wilson(passes, valid.length),
       refusals,
       refusal_excluded_rate: valid.length - refusals === 0 ? null : passes / (valid.length - refusals),
-      outcomes,
+      outcomes: histogram(grades.map((g) => g.outcome)),
+      recorded_outcomes: histogram(mine.map((t) => t.outcome)),
+      regraded: grades.filter((g) => g.regraded).length,
       env_error_raw: [...mine, ...requeued].filter((t) => t.outcome === 'ENV_ERROR').length,
-      grader_error: [...mine, ...requeued].filter((t) => currentOutcome(t) === 'GRADER_ERROR').length,
+      grader_error: [...mine, ...requeued].filter((t) => currentGrade(t).outcome === 'GRADER_ERROR').length,
       grader_error_history: [...mine, ...requeued].filter((t) => earlierOutcomes(t).includes('GRADER_ERROR')).length,
       requeued: requeued.length,
-      mean_score: mean(valid.flatMap((t) => (t.score === null ? [] : [t.score]))),
+      mean_score: mean(valid.flatMap((g) => (g.score === null ? [] : [g.score]))),
       mean_cost_usd: mean(mine.map((t) => t.cost_usd + (t.judge_cost_usd ?? 0))),
     };
   }
@@ -164,6 +203,7 @@ export function summarize(input: SummaryInput): Summary {
       env_error_raw: s.reduce((a, t) => a + t.env_error_raw, 0),
       grader_error: s.reduce((a, t) => a + t.grader_error, 0),
       grader_error_history: s.reduce((a, t) => a + t.grader_error_history, 0),
+      regraded: s.reduce((a, t) => a + t.regraded, 0),
       requeued: input.requeued.length,
       internal_errors: all.reduce((a, t) => a + (t.tool_errors.INTERNAL ?? 0), 0),
       cost_usd: all.reduce((a, t) => a + t.cost_usd + (t.judge_cost_usd ?? 0), 0),
@@ -283,13 +323,16 @@ export function validateSummary(x: unknown): string[] {
     }
   };
   if (!isObj(x)) return ['summary: not an object'];
+  if (Object.hasOwn(x, 'schema_version') && x.schema_version !== SUMMARY_SCHEMA_VERSION) {
+    return [`schema_version ${JSON.stringify(x.schema_version)}: this reader reads summary.json version ${SUMMARY_SCHEMA_VERSION} only; write it again with pnpm cli summary <run>`];
+  }
   check('', x, {
     schema_version: (v) => v === SUMMARY_SCHEMA_VERSION, run_id: (v) => typeof v === 'string', tasks: isObj, totals: isObj, models: strings,
     initial_state_hashes: strings, replay: isObj, requirements: isObj, violations: strings, mode: (v) => v === null || typeof v === 'string',
     expected_tasks: (v) => v === null || (isObj(v) && strings(v.tasks) && typeof v.from === 'string'),
   });
   if (isObj(x.totals)) {
-    check('totals.', x.totals, { records: count, trials: count, passes: count, env_error_raw: count, grader_error: count, grader_error_history: count, requeued: count, internal_errors: count, cost_usd: num });
+    check('totals.', x.totals, { records: count, trials: count, passes: count, env_error_raw: count, grader_error: count, grader_error_history: count, regraded: count, requeued: count, internal_errors: count, cost_usd: num });
   }
   if (isObj(x.replay)) check('replay.', x.replay, { ran: (v) => typeof v === 'boolean', matched: count, mismatched: strings, missing: strings });
   if (isObj(x.tasks)) {
@@ -298,10 +341,11 @@ export function validateSummary(x: unknown): string[] {
         errors.push(`tasks.${id}: not an object`);
         continue;
       }
+      const histogram = (v: unknown) => isObj(v) && Object.entries(v).every(([o, n]) => (OUTCOMES as readonly string[]).includes(o) && count(n));
       check(`tasks.${id}.`, t, {
         task_versions: strings, records: count, trials: count, passes: count, pass_rate: rate, wilson95: interval, refusals: count,
-        refusal_excluded_rate: rate, env_error_raw: count, grader_error: count, grader_error_history: count, requeued: count, mean_score: (v) => v === null || num(v), mean_cost_usd: (v) => v === null || num(v),
-        outcomes: (v) => isObj(v) && Object.entries(v).every(([o, n]) => (OUTCOMES as readonly string[]).includes(o) && count(n)),
+        refusal_excluded_rate: rate, env_error_raw: count, grader_error: count, grader_error_history: count, regraded: count, requeued: count, mean_score: (v) => v === null || num(v), mean_cost_usd: (v) => v === null || num(v),
+        outcomes: histogram, recorded_outcomes: histogram,
       });
       if (count(t.passes) && count(t.trials) && (t.passes as number) > (t.trials as number)) errors.push(`tasks.${id}.passes: more than its trials`);
     }

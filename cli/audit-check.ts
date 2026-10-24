@@ -3,10 +3,11 @@
 // audit"):
 //   {trial: "<task>/<index>", outcome, taxonomy, model_fault: yes|no|unclear, decisive_step,
 //    evidence_ids: [...], llm_auditor_agrees, adjudication?, note}
-// A PASS label has taxonomy, model_fault and decisive_step null. It exits 1, naming each
-// violation, unless:
+// A PASS label has taxonomy, model_fault and decisive_step null. Every check reads each record's
+// current grade (packages/core/summary.ts currentGrade: its last cli regrade, else its recorded
+// outcome). It exits 1, naming each violation, unless:
 //   - every failure (a valid trial that is not a PASS) has exactly one label, whose outcome is the
-//     record's and whose taxonomy is in the label set (packages/grader/attribution.ts TAXONOMY);
+//     current grade and whose taxonomy is in the label set (packages/grader/attribution.ts TAXONOMY);
 //     a taxonomy of environment or grader is counted and is a violation;
 //   - no failure label contradicts itself: on an outcome that is the model's fault
 //     (packages/core/outcomes.ts FAULT: FAIL, LIMIT), a model taxonomy (TAXONOMY) says
@@ -27,8 +28,9 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BatchRecord } from '../packages/core/batch.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
-import { FAULT, isValid, type Outcome } from '../packages/core/outcomes.ts';
+import { FAULT, type Outcome } from '../packages/core/outcomes.ts';
 import { parseTrajectory } from '../packages/core/trajectory.ts';
+import { currentGrade } from '../packages/core/summary.ts';
 import { loadStore } from '../packages/env/fixture-source.ts';
 import { TAXONOMY, type Attribution } from '../packages/grader/attribution.ts';
 import { sameId, stepsOf } from '../packages/grader/exposure.ts';
@@ -116,7 +118,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     return id.includes('/') ? keys.has(id) : [...keys].some((k) => sameId(k, id));
   };
 
-  const failures = [...records.values()].filter((r) => isValid(r.outcome) && r.outcome !== 'PASS');
+  const failures = [...records.values()].filter((r) => currentGrade(r).valid && currentGrade(r).outcome !== 'PASS');
   let environment = 0;
   let grader = 0;
   for (const l of labels) {
@@ -125,7 +127,8 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       v.push(`${l.trial}: audit label for a trial the run has not settled`);
       continue;
     }
-    if (l.outcome !== r.outcome) v.push(`${l.trial}: labelled ${l.outcome}, the record says ${r.outcome}`);
+    const { outcome, regraded } = currentGrade(r);
+    if (l.outcome !== outcome) v.push(`${l.trial}: labelled ${l.outcome}, ${regraded ? 'the current grade is' : 'the record says'} ${outcome}`);
     const ids = new Set(stepsFor(r).flatMap((s) => [...s.exposed_ids, ...s.referenced_ids, ...s.written_ids]));
     for (const id of l.evidence_ids) if (![...ids].some((k) => sameId(k, id))) v.push(`${l.trial}: evidence id ${id} is not in the trajectory`);
     if (l.model_fault === 'unclear' || l.llm_auditor_agrees === false) {
@@ -133,13 +136,13 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
         v.push(`${l.trial}: ${l.model_fault === 'unclear' ? 'model_fault unclear' : 'the LLM auditor disagrees'}, and no adjudication is recorded`);
       }
     }
-    if (r.outcome === 'PASS') continue;
+    if (outcome === 'PASS') continue;
     if (l.taxonomy === 'environment') environment++;
     if (l.taxonomy === 'grader') grader++;
     if (l.taxonomy !== null && NOT_MODEL.has(l.taxonomy)) v.push(`${l.trial}: labelled ${l.taxonomy}: a failure that is the ${l.taxonomy}'s fault, not the model's`);
     else if (!(TAXONOMY as readonly (string | null)[]).includes(l.taxonomy)) v.push(`${l.trial}: taxonomy ${l.taxonomy} is not in the label set (${TAXONOMY.join(', ')})`);
     if (!['yes', 'no', 'unclear'].includes(l.model_fault as string)) v.push(`${l.trial}: model_fault must be yes, no or unclear`);
-    else if (FAULT[r.outcome as Outcome] === 'model') {
+    else if (FAULT[outcome as Outcome] === 'model') {
       const modelLabel = (TAXONOMY as readonly (string | null)[]).includes(l.taxonomy);
       if (modelLabel && l.model_fault === 'no') v.push(`${l.trial}: labelled ${l.taxonomy}, a model failure, with model_fault no`);
       if (l.taxonomy !== null && NOT_MODEL.has(l.taxonomy) && l.model_fault === 'yes') v.push(`${l.trial}: labelled ${l.taxonomy}, not the model's fault, with model_fault yes`);
@@ -152,7 +155,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   }
   for (const r of failures) {
     const name = trialName(r);
-    if (!byTrial.has(name)) v.push(`${name}: ${r.outcome}, no audit label`);
+    if (!byTrial.has(name)) v.push(`${name}: ${currentGrade(r).outcome}, no audit label`);
     for (const e of (r.attribution as Attribution | null)?.exposure ?? []) {
       if (e.first_exposed_step === null && !(await inWorld(e.id))) v.push(`${name}: decisive id ${e.id} was never exposed and is not exposable (not in the world)`);
     }
@@ -165,7 +168,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     if (replay !== null && replay[name] !== true) v.push(`${name}: replay.json says it did not reproduce`);
   }
   for (const task of [...new Set([...records.values()].map((r) => r.task_id))].sort()) {
-    const passes = [...records.values()].filter((r) => r.task_id === task && r.outcome === 'PASS');
+    const passes = [...records.values()].filter((r) => r.task_id === task && currentGrade(r).outcome === 'PASS');
     const audited = passes.filter((r) => (byTrial.get(trialName(r))?.evidence_ids.length ?? 0) > 0).length;
     const need = Math.min(MIN_AUDITED_PASSES, passes.length);
     if (audited < need) v.push(`${task}: ${audited} audited PASS with evidence ids, need ${need}`);

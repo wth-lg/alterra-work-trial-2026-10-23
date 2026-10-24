@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { MODEL } from '../../packages/core/anthropic.ts';
 
-export const SUMMARY_FIXTURES = ['nine-trials', 'model-mismatch', 'requeued-env-error', 'replay-mismatch', 'eight-of-ten', 'missing-task', 'mock-mode', 'grader-error'] as const;
+export const SUMMARY_FIXTURES = ['nine-trials', 'model-mismatch', 'requeued-env-error', 'replay-mismatch', 'eight-of-ten', 'missing-task', 'mock-mode', 'grader-error', 'fail-regraded-pass'] as const;
 export const AUDIT_FIXTURES = ['missing-label', 'environment-label', 'evidence-absent', 'unadjudicated', 'never-exposable', 'one-audited-pass', 'model-fault-no'] as const;
 export type Fixture = 'clean' | 'grader-error-regraded' | (typeof SUMMARY_FIXTURES)[number] | (typeof AUDIT_FIXTURES)[number];
 
@@ -44,6 +44,12 @@ function record(task_id: string, index: number, outcome: string, over: Record<st
   };
 }
 
+// A cli regrade entry with its check results.
+const regrade = (outcome: 'PASS' | 'FAIL') => ({
+  grader_version: 'g-next', outcome, score: outcome === 'PASS' ? 1 : 0, valid: true, changed: true,
+  checks: [{ id: 'G1', kind: 'gate', met: outcome === 'PASS' }], at: '2026-10-24T00:00:00.000Z',
+});
+
 export function writeFixtureRun(dir: string, fixture: Fixture): void {
   const labels: Array<Record<string, unknown>> = [];
   const replay: Record<string, { match: boolean }> = {};
@@ -59,6 +65,11 @@ export function writeFixtureRun(dir: string, fixture: Fixture): void {
       if (fixture === 'never-exposable' && task === 't-beta' && i === 9) {
         over.attribution = { auto: 'retrieval', first_failed: 'G1', decisive_step: 2, exposure: [{ id: 'Observation/never-in-world', first_exposed_step: null }] };
       }
+      // fail-regraded-pass: a later grader passes t-alpha's 5 FAIL records (their labels still say FAIL).
+      if (fixture === 'fail-regraded-pass' && task === 't-alpha' && outcome === 'FAIL') over.regrades = [regrade('PASS')];
+      // grader-error-regraded: t-alpha/9, one of the 10 keys, was a GRADER_ERROR; a regrade with a
+      // fixed grader fails it, as its label says.
+      if (fixture === 'grader-error-regraded' && task === 't-alpha' && i === 9) Object.assign(over, { outcome: 'GRADER_ERROR', valid: false, score: null, attribution: null, regrades: [regrade('FAIL')] });
       const r = record(task, i, outcome, { mode, ...over });
       put(dir, `trials/${task}/${i}.json`, `${JSON.stringify(r, null, 2)}\n`);
       put(dir, `trajectories/${task}/${i}.jsonl`, TRAJECTORY);
@@ -79,11 +90,9 @@ export function writeFixtureRun(dir: string, fixture: Fixture): void {
   if (fixture === 'requeued-env-error') {
     put(dir, 'requeued/t-alpha/3.a-0.json', `${JSON.stringify(record('t-alpha', 3, 'ENV_ERROR', { status: 'ENV_ERROR', attempt: 'a-0', settled: false, requeue_reason: 'ENV_ERROR' }), null, 2)}\n`);
   }
-  if (fixture === 'grader-error' || fixture === 'grader-error-regraded') {
-    // An eleventh record: a check threw; in grader-error-regraded a later regrade with a fixed
-    // grader passes it.
-    const regrades = fixture === 'grader-error' ? [] : [{ grader_version: 'g-next', outcome: 'PASS', score: 1, valid: true, changed: true, at: '2026-10-24T00:00:00.000Z' }];
-    put(dir, 'trials/t-alpha/10.json', `${JSON.stringify(record('t-alpha', 10, 'GRADER_ERROR', { mode, regrades }), null, 2)}\n`);
+  if (fixture === 'grader-error') {
+    // An eleventh record: a check threw.
+    put(dir, 'trials/t-alpha/10.json', `${JSON.stringify(record('t-alpha', 10, 'GRADER_ERROR', { mode }), null, 2)}\n`);
     put(dir, 'trajectories/t-alpha/10.jsonl', TRAJECTORY);
     replay['t-alpha/10'] = { match: true };
   }

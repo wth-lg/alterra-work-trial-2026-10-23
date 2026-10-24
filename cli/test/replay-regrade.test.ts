@@ -61,6 +61,35 @@ describe('replay and regrade', () => {
     expect(other.text).toMatch(new RegExp(`grader version is ${GRADER_VERSION}`));
   });
 
+  it('regrade stores the check results; replay compares against the current grade, and only outcome and score for an entry without checks', async () => {
+    const entry = (readRecord(0).regrades as Array<{ checks?: Array<{ id: string; met: unknown }> }>)[0]!;
+    const recorded = readRecord(0) as unknown as { checks: Array<{ id: string; met: unknown }> };
+    expect(entry.checks?.map((c) => [c.id, c.met])).toEqual(recorded.checks.map((c) => [c.id, c.met]));
+    const copy = join(tempDir('replay-current'), 'replay-current');
+    cpSync(dir, copy, { recursive: true });
+    const file = (i: number) => join(copy, 'trials', '_toy', `${i}.json`);
+    type Rec = { outcome: string; score: number; checks: Array<{ met: unknown }>; regrades: Array<{ outcome?: string; score?: number; checks?: unknown }> };
+    const edit = (i: number, f: (r: Rec) => void) => {
+      const r = JSON.parse(readFileSync(file(i), 'utf8')) as Rec;
+      f(r);
+      writeFileSync(file(i), JSON.stringify(r, null, 2));
+    };
+    // _toy/0: an earlier, buggy grader recorded FAIL with other check results; the regrade is PASS.
+    edit(0, (r) => Object.assign(r, { outcome: 'FAIL', score: 0, checks: r.checks.map((c) => ({ ...c, met: !c.met })) }));
+    // _toy/1: an entry from before regrade stored checks.
+    edit(1, (r) => delete r.regrades[0]!.checks);
+    const ok = await cli(replay, [copy]);
+    expect(ok.code, ok.text).toBe(0);
+    expect(ok.text).toContain('_toy/1: its last regrade recorded no check results; compared outcome and score only');
+    const j = JSON.parse(readFileSync(join(copy, 'replay.json'), 'utf8'));
+    expect(j.trials['_toy/0']).toMatchObject({ match: true, outcome: 'PASS', recorded_outcome: 'FAIL', current_outcome: 'PASS' });
+    // The current grade is what replay must reproduce: an entry that says FAIL does not match.
+    edit(0, (r) => Object.assign(r.regrades[0]!, { outcome: 'FAIL', score: 0 }));
+    const bad = await cli(replay, [copy]);
+    expect(bad.code).toBe(1);
+    expect(bad.text).toMatch(/_toy\/0: regrade gives PASS score 1, the current grade FAIL score 0/);
+  });
+
   it('replay refuses a trial whose task_version is not the checkout\'s, naming both; regrade still runs', async () => {
     const copy = join(tempDir('replay-changed'), 'replay-changed');
     cpSync(dir, copy, { recursive: true });

@@ -2,12 +2,14 @@
 // Re-executes every settled trial's tool log against a fresh store and grades it again from the
 // record's judge cache (packages/core/run.ts gradeTrajectory), with no model call and no client:
 // a judge cache miss is an error, named with its trial and cache key. A trial matches when the
-// replay reaches the record's final state hash and the grade has the record's outcome, score and
-// check results. A trial whose record's task_version is not the checkout's (the task or the world
+// replay reaches the record's final state hash and the grade has the outcome, score and check
+// results of the record's current grade (packages/core/summary.ts currentGrade: its last cli
+// regrade, else its recorded grade). A last regrade entry written before regrade stored check
+// results is compared on outcome and score only, and replay says so. A trial whose record's task_version is not the checkout's (the task or the world
 // changed since it ran) is not replayed: it does not match, with the reason 'task changed: run at
 // <record's>, checkout at <checkout's>' (regrade still grades it, against the newer version).
 // Writes <run>/replay.json, {trials: {"<task>/<index>": {match, outcome,
-// recorded_outcome, error?}}}, which `summary --require replay=all` reads. Exit 0 when every trial
+// recorded_outcome, current_outcome, error?}}}, which `summary --require replay=all` reads. Exit 0 when every trial
 // matches; 1 otherwise; 2 on a usage error.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 import type { BatchRecord } from '../packages/core/batch.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import { gradeTrajectory } from '../packages/core/run.ts';
+import { currentGrade } from '../packages/core/summary.ts';
 import { taskVersion, type TaskSource } from '../packages/core/tasks.ts';
 import { parseTrajectory } from '../packages/core/trajectory.ts';
 import type { Grade } from '../packages/grader/grade.ts';
@@ -67,7 +70,8 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     return 1;
   }
   const tasks = deps.tasks ?? nodeTaskSource({ testMode: false });
-  const trials: Record<string, { match: boolean; outcome: string | null; recorded_outcome: string; error?: string }> = {};
+  const trials: Record<string, { match: boolean; outcome: string | null; recorded_outcome: string; current_outcome: string; error?: string }> = {};
+  const notes: string[] = [];
   const { worldHash } = repoWorld();
   const versions = new Map<string, Promise<string>>();
   const current = (id: string) => {
@@ -81,27 +85,33 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     try {
       now = await current(r.task_id);
     } catch (e) {
-      trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, error: (e as Error).message };
+      trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, current_outcome: currentGrade(r).outcome, error: (e as Error).message };
       continue;
     }
     if (r.task_version === now) same.push(stored);
-    else trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, error: `task changed: run at ${r.task_version}, checkout at ${now}` };
+    else trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, current_outcome: currentGrade(r).outcome, error: `task changed: run at ${r.task_version}, checkout at ${now}` };
   }
   const results = await regradeRun(dir, tasks, same);
   for (const res of results) {
     const r = res.stored.record;
     const name = trialName(r);
+    const cur = currentGrade(r);
+    const base = { recorded_outcome: r.outcome, current_outcome: cur.outcome };
     if ('grade' in res) {
       const g = res.grade;
-      const match = g.outcome === r.outcome && g.score === r.score && metOf(g.checks) === metOf(r.checks);
-      trials[name] = { match, outcome: g.outcome, recorded_outcome: r.outcome, ...(match ? {} : { error: g.error?.message ?? `regrade gives ${g.outcome} score ${g.score}, the record ${r.outcome} score ${r.score}` }) };
+      const checksKnown = !cur.regraded || cur.checks !== null;
+      if (!checksKnown) notes.push(`replay: ${name}: its last regrade recorded no check results; compared outcome and score only`);
+      const match = g.outcome === cur.outcome && g.score === cur.score && (!checksKnown || metOf(g.checks) === metOf(cur.checks ?? undefined));
+      const was = `the ${cur.regraded ? 'current grade' : 'record'} ${cur.outcome} score ${cur.score}`;
+      trials[name] = { match, outcome: g.outcome, ...base, ...(match ? {} : { error: g.error?.message ?? `regrade gives ${g.outcome} score ${g.score}, ${was}` }) };
     } else {
-      trials[name] = { match: false, outcome: null, recorded_outcome: r.outcome, error: 'miss' in res ? res.miss : res.error };
+      trials[name] = { match: false, outcome: null, ...base, error: 'miss' in res ? res.miss : res.error };
     }
   }
   writeJson(join(dir, 'replay.json'), { trials });
   const bad = Object.entries(trials).filter(([, t]) => !t.match);
   const say = json ? deps.err : deps.out;
+  for (const n of notes) say(n);
   for (const [name, t] of bad) say(`replay: ${name}: ${t.error}`);
   say(`replay: ${Object.keys(trials).length - bad.length} of ${Object.keys(trials).length} trials reproduced; wrote ${join(dir, 'replay.json')}`);
   if (json) deps.out(JSON.stringify({ trials }));

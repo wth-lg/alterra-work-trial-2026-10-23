@@ -1,6 +1,7 @@
 // pnpm cli summary <run> [--require <spec>] [--task all|<id,...>] [--allow-mock] [--json]
 // Summarizes a run (packages/core/summary.ts): per task pass k/n over its valid trials with a
-// Wilson 95% interval, ENV_ERROR counted raw over settled and re-queued attempts, the models seen,
+// Wilson 95% interval, every figure at each record's current grade (its last cli regrade, else
+// its recorded outcome; a task with regraded records also prints its recorded k/n, as disclosure), ENV_ERROR counted raw over settled and re-queued attempts, the models seen,
 // the initial state hashes and replay.json's verdicts. Writes <run>/summary.json, validated
 // against the schema before it is written. --require checks the run:
 //   valid=N          every task has exactly N valid trials (donewhen: trials=N)
@@ -23,7 +24,8 @@ import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BatchRecord } from '../packages/core/batch.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
-import { assertSummary, checkRequirements, parseRequire, summarize, type Requirements, type SummaryTrial } from '../packages/core/summary.ts';
+import { isValid } from '../packages/core/outcomes.ts';
+import { assertSummary, checkRequirements, parseRequire, summarize, type RegradeGrade, type Requirements, type SummaryTrial } from '../packages/core/summary.ts';
 import type { TaskSource } from '../packages/core/tasks.ts';
 import { readManifest, requeuedRecords, settledRecords, writeJson } from './adapters/result-sink-node.ts';
 import { nodeTaskSource } from './adapters/tasks-node.ts';
@@ -39,7 +41,7 @@ const defaults: Deps = { out: (l) => process.stdout.write(`${l}\n`), err: (l) =>
 const USAGE = 'usage: pnpm cli summary <run> [--require valid=N,band=a-b,env_error_raw=N,grader_error=N,model=M,replay=all,mode=live] [--task all|<id,...>] [--allow-mock] [--json]';
 
 // A record as cli regrade leaves it: its regrades[] entries appended.
-const toTrial = (r: BatchRecord & { regrades?: Array<{ outcome: string }> }): SummaryTrial => ({
+const toTrial = (r: BatchRecord & { regrades?: RegradeGrade[] }): SummaryTrial => ({
   task_id: r.task_id, task_version: r.task_version ?? null, index: r.index, outcome: r.outcome, model_requested: r.model_requested,
   models_returned: r.models_returned ?? [], state_hash: r.state_hash, tool_errors: r.tool_errors ?? {}, cost_usd: r.cost_usd ?? 0,
   judge_cost_usd: r.judge_cost_usd ?? 0, score: r.score ?? null,
@@ -118,7 +120,9 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const width = Math.max(...Object.keys(s.tasks).map((id) => id.length), 4);
   for (const [id, t] of Object.entries(s.tasks)) {
     const w = t.wilson95 === null ? 'n/a' : `${pct(t.wilson95.lo)}-${pct(t.wilson95.hi)}`;
-    say(`${id.padEnd(width)}  ${t.passes}/${t.trials}  Wilson 95% ${w}  ENV_ERROR raw ${t.env_error_raw}  re-queued ${t.requeued}`);
+    const recorded = Object.entries(t.recorded_outcomes).filter(([o]) => isValid(o));
+    const disclosed = t.regraded === 0 ? '' : `  regraded ${t.regraded} (recorded ${t.recorded_outcomes.PASS ?? 0}/${recorded.reduce((a, [, n]) => a + n, 0)})`;
+    say(`${id.padEnd(width)}  ${t.passes}/${t.trials}  Wilson 95% ${w}  ENV_ERROR raw ${t.env_error_raw}  re-queued ${t.requeued}${disclosed}`);
   }
   say(`GRADER_ERROR ${s.totals.grader_error} at the current grade; history ${s.totals.grader_error_history} (GRADER_ERROR in an earlier grade, disclosed only). A GRADER_ERROR is never re-queued as a model trial: regrade grades it again`);
   for (const v of s.violations) say(`violation: ${v}`);

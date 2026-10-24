@@ -1,8 +1,10 @@
 // pnpm cli regrade <run> --grader-version <v> [--json]
 // Grades every settled trial of a run again with this checkout's grader, from its trajectory and
 // its record's judge cache, with no model call and no client, and appends {grader_version,
-// outcome, score, valid, changed, at} to the record's regrades[]; the original grade is never
-// changed (design section 6). --grader-version must name this checkout's GRADER_VERSION, so a
+// outcome, score, valid, checks, changed, at} to the record's regrades[]; the original grade is
+// never changed (design section 6). The last entry is the record's current grade, which summary,
+// audit-check and replay read (packages/core/summary.ts currentGrade); checks are its check
+// results, so replay can compare them; changed says the outcome differs from the grade before. --grader-version must name this checkout's GRADER_VERSION, so a
 // regrade records the version that really ran. A record that already has an entry for the version
 // is skipped, so a rerun changes nothing. A judge cache miss is an error: regrade names each
 // trial and the missing cache key, exits 1 and writes no record. Exit 0 when every record is
@@ -11,8 +13,9 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { installEgressGuard } from '../packages/core/egress.ts';
+import { currentGrade } from '../packages/core/summary.ts';
 import type { TaskSource } from '../packages/core/tasks.ts';
-import { GRADER_VERSION } from '../packages/grader/grade.ts';
+import { GRADER_VERSION, type CheckResult } from '../packages/grader/grade.ts';
 import { settledRecords, writeJson } from './adapters/result-sink-node.ts';
 import { nodeTaskSource } from './adapters/tasks-node.ts';
 import { regradeRun, trialName } from './replay.ts';
@@ -28,6 +31,7 @@ export interface RegradeEntry {
   outcome: string;
   score: number | null;
   valid: boolean;
+  checks: CheckResult[];
   changed: boolean;
   at: string;
 }
@@ -77,8 +81,9 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   for (const r of results) {
     if (!('grade' in r)) continue;
     const rec = r.stored.record as typeof r.stored.record & { regrades?: RegradeEntry[] };
-    const entry: RegradeEntry = { grader_version: version, outcome: r.grade.outcome, score: r.grade.score, valid: r.grade.valid, changed: r.grade.outcome !== rec.outcome, at };
-    if (entry.changed) changed.push(`${trialName(rec)} ${rec.outcome} -> ${entry.outcome}`);
+    const before = currentGrade(rec).outcome;
+    const entry: RegradeEntry = { grader_version: version, outcome: r.grade.outcome, score: r.grade.score, valid: r.grade.valid, checks: r.grade.checks, changed: r.grade.outcome !== before, at };
+    if (entry.changed) changed.push(`${trialName(rec)} ${before} -> ${entry.outcome}`);
     writeJson(r.stored.file, { ...rec, regrades: [...(rec.regrades ?? []), entry] });
   }
   say(`regrade: grader ${version}: ${results.length} regraded, ${all.length - todo.length} already at this version${changed.length ? `; outcome changed: ${changed.join(', ')}` : ''}`);

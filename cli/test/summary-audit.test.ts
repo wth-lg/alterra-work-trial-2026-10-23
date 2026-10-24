@@ -53,6 +53,7 @@ describe('summary --require', () => {
     expect(r.code, r.out + r.err).toBe(1);
     const why = { 'nine-trials': /t-alpha.*9 valid trials.*10/, 'model-mismatch': /claude-other-model/, 'requeued-env-error': /ENV_ERROR.*1.*0/, 'replay-mismatch': /replay.*t-alpha\/2/, 'eight-of-ten': /t-alpha.*8\/10.*2-7/,
       'missing-task': /t-beta.*expected.*no records/, 'mock-mode': /mock-fixture.*--allow-mock/, 'grader-error': /GRADER_ERROR in 1 record at its current grade/,
+      'fail-regraded-pass': /t-alpha: 10\/10 passes, outside the band 2-7/,
     }[fixture];
     expect(r.out + r.err).toMatch(why);
   });
@@ -81,7 +82,19 @@ describe('summary --require', () => {
     const regraded = await cli(summary, [run('grader-error-regraded'), '--require', REQUIRE, '--json']);
     expect(regraded.code, regraded.err).toBe(0);
     expect(regraded.err).toMatch(/GRADER_ERROR 0 at the current grade; history 1 .*never re-queued/);
-    expect(JSON.parse(regraded.out).totals).toMatchObject({ grader_error: 0, grader_error_history: 1 });
+    const j = JSON.parse(regraded.out);
+    expect(j.totals).toMatchObject({ grader_error: 0, grader_error_history: 1, regraded: 1 });
+    expect(j.tasks['t-alpha']).toMatchObject({ records: 10, trials: 10, passes: 5, recorded_outcomes: { PASS: 5, FAIL: 4, GRADER_ERROR: 1 } });
+  });
+
+  it('k/N, valid and band read the current grade: 5 FAIL regraded to PASS print 10/10, with the recorded 5/10 disclosed', async () => {
+    const r = await cli(summary, [run('fail-regraded-pass'), '--require', REQUIRE, '--json']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/t-alpha\s+10\/10\s+Wilson 95% 72\.2%-100\.0%.*regraded 5 \(recorded 5\/10\)/);
+    expect(r.err).toMatch(/violation: t-alpha: 10\/10 passes, outside the band 2-7/);
+    const j = JSON.parse(r.out);
+    expect(j.tasks['t-alpha']).toMatchObject({ trials: 10, passes: 10, pass_rate: 1, outcomes: { PASS: 10 }, recorded_outcomes: { PASS: 5, FAIL: 5 }, regraded: 5 });
+    expect(j.schema_version).toBe(2);
   });
 
   it('exits 2 on an unknown requirement and 1 on a missing run', async () => {
@@ -95,6 +108,17 @@ describe('audit-check', () => {
     const r = await cli(auditCheck, [run('clean'), '--json']);
     expect(r.code, r.out + r.err).toBe(0);
     expect(JSON.parse(r.out)).toMatchObject({ failures: 10, labelled: 10, environment: 0, grader: 0, violations: [] });
+  });
+
+  it('reads the current grade: a GRADER_ERROR regraded to FAIL is a labelled failure; a FAIL regraded to PASS contradicts its FAIL label', async () => {
+    const fixed = await cli(auditCheck, [run('grader-error-regraded'), '--json']);
+    expect(fixed.code, fixed.out + fixed.err).toBe(0);
+    expect(JSON.parse(fixed.out)).toMatchObject({ failures: 10, labelled: 10, violations: [] });
+    const passed = await cli(auditCheck, [run('fail-regraded-pass'), '--json']);
+    expect(passed.code).toBe(1);
+    const j = JSON.parse(passed.out);
+    expect(j.failures).toBe(5);
+    expect(j.violations).toContainEqual('t-alpha/5: labelled FAIL, the current grade is PASS');
   });
 
   it.each(AUDIT_FIXTURES)('exits 1 on %s, naming the violation', async (fixture) => {
