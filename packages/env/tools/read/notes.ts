@@ -1,8 +1,8 @@
 // search_notes (design section 3): keyword search over the text of notes (DocumentReference)
 // and reports (DiagnosticReport presentedForm). BM25 over literal tokens: no stemming, no
-// synonyms. A row shows part of the note's text as {note, snippet}, so it exposes the note and
-// records the snippet as the text shown (the exposure rule, registry.ts); fhir_read shows the
-// whole text.
+// synonyms. A row shows part of the note's text as {note, snippet}: the snippet is recorded as
+// the text shown, but an excerpt is not the note's decisive content, so the note stays
+// referenced (the exposure rule, registry.ts); fhir_read shows the whole text and exposes it.
 import type { Attachment, DiagnosticReport, DocumentReference, Resource } from '@medplum/fhirtypes';
 import { ToolError } from '../errors.ts';
 import type { Tool } from '../registry.ts';

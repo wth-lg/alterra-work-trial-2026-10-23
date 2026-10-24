@@ -6,28 +6,32 @@
 // Exposure (design section 3, "Exposure tagging") follows one rule: a result exposes a resource
 // when it shows the fields a clinician would act on (a Patient's demographics, birth date
 // included; an Observation's value, unit, status and date; a MedicationRequest's medication,
-// dose and status; a note's or report's text, whole or as a search_notes snippet; a policy's
-// text), and only references it when it shows an id, a title or a pointer to read it later.
+// dose and status; a note's or report's whole text, as fhir_read returns it; a policy's text),
+// and only references it when it shows an id, a title, a pointer to read it later or an excerpt.
 // The tags are derived from the payload, not declared by each tool, so they cannot drift from
 // what the model saw:
 //   - exposed_ids: every object in the payload with a string resourceType and id (a full
 //     resource, a full policy with resourceType 'Policy', or a row that shows that resource's
-//     decisive fields, as search_patients rows do), and every resource whose text is shown
-//     (below);
+//     decisive fields, as search_patients rows do);
 //   - referenced_ids: every other string in the payload of the form <Kind>/<id>: references
 //     inside those resources and the ids that summary rows name, plus resources returned
 //     without their decisive content (below);
-//   - shown: for each resource whose text the payload shows, that exact text: a search_notes
-//     row's snippet ({note, snippet}), a note read with fhir_read ({resource, text}) or a whole
-//     policy ({resourceType: 'Policy', id, text}). A task grader checks a decisive phrase
-//     against it (grader/exposure.ts textShown), since a snippet shows only part of a note.
+//   - shown: for each note, report or policy whose text the payload shows, that text with its
+//     whitespace collapsed to single spaces (case kept), the same for every shape: a search_notes
+//     row's snippet ({note, snippet}), a note or report read with fhir_read ({resource, text}) or
+//     a whole policy ({resourceType: 'Policy', id, text}). Shown text is not exposure: a snippet
+//     is an excerpt, so its note stays referenced, and exposed_ids keeps meaning "the decisive
+//     content was shown". A task grader asks whether a decisive phrase was shown with
+//     grader/exposure.ts shows(), which compares both sides whitespace-collapsed and ignoring
+//     case, so a phrase split across lines in the note matches as it does in a snippet.
 // Tools follow four conventions for this to hold: a row that shows a resource's decisive
-// fields carries its resourceType and id; a row that shows a resource's text carries it in one
-// of the three shapes above; a row that does neither (an inbox item, a policy title) names ids
-// only as references ('Patient/pt-0001') and never carries a resourceType; and a resource
-// returned with content left out holds an object with a `read_with` key naming the tool that
-// returns it (a note's text attachment in fhir_search, which shows only its size), which makes
-// the resource referenced, not exposed. Each read tool's header says which applies.
+// fields carries its resourceType and id; a row that shows a note's, report's or policy's text
+// carries it in one of the three shapes above (no other object's `text` is shown text); a row
+// that does neither (an inbox item, a policy title, a search_notes row) names ids only as
+// references ('Patient/pt-0001') and never carries a resourceType; and a resource returned with
+// content left out holds an object with a `read_with` key naming the tool that returns it (a
+// note's text attachment in fhir_search, which shows only its size), which makes the resource
+// referenced, not exposed. Each read tool's header says which applies.
 //
 // A write tool (tools/write/) returns a Committed: its payload plus the ids it put into the
 // store. callTool reports those as written_ids, which is how the grader learns what a call
@@ -68,7 +72,8 @@ export interface ToolResult {
   content: unknown;
   exposed_ids: string[];
   referenced_ids: string[];
-  // Present only when the payload shows a resource's text: that text per reference (above).
+  // Present only when the payload shows a note's, report's or policy's text: that text per
+  // reference, whitespace-collapsed (above).
   // The loop does not record it; the grader derives it from the recorded content (shownText).
   shown?: Readonly<Record<string, string>>;
   // Present only on a committed write: every resource the call put into the store, as
@@ -174,12 +179,21 @@ const REF = new RegExp(`^(${[...RESOURCE_TYPES, 'Policy'].join('|')})/[A-Za-z0-9
 
 const isId = (v: unknown): v is string => typeof v === 'string';
 
-// The resource whose text an object shows, and the text, in one of the three shapes above.
+const TEXT_TYPES = new Set(['DocumentReference', 'DiagnosticReport']);
+const typeOf = (ref: string) => ref.slice(0, ref.indexOf('/'));
+
+// Shown text as it is recorded and compared: whitespace runs collapsed to one space, trimmed,
+// case kept.
+export const collapseWhitespace = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+// The note, report or policy whose text an object shows, and the text, in one of the three
+// shapes above. Any other object shows no text, whatever its keys.
 function textIn(o: Record<string, unknown>): [string, string] | undefined {
-  if (typeof o.snippet === 'string' && isId(o.note) && REF.test(o.note)) return [o.note, o.snippet];
+  if (typeof o.snippet === 'string' && isId(o.note) && REF.test(o.note) && TEXT_TYPES.has(typeOf(o.note))) return [o.note, o.snippet];
   if (typeof o.text !== 'string') return undefined;
-  const r = (o.resource ?? o) as { resourceType?: unknown; id?: unknown };
-  return isId(r.resourceType) && isId(r.id) ? [`${r.resourceType}/${r.id}`, o.text] : undefined;
+  const r = (o.resource ?? {}) as { resourceType?: unknown; id?: unknown };
+  if (isId(r.resourceType) && TEXT_TYPES.has(r.resourceType) && isId(r.id)) return [`${r.resourceType}/${r.id}`, o.text];
+  return o.resourceType === 'Policy' && isId(o.id) ? [`Policy/${o.id}`, o.text] : undefined;
 }
 
 interface Tags {
@@ -201,10 +215,7 @@ function walk(value: unknown, tags: Tags): boolean {
   const { resourceType, id } = value as { resourceType?: unknown; id?: unknown };
   if (isId(resourceType) && isId(id)) (partial ? tags.refs : tags.exposed).add(`${resourceType}/${id}`);
   const text = textIn(value as Record<string, unknown>);
-  if (text) {
-    tags.exposed.add(text[0]);
-    tags.shown.set(text[0], [...(tags.shown.get(text[0]) ?? []), text[1]]);
-  }
+  if (text) tags.shown.set(text[0], [...(tags.shown.get(text[0]) ?? []), collapseWhitespace(text[1])]);
   return partial;
 }
 
@@ -217,8 +228,8 @@ function tagsOf(payload: unknown): Tags {
 const shownOf = (tags: Tags): Record<string, string> =>
   Object.fromEntries([...tags.shown].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => [k, v.join('\n')]));
 
-// The text a payload shows per reference, in payload order, newline-joined when one resource's
-// text appears twice. The grader calls this on a recorded result's content.
+// The text a payload shows per reference, whitespace-collapsed, in payload order and
+// newline-joined when one resource's text appears twice. The grader calls this on a recorded result's content.
 export const shownText = (payload: unknown): Record<string, string> => shownOf(tagsOf(payload));
 
 export function exposure(payload: unknown): Pick<ToolResult, 'exposed_ids' | 'referenced_ids' | 'shown'> {

@@ -214,9 +214,6 @@ function payloadIds(content: unknown): { exposed: string[]; referenced: string[]
       const { resourceType, id } = v as { resourceType?: unknown; id?: unknown };
       // A resource whose note text was left out (an attachment naming read_with) is referenced.
       if (typeof resourceType === 'string' && typeof id === 'string') (JSON.stringify(v).includes('"read_with":') ? refs : exposed).add(`${resourceType}/${id}`);
-      // A search_notes row shows its note's text as a snippet, which exposes the note.
-      const { note, snippet } = v as { note?: unknown; snippet?: unknown };
-      if (typeof snippet === 'string' && typeof note === 'string' && REF.test(note)) exposed.add(note);
     }
     return v;
   });

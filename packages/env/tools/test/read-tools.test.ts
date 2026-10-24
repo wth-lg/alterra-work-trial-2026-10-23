@@ -7,7 +7,7 @@ import { clock, NOW } from '../../clock.ts';
 import { parseNdjson } from '../../fixture-source.ts';
 import { Store } from '../../store.ts';
 import { INBOX_QUEUE_SYSTEM, READ_TOOLS, type CatalogEntry, type Policy, type ReadContext } from '../read/index.ts';
-import { approxTokens, callTool, definitions, RESULT_TOKEN_CAP, type ToolResult } from '../registry.ts';
+import { approxTokens, callTool, collapseWhitespace, definitions, exposure, RESULT_TOKEN_CAP, type ToolResult } from '../registry.ts';
 import { ruleViolations } from './exposure-rule.ts';
 
 const root = new URL('../../../../', import.meta.url);
@@ -76,9 +76,6 @@ function payloadIds(content: unknown): { exposed: string[]; referenced: string[]
       const { resourceType, id } = v as { resourceType?: unknown; id?: unknown };
       // A resource whose note text was left out (an attachment naming read_with) is referenced.
       if (typeof resourceType === 'string' && typeof id === 'string') (JSON.stringify(v).includes('"read_with":') ? refs : exposed).add(`${resourceType}/${id}`);
-      // A search_notes row shows its note's text as a snippet, which exposes the note.
-      const { note, snippet } = v as { note?: unknown; snippet?: unknown };
-      if (typeof snippet === 'string' && typeof note === 'string' && REF.test(note)) exposed.add(note);
     }
     return v;
   });
@@ -320,7 +317,7 @@ describe('note text and exposure', () => {
     expect(body.resource.content[0]!.attachment).not.toHaveProperty('read_with');
     expect(body.resource.content[0]!.attachment.size).toBe(new TextEncoder().encode(body.text).length);
     expect(r.exposed_ids).toEqual(['DocumentReference/doc-00001']);
-    expect(r.shown).toEqual({ 'DocumentReference/doc-00001': body.text });
+    expect(r.shown).toEqual({ 'DocumentReference/doc-00001': collapseWhitespace(body.text) });
     expectTagsMatch(r);
   });
 });
@@ -364,11 +361,11 @@ describe('search_notes', () => {
     expect(rows[0]!.snippet).toContain('iohexol');
     expectTagsMatch(r);
   });
-  it('exposes each note for the snippet it shows and records that exact text', () => {
+  it('references each note and records the snippet it shows as shown text, not exposure', () => {
     const r = call('search_notes', { query: 'iohexol', patient: 'pt-0060' }, small);
     const rows = ok(r).entries as Array<{ note: string; snippet: string }>;
-    expect(r.exposed_ids).toEqual(['DocumentReference/doc-z-a', 'DocumentReference/doc-z-b', 'DocumentReference/doc-z-c']);
-    expect(r.referenced_ids).toEqual(['Patient/pt-0060', 'Practitioner/pr-reyes']);
+    expect(r.exposed_ids).toEqual([]);
+    expect(r.referenced_ids).toEqual(['DocumentReference/doc-z-a', 'DocumentReference/doc-z-b', 'DocumentReference/doc-z-c', 'Patient/pt-0060', 'Practitioner/pr-reyes']);
     expect(r.shown).toEqual(Object.fromEntries(rows.map((x) => [x.note, x.snippet])));
     expect(r.shown!['DocumentReference/doc-z-a']).toBe('iohexol reaction hives. iohexol again.');
   });
@@ -493,7 +490,7 @@ describe('exposure rule', () => {
     ['fhir_search', { resource_type: 'DocumentReference', patient: 'pt-0001', count: 5 }, [], []],
     ['fhir_read', { resource_type: 'Patient', id: 'pt-0001' }, ['Patient/pt-0001'], ['Patient']],
     ['fhir_read', { resource_type: 'DocumentReference', id: 'doc-00001' }, ['DocumentReference/doc-00001'], ['DocumentReference']],
-    ['search_notes', { query: 'patient', patient: 'pt-0001' }, null, ['DiagnosticReport', 'DocumentReference']],
+    ['search_notes', { query: 'patient', patient: 'pt-0001' }, [], []],
     ['read_policy', {}, [], []],
     ['lookup_catalog', { query: 'metformin', kind: 'medication' }, [], []],
     ['list_inbox', { queue: 'results' }, [], []],
@@ -518,6 +515,38 @@ describe('exposure rule', () => {
     expect(ruleViolations({ ...row, content: { entries: [{ patient: 'Patient/pt-0001' }] }, exposed_ids: ['Patient/pt-0001'], referenced_ids: [] }, stored)).toEqual([
       'Patient/pt-0001 is exposed without its decisive fields',
     ]);
+  });
+  it('catches a note exposed for a snippet: an excerpt is shown text, not exposure', () => {
+    const r = call('search_notes', { query: 'patient', patient: 'pt-0001' });
+    const notes = Object.keys(r.shown!);
+    expect(notes.length).toBeGreaterThan(0);
+    expect(r.referenced_ids).toEqual(expect.arrayContaining(notes));
+    const overTagged = { ...r, exposed_ids: notes, referenced_ids: r.referenced_ids.filter((k) => !notes.includes(k)) };
+    expect(ruleViolations(overTagged, stored)).toEqual(expect.arrayContaining([`${notes[0]} is exposed without its decisive fields`]));
+  });
+  it('records shown text only for note, report and policy shapes', () => {
+    // reports/pr-review-exposure-1.md S5 probe: a string `text` beside any resourceType and id.
+    expect(exposure({ resourceType: 'Observation', id: 'o1', text: 'free string' })).toEqual({ exposed_ids: ['Observation/o1'], referenced_ids: [] });
+    expect(exposure({ resource: { resourceType: 'Patient', id: 'p1' }, text: 'anything' })).toEqual({ exposed_ids: ['Patient/p1'], referenced_ids: [] });
+    expect(exposure({ resource: { resourceType: 'DocumentReference', id: 'x' }, text: ' hi\n there ' }).shown).toEqual({ 'DocumentReference/x': 'hi there' });
+    expect(exposure({ resourceType: 'Policy', id: 'P-1', text: 'a  b' }).shown).toEqual({ 'Policy/P-1': 'a b' });
+  });
+  it('catches an inbox summary that carries the focus resource\'s clinical value', () => {
+    // list_inbox rows stay referenced on the assumption that a summary is a pointer, not the
+    // result (reports/verifier-phase-exposure-1.md N2).
+    const obs = { resourceType: 'Observation', id: 'obs-ib-1', status: 'final', code: { text: 'Creatinine' }, subject: { reference: 'Patient/pt-0001' }, valueQuantity: { value: 2.4, unit: 'mg/dL' } } as Observation;
+    const item = (description: string): Task => ({
+      resourceType: 'Task', id: 'task-ib-1', status: 'requested', intent: 'order', code: { coding: [{ system: INBOX_QUEUE_SYSTEM, code: 'results' }] },
+      focus: { reference: 'Observation/obs-ib-1' }, for: { reference: 'Patient/pt-0001' }, authoredOn: '2026-10-22T09:00:00-04:00', description,
+    });
+    const run = (description: string) => {
+      const c = context([obs, item(description)]);
+      const r = call('list_inbox', { queue: 'results', count: 50 }, c);
+      return ruleViolations(r, (key) => c.world.get(key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)));
+    };
+    expect(run('New creatinine result')).toEqual([]);
+    expect(run('Creatinine 2.4 mg/dL, up from 1.1')).toEqual(['Task/task-ib-1 summary shows the value of Observation/obs-ib-1']);
+    expect(run('Creatinine 12.4')).toEqual([]);
   });
 });
 
