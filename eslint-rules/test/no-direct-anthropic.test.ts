@@ -57,7 +57,7 @@ describe('no-direct-anthropic', () => {
 
   it('pnpm typecheck covers the eslint-rules tests', () => {
     const files = execFileSync('pnpm', ['exec', 'tsc', '-p', 'tsconfig.json', '--listFilesOnly'], { cwd: root, encoding: 'utf8' });
-    for (const f of ['no-direct-anthropic', 'no-forged-grant', 'no-ledger-factory']) expect(files).toContain(`eslint-rules/test/${f}.test.ts`);
+    for (const f of ['no-direct-anthropic', 'no-direct-dispatcher', 'no-forged-grant', 'no-ledger-factory']) expect(files).toContain(`eslint-rules/test/${f}.test.ts`);
   }, 60_000);
 
   it('allows the client and constants anywhere', async () => {
