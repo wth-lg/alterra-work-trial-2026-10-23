@@ -1,8 +1,9 @@
 // The matrix's own failure modes, part 6: a mutant's declared rubric losses (`loses`). A mutant
 // must lose exactly the rubric items it declares (a positive item not met, a penalty met), so a
 // regression that leaves the gates alone but changes what the rubric takes away still fails the
-// matrix (verifier-phase-P10-3 M1).
+// matrix (verifier-phase-P10-3 M1). Every mutant must declare it, [] when it loses none.
 import { describe, expect, it } from 'vitest';
+import type { Mutant } from '../types.ts';
 import { matrix, ONE, TOY } from './harness.ts';
 
 const mutant = (id: string) => {
@@ -10,7 +11,7 @@ const mutant = (id: string) => {
   if (!m) throw new Error(`no toy mutant ${id}`);
   return m;
 };
-const replace = (m: ReturnType<typeof mutant>) => TOY.mutants.map((x) => (x.id === m.id ? m : x));
+const replace = (m: Mutant) => TOY.mutants.map((x) => (x.id === m.id ? m : x));
 
 describe('matrix --task _toy, rubric losses', () => {
   it('passes when each mutant loses exactly what it declares', async () => {
@@ -39,14 +40,22 @@ describe('matrix --task _toy, rubric losses', () => {
     expect(text).toContain('mutant read_only declares loses no_such_item, which is not a rubric item of the task');
     expect(text).toContain('mutant read_only declares loses note_on_patient, which is not a rubric item of the task');
   });
-  it('counts the mutants that declare their losses', async () => {
+  it('exits 1 when a mutant declares no loses, naming it, without running a case', async () => {
     const [first, ...rest] = TOY.mutants;
-    const undeclared = { ...first! };
-    delete undeclared.loses;
-    const { text } = await matrix({ mutants: [undeclared, ...rest] }, { ...ONE, cases: [] });
+    const { loses: _, ...undeclared } = first!;
+    const { code, text } = await matrix({ mutants: [undeclared as Mutant, ...rest] }, { ...ONE, cases: [] });
+    expect(code).toBe(1);
     expect(text).toContain(`rubric losses: ${rest.length}/${TOY.mutants.length} mutants declare loses`);
+    expect(text).toContain(`mutant ${first!.id} declares no loses (the rubric items it loses; [] for none)`);
+  });
+  it('reports a mutant without loses as a MISMATCH when it runs', async () => {
+    const m = mutant('note_before_read');
+    const { loses: _, ...undeclared } = m;
+    const { code, text } = await matrix({ mutants: replace(undeclared as Mutant) }, { ...ONE, cases: [m.id] });
+    expect(code).toBe(1);
+    expect(text).toMatch(/mutant note_before_read .* lost \[\] \(no loses\) MISMATCH/);
   });
   it('every toy mutant declares its losses', () => {
-    expect(TOY.mutants.filter((m) => m.loses === undefined).map((m) => m.id)).toEqual([]);
+    expect(TOY.mutants.filter((m) => !Array.isArray(m.loses)).map((m) => m.id)).toEqual([]);
   });
 });

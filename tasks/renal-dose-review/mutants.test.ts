@@ -37,7 +37,7 @@ const oldRegex = (checks: readonly Check[]): Check[] =>
 
 describe('renal-dose-review mutants', () => {
   it('every mutant declares its losses', () => {
-    expect(task.mutants.filter((m) => m.loses === undefined).map((m) => m.id)).toEqual([]);
+    expect(task.mutants.filter((m) => !Array.isArray(m.loses)).map((m) => m.id)).toEqual([]);
   });
   it('the wrong-SCr mutants in the new phrasings lose note_uses_wrong_scr', async () => {
     const { code, text } = await matrix({}, { ...ONE, cases: ['eie_scr_most_recent', 'stale_scr_latest'] });

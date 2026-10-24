@@ -44,9 +44,9 @@ export interface Mutant extends Agent {
   trap: string;
   // The gate checks it must fail, and no other.
   fails: readonly string[];
-  // The rubric items it must lose (a positive item not met, a penalty met), and no other; absent,
-  // its rubric results are not checked.
-  loses?: readonly string[];
+  // The rubric items it must lose (a positive item not met, a penalty met), and no other; [] when
+  // it loses none. Required: the matrix fails a mutant without it.
+  loses: readonly string[];
 }
 
 export interface Agents {

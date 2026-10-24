@@ -10,8 +10,8 @@
 //   oracle            PASS, score 1.0, no judge item unknown
 //   alternatives      at least MIN_ALTERNATIVES, each PASS with no judge item unknown
 //   mutants           at least MIN_MUTANTS, each FAIL with exactly its declared failed gates
-//                     and, where it declares `loses`, exactly those rubric items lost (each a
-//                     rubric item of the task); every trap task.toml declares has one, and every
+//                     and exactly its declared `loses` rubric items lost (each a rubric item of
+//                     the task, [] for none); every trap task.toml declares has one, and every
 //                     mutant's trap is declared
 //   null, spray, output-gap, and status-only where the task declares it
 //                     FAIL (a model FAIL: outcome FAIL, fault model)
@@ -239,7 +239,8 @@ function verdict(c: Case, run: CaseRun, grade: Grade, misses: Miss[]): Pick<Case
   if (c.kind === 'oracle' && unknown > 0) problems.push(`oracle judge.unknown ${unknown}, want 0`);
   if (c.kind === 'alternative' && unknown > 0) problems.push(`judge.unknown ${unknown}, want 0`);
   if (c.mutant && !sameSet(failed_gates, c.mutant.fails)) problems.push(`failed [${failed_gates.join(', ')}], declared [${c.mutant.fails.join(', ')}]`);
-  const loses = c.mutant?.loses;
+  // A mutant loaded from a task file can lack `loses`; runMatrix fails it by name.
+  const loses = c.mutant?.loses as readonly string[] | undefined;
   if (loses && grade.valid) {
     for (const id of loses) if (!lost_items.includes(id)) problems.push(`declares it loses rubric item ${id}, which it keeps`);
     for (const id of lost_items) if (!loses.includes(id)) problems.push(`loses rubric item ${id}, not declared`);
@@ -388,9 +389,9 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask, opts: MatrixOp
   if (task.mutants.length < MIN_MUTANTS) fail(`${task.mutants.length} mutants, need ${MIN_MUTANTS}`);
   for (const r of mutants) {
     const m = r.case.mutant!;
-    const lossesOk = m.loses === undefined || sameSet(r.lost_items, m.loses);
-    const verdict = r.grade.outcome !== 'FAIL' ? 'not FAIL' : sameSet(r.failed_gates, m.fails) && lossesOk ? 'ok' : 'MISMATCH';
-    const losses = `lost [${r.lost_items.join(', ')}] ${m.loses === undefined ? '(not declared)' : `declared [${m.loses.join(', ')}]`}`;
+    const loses = m.loses as readonly string[] | undefined;
+    const verdict = r.grade.outcome !== 'FAIL' ? 'not FAIL' : sameSet(r.failed_gates, m.fails) && loses !== undefined && sameSet(r.lost_items, loses) ? 'ok' : 'MISMATCH';
+    const losses = `lost [${r.lost_items.join(', ')}] ${loses === undefined ? '(no loses)' : `declared [${loses.join(', ')}]`}`;
     lines.push(`  mutant ${m.id} [trap ${m.trap}]: ${r.grade.outcome} failed [${r.failed_gates.join(', ')}] declared [${m.fails.join(', ')}], ${losses} ${verdict}`);
     noteProblems(r);
   }
@@ -441,8 +442,10 @@ export async function runMatrix(env: MatrixEnv, task: MatrixTask, opts: MatrixOp
   for (const m of task.mutants) if (!task.declares.traps.includes(m.trap)) fail(`mutant ${m.id} names trap ${m.trap}, which task.toml [matrix] traps does not declare`);
 
   const rubricIds = new Set(task.checks.filter((c) => c.kind === 'rubric').map((c) => c.id));
-  lines.push(`rubric losses: ${task.mutants.filter((m) => m.loses !== undefined).length}/${task.mutants.length} mutants declare loses`);
-  for (const m of task.mutants) for (const id of m.loses ?? []) if (!rubricIds.has(id)) fail(`mutant ${m.id} declares loses ${id}, which is not a rubric item of the task`);
+  const undeclared = task.mutants.filter((m) => !Array.isArray(m.loses));
+  lines.push(`rubric losses: ${task.mutants.length - undeclared.length}/${task.mutants.length} mutants declare loses`);
+  for (const m of undeclared) fail(`mutant ${m.id} declares no loses (the rubric items it loses; [] for none)`);
+  for (const m of task.mutants) for (const id of Array.isArray(m.loses) ? m.loses : []) if (!rubricIds.has(id)) fail(`mutant ${m.id} declares loses ${id}, which is not a rubric item of the task`);
 
   const misses = results.flatMap((r) => r.misses.map((m) => ({ ...m, case: nameOf(r.case) })));
   const sources = new Map<string, number>();
