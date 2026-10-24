@@ -6,7 +6,7 @@
 //                     open refuses a missing file. Leaves an existing file as it is
 //   --check           prints each term and exits 1 when settled + reserved + open batch
 //                     projections + X (+ the remaining final-run projection with
-//                     --final-reserve) > $450
+//                     --final-reserve) > PROJECTED_CAP_USD
 //   --close <id>      closes a batch whose process died; its settled rows and unsettled
 //                     reservations keep counting. Refuses while its pid is alive on this
 //                     host, or when it was opened on another host, unless --force <reason>,

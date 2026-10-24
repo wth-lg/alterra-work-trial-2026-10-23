@@ -9,9 +9,9 @@ max_turns = 80
 [[policy]]
 id = "RBC-PHARM-07"
 title = "Renal and age dose review"
-version = "3"
+version = "4"
 effective = "2026-01-01"
-source = "Apixaban and metformin sections adapted from the FDA labels (openFDA SPL; apixaban effective 2021-06-15, metformin 2026-09-09; verified). Gabapentin table environment-local, adapted from label dosing (not verified)."
+source = "Apixaban section adapted from the FDA label (openFDA SPL effective 2021-06-15; verified). Metformin section: thresholds from the ADA Standards of Care in Diabetes 2026 section 9 (Diabetes Care 49 Suppl 1, December 2025; reduce below eGFR 45, stop below 30; verified), the 1000 mg/day cap from KDIGO 2022 Diabetes in CKD (Kidney Int 102(5S), November 2022; half the maximum dose at eGFR 30-44; cap figure not verified against the guideline text). Gabapentin table environment-local, adapted from label dosing (not verified)."
 file = "rbc-pharm-07.md"
 
 # The formulary entries the review can order: every strength of the four covered drugs.
@@ -98,7 +98,7 @@ display = "Creatinine [Mass/volume] in Serum or Plasma"
 
 # Each trap needs a mutant in tests/mutants.ts. No status-only case: T1 has no inbox items.
 [matrix]
-traps = ["stale_weight", "entered_in_error_scr", "stale_scr", "dose_inertia", "apixaban_wrong_product", "gabapentin_over_reduced", "metformin_wrongly_reduced", "scope_creep"]
+traps = ["stale_weight", "entered_in_error_scr", "stale_scr", "dose_inertia", "apixaban_wrong_dose", "gabapentin_over_reduced", "metformin_wrongly_reduced", "scope_creep"]
 
 # The four judge items read one note and quote it; medium is enough for a yes/no with a quote.
 # The pilot's live judge pass (results/judge-calibration) is the check on that choice.

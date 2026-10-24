@@ -1,7 +1,8 @@
 // T1's rubric (design section 4, "T1" rubric table): what the note must state, cite and avoid.
 // Every item reads the notes the trial wrote on the patient. The hybrid items take a value only
 // when the text gives it in the plain form the pattern names (the keyword, no other number in
-// between, then the unit); anything else goes to the extractor. Positive points total 13.
+// between, then the unit); anything else goes to the extractor. note_uses_wrong_scr is the other
+// way round: its pattern flags a wrong value, and the judge confirms it. Positive points total 13.
 import { hybrid, judged, rubric as item, type Check, type RubricCtx } from '../../../packages/grader/check.ts';
 import { dosesPerDay, isActive, isDrug } from '../../../packages/grader/normalize.ts';
 import { expected } from '../expected.ts';
@@ -10,8 +11,13 @@ const PT = expected.patient;
 const noteText = (ctx: RubricCtx) => ctx.notes.filter((n) => n.patient === PT).map((n) => n.text).join('\n\n');
 const A = expected.apixaban.criteria;
 const metText = (m: boolean) => (m ? 'met' : 'not met');
-// The stale and entered-in-error SCr values of the design's wrong paths.
+// The stale and entered-in-error SCr values of the design's wrong paths, and the plain form a
+// note states a current SCr in.
 const WRONG_SCR = [1.88, 1.71];
+const CURRENT_SCR = /\b(?:current|most recent valid|latest valid)\s+(?:SCr|serum creatinine|creatinine)\b[^\d\n]{0,30}?(\d+(?:\.\d+)?)\s*mg\/dL/gi;
+const WRONG_SCR_CRITERION =
+  'The text treats a serum creatinine of 1.88 mg/dL or 1.71 mg/dL as the patient\'s current value, the one the review uses. ' +
+  'Naming either value only to say it was entered in error, is stale or was not used does not meet this.';
 
 export const rubric: Check[] = [
   hybrid({
@@ -94,16 +100,14 @@ export const rubric: Check[] = [
     method: 'hybrid',
     traces_to: 'RBC-PHARM-07 §1',
     decisive_ids: [...expected.disregarded],
+    // The pattern only flags a candidate: a note that names 1.88 to say it was entered in error
+    // matches it too, so the judge decides whether the note treats the value as current.
     fn: async (ctx) => {
-      const x = await ctx.extract({
-        field: 'the serum creatinine the text treats as the current value, mg/dL',
-        text: noteText(ctx),
-        pattern: /\b(?:current|most recent valid|latest valid)\s+(?:SCr|serum creatinine|creatinine)\b[^\d\n]{0,30}?(\d+(?:\.\d+)?)\s*mg\/dL/i,
-      });
-      const evidence = { wrong: WRONG_SCR, ...x };
-      if (x.value === 'unknown') return { met: 'unknown', evidence };
-      const value = x.value;
-      return { met: value !== null && WRONG_SCR.some((w) => Math.abs(value - w) < 0.005), evidence };
+      const text = noteText(ctx);
+      const flagged = [...text.matchAll(CURRENT_SCR)].filter((m) => WRONG_SCR.some((w) => Math.abs(Number(m[1]) - w) < 0.005)).map((m) => m[0]);
+      if (flagged.length === 0) return { met: false, evidence: { wrong: WRONG_SCR, flagged } };
+      const v = await ctx.judge({ criterion: WRONG_SCR_CRITERION, text });
+      return { met: v.met, evidence: { wrong: WRONG_SCR, flagged, ...v.evidence } };
     },
   }),
   judged({

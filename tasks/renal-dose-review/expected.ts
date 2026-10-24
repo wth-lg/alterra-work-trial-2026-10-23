@@ -21,7 +21,6 @@ export const expected = {
   apixaban: {
     request: 'MedicationRequest/mr-t1-apixaban',
     criteria: { age: true, weight: false, scr: false },
-    rxnorm: '1364445',
     dose_mg: 5,
     per_day: 2,
   },

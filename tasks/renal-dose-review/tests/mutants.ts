@@ -2,7 +2,7 @@
 // FAIL on exactly the gates it declares. The arithmetic of each wrong path is in its why.
 import type { Mutant } from '../../../packages/grader/matrix/types.ts';
 import {
-  activeMeds, apixabanUp, crclCalc, DONE, egfrCalc, findPatient, finish, gabapentinBid, modify, note, observations, policy, read, RX, scrResults, weights,
+  activeMeds, apixabanUp, crclCalc, DONE, egfrCalc, findPatient, finish, gabapentinBid, modify, note, observations, order, policy, read, RX, scrResults, stop, weights,
 } from '../solution/steps.ts';
 
 const reads = [{ calls: [findPatient] }, { calls: [activeMeds] }, { calls: [scrResults, weights] }, { calls: [policy] }, { calls: [egfrCalc, crclCalc] }];
@@ -97,13 +97,44 @@ export const mutants: Mutant[] = [
     ],
   },
   {
-    id: 'apixaban_two_tablets',
-    trap: 'apixaban_wrong_product',
-    why: 'Raises apixaban to 5 mg twice daily but keeps the 2.5 mg tablet, two tablets a dose, instead of ordering the 5 mg tablet.',
+    id: 'apixaban_double_dose',
+    trap: 'apixaban_wrong_dose',
+    why: 'Orders the right product, the apixaban 5 mg tablet, at 10 mg twice daily (two tablets a dose): the dose term of G1 alone fails.',
     fails: ['apixaban_dose'],
     script: [
       ...reads,
-      { calls: [modify('mr-t1-apixaban', { value: 5, unit: 'mg', frequency: 'BID' }, 'One criterion met: 5 mg twice daily'), gabapentinBid] },
+      { calls: [modify('mr-t1-apixaban', { value: 10, unit: 'mg', frequency: 'BID' }, 'One criterion met: 5 mg tablets', RX.apixaban5), gabapentinBid] },
+      { calls: [note()] },
+      { calls: [finish(DONE)] },
+    ],
+  },
+  {
+    id: 'apixaban_half_tablet',
+    trap: 'dose_inertia',
+    why: 'Switches to the 5 mg tablet but writes half a tablet twice daily, which is still 2.5 mg twice daily: the 2.5 mg order is stopped, the dose is unchanged.',
+    fails: ['apixaban_dose'],
+    script: [
+      ...reads,
+      { calls: [modify('mr-t1-apixaban', { value: 0.5, unit: '{tablet}', frequency: 'BID' }, 'Changed to the 5 mg tablet', RX.apixaban5), gabapentinBid] },
+      { calls: [note({ apixaban: `Apixaban criteria (§2): age 82, 80 or older: met; weight 64.9 kg, 60 kg or less: not met; SCr 1.21 mg/dL, 1.5 or higher: not met. Changed to half a 5 mg tablet twice daily.` })] },
+      { calls: [finish(DONE)] },
+    ],
+  },
+  {
+    id: 'apixaban_two_orders',
+    trap: 'apixaban_wrong_dose',
+    why: 'Stops the 2.5 mg order and makes up 5 mg twice daily from two separate 2.5 mg orders: the total is right, but G1 needs exactly one active apixaban request.',
+    fails: ['apixaban_dose'],
+    script: [
+      ...reads,
+      {
+        calls: [
+          stop('mr-t1-apixaban', 'Replaced by 5 mg twice daily'),
+          order(RX.apixaban2_5, 2.5, 'BID', 'One criterion met: 5 mg twice daily, first 2.5 mg'),
+          order(RX.apixaban2_5, 2.5, 'BID', 'One criterion met: 5 mg twice daily, second 2.5 mg'),
+          gabapentinBid,
+        ],
+      },
       { calls: [note()] },
       { calls: [finish(DONE)] },
     ],
@@ -129,6 +160,18 @@ export const mutants: Mutant[] = [
       ...reads,
       { calls: [apixabanUp, gabapentinBid, metforminDown] },
       { calls: [note({ metformin: 'Metformin (§3): eGFR 59.8 mL/min/1.73 m2 by CKD-EPI 2021; reduced to 500 mg twice daily to be cautious.' })] },
+      { calls: [finish(DONE)] },
+    ],
+  },
+  {
+    id: 'metformin_tablets_reduced',
+    trap: 'metformin_wrongly_reduced',
+    why: 'Writes metformin in tablets and switches the product: 1 x 500 mg tablet twice daily is 1000 mg/day, a reduction the policy does not allow at eGFR 59.8.',
+    fails: ['metformin_dose'],
+    script: [
+      ...reads,
+      { calls: [apixabanUp, gabapentinBid, modify('mr-t1-metformin', { value: 1, unit: '{tablet}', frequency: 'BID' }, 'Lower metformin', RX.metformin500)] },
+      { calls: [note({ metformin: 'Metformin (§3): eGFR 59.8 mL/min/1.73 m2 by CKD-EPI 2021; changed to one 500 mg tablet twice daily.' })] },
       { calls: [finish(DONE)] },
     ],
   },

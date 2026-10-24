@@ -95,6 +95,12 @@ const SIMVASTATIN: MedicationRequest = {
   authoredOn: '2019-05-09T10:00:00-04:00',
   requester: { reference: 'Practitioner/pr-okafor' },
 };
+// An active extended-release metoprolol 100 mg, test-only (T1 owns pt-0002's base metoprolol).
+const METOPROLOL: MedicationRequest = {
+  ...SIMVASTATIN,
+  id: 'mr-w-metop',
+  medicationCodeableConcept: { coding: [{ system: RXNORM, code: '866412', display: '24 HR metoprolol succinate 100 MG Extended Release Oral Tablet' }], text: '24 HR metoprolol succinate 100 MG Extended Release Oral Tablet' },
+};
 const DRAFT: MedicationRequest = { ...APIXABAN, id: 'mr-w-draft', status: 'draft' };
 const STOPPED_WITH_REASON: MedicationRequest = { ...APIXABAN, id: 'mr-w-held', status: 'on-hold', statusReason: { text: 'AKI' } };
 // T3: a panel of patients (design: "Okafor CRC 2026").
@@ -121,7 +127,7 @@ const inboxTask = (id: string, status: Task['status']): Task => ({
 const INBOX = (['draft', 'requested', 'received', 'accepted', 'ready', 'in-progress', 'on-hold'] as const).map((s) => inboxTask(`task-c-${s}`, s));
 
 const fresh = (): WriteContext => ({
-  world: new Store([...base, NKDA, APIXABAN, SIMVASTATIN, DRAFT, STOPPED_WITH_REASON, PANEL, ...INBOX]),
+  world: new Store([...base, NKDA, APIXABAN, SIMVASTATIN, METOPROLOL, DRAFT, STOPPED_WITH_REASON, PANEL, ...INBOX]),
   clock,
   policies: POLICIES,
   catalog: CATALOG,
@@ -287,10 +293,10 @@ describe('2. change_medication modify: product, strength and route', () => {
 
   it('never splits an extended-release tablet or a capsule; half of an immediate-release tablet is fine', async () => {
     const c = fresh();
-    const e = await rejected(c, 'change_medication', { medication_request: 'mr-00010', action: 'modify', reason: 'HR 52', new_dose: { value: 50, unit: 'mg', frequency: 'QD' } });
+    const e = await rejected(c, 'change_medication', { medication_request: 'mr-w-metop', action: 'modify', reason: 'HR 52', new_dose: { value: 50, unit: 'mg', frequency: 'QD' } });
     expect(e).toMatchObject({ code: 'INVALID_INPUT', field: 'medication_code' });
     expect(e.message).toMatch(/extended-release/);
-    const er = call(c, 'change_medication', { medication_request: 'mr-00010', action: 'modify', reason: 'HR 52', medication_code: '866436', new_dose: { value: 50, unit: 'mg', frequency: 'QD' } });
+    const er = call(c, 'change_medication', { medication_request: 'mr-w-metop', action: 'modify', reason: 'HR 52', medication_code: '866436', new_dose: { value: 50, unit: 'mg', frequency: 'QD' } });
     expect(get<MedicationRequest>(c, er.new_medication_request as string).medicationCodeableConcept?.coding?.[0]?.code).toBe('866436');
     const hctz = call(c, 'change_medication', { medication_request: 'mr-00046', action: 'modify', reason: 'hyponatremia', new_dose: { value: 12.5, unit: 'mg', frequency: 'QAM' } });
     expect(dosage(get<MedicationRequest>(c, hctz.new_medication_request as string)).text).toBe('12.5 mg (0.5 tablet) every morning');

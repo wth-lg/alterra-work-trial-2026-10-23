@@ -11,7 +11,7 @@
 //                      item unknown) on them; otherwise nothing is written. The judge client is
 //                      a MessagesClient whose grant comes from batchStart(projection) on the Node
 //                      ledger, so the ledger's caps hold before any call: batchStart refuses when
-//                      its exposure plus the projection would cross $450.
+//                      its exposure plus the projection would cross PROJECTED_CAP_USD.
 //                      Projection: before any call, the cases are graded once with a recording
 //                      client that sends nothing, which yields every distinct judge request at
 //                      the task's judge effort; each is priced at its worst case from its real

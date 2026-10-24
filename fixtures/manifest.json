@@ -2,22 +2,22 @@
   "now": "2026-10-23T08:00:00-04:00",
   "world": {
     "file": "fixtures/world.ndjson.gz",
-    "state_hash": "f8387483e55c185f43f158815592b81e6dba3cfd8f15e2e20ed56299db01a648",
-    "ndjson_sha256": "6c36eca663e0f4e78a9bff7f293b80032ba44f574ae952f1b805a5eaaa64dabd",
-    "resources": 7492,
+    "state_hash": "ebe40e004d9e4e9e60c794970d5737cb6132f46fc569e7b7a32ccdf7744fdf8a",
+    "ndjson_sha256": "b27b092d37abc02613f4881d346f6f5b7ac347bbc366a3cb232d54988a46ca1e",
+    "resources": 7486,
     "by_type": {
       "AllergyIntolerance": 40,
-      "Condition": 982,
+      "Condition": 980,
       "DiagnosticReport": 505,
       "DocumentReference": 354,
-      "Encounter": 361,
+      "Encounter": 360,
       "Group": 3,
       "MedicationRequest": 387,
-      "Observation": 3459,
+      "Observation": 3457,
       "Organization": 2,
       "Patient": 60,
-      "Practitioner": 3,
-      "Procedure": 1336
+      "Practitioner": 4,
+      "Procedure": 1334
     }
   },
   "base": {
@@ -65,7 +65,7 @@
     "packages/env/overlay.ts": "79ddb1445970e7a1a567e2db0cf778e2b9bfa8ede2ae016e39a04ad0cd18454f",
     "packages/env/world.ts": "cc7dd7c88d47251d63bc5290d7b2faa76ac0f0305aa5f1d94d01384570e8b678",
     "scripts/fixtures-synthea.ts": "44162b65dc576e507b526132164eda54cb14000936331d48b575f46d9c49d752",
-    "tasks/renal-dose-review/overlay.ts": "ab6447cc46121becb1f262f36c02e89c02a527b4fff0f9e5d4e8f832bc90d15e"
+    "tasks/renal-dose-review/overlay.ts": "cfa199c93268ab0e956cbdc64959154d2733ce9846b997bf5552c7082ccf6a65"
   },
   "definitions": {
     "file": "fixtures/definitions-pruned.json",
