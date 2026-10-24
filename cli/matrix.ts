@@ -91,6 +91,7 @@ export async function loadMatrixTask(id: string, root: string = TASKS_DIR): Prom
     expected: await exported<Json | undefined>(dir, 'expected.ts', 'expected', undefined),
     derive: await exported<((w: WorldView) => Json) | undefined>(dir, 'policy.ts', 'derive', undefined),
     cache: existsSync(cacheFile) ? (JSON.parse(readFileSync(cacheFile, 'utf8')) as JudgeCacheEntry[]) : [],
+    judgeEffort: task.judgeEffort,
   };
 }
 

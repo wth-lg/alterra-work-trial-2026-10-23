@@ -13,9 +13,9 @@
 //                      ledger, so the ledger's caps hold before any call: batchStart refuses when
 //                      its exposure plus the projection would cross $450.
 //                      Projection: before any call, the cases are graded once with a recording
-//                      client that sends nothing, which yields every distinct judge request;
-//                      each is priced at its worst case from its real body and max_tokens, times
-//                      two (the schema retry).
+//                      client that sends nothing, which yields every distinct judge request at
+//                      the task's judge effort; each is priced at its worst case from its real
+//                      body and max_tokens, times two (the schema retry).
 //   --dry-run          prints that projection (LIVE_PROJECTION_USD) and makes no call and opens
 //                      nothing
 //   --json             {tasks: [{id, outcome, score, judge_unknown, misses}]} only (scripts/donewhen.ts)
@@ -87,7 +87,7 @@ async function plan(env: MatrixEnv, task: MatrixTask): Promise<Plan> {
   const runs: Plan['runs'] = [];
   for (const c of cases(task)) runs.push({ case: c, run: await trial(env, task, c) });
   const worst: number[] = [];
-  const judge = new Judge({ client: recordingClient(worst) });
+  const judge = new Judge({ client: recordingClient(worst), effort: task.judgeEffort });
   for (const { run } of runs) await gradeRunWith(env, task, run, judge);
   return { task, runs, worst, usd: JUDGE_CALLS_PER_ITEM * worst.reduce((s, x) => s + x, 0) };
 }
@@ -153,7 +153,7 @@ export async function main(args: string[], deps: Deps): Promise<number> {
       try {
         for (const { task, runs, worst } of plans) {
           const client = new MessagesClient({ grant, ledger, apiKey: key, fetch: deps.fetch, trial: `oracle-judge:${task.id}`, log: (l) => deps.out(l) });
-          const judge = new Judge({ client, maxCalls: JUDGE_CALLS_PER_ITEM * worst.length });
+          const judge = new Judge({ client, maxCalls: JUDGE_CALLS_PER_ITEM * worst.length, effort: task.judgeEffort });
           let oracle: Grade | null = null;
           let failed = false;
           for (const { case: c, run } of runs) {

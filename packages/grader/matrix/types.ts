@@ -15,7 +15,7 @@
 // the same run() loop as a live trial. The null agent (finish, nothing else) is built in.
 import type { Resource } from '../../env/store.ts';
 import type { Check, Json } from '../check.ts';
-import type { JudgeCacheEntry } from '../judge.ts';
+import type { JudgeCacheEntry, JudgeEffort } from '../judge.ts';
 
 export interface ScriptCall {
   name: string;
@@ -79,4 +79,6 @@ export interface MatrixTask {
   expected: Json | undefined;
   derive: ((world: WorldView) => Json) | undefined;
   cache: readonly JudgeCacheEntry[];
+  // task.toml [judge] effort, which the judge answers at and its cache keys include.
+  judgeEffort: JudgeEffort;
 }

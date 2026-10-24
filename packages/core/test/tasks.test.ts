@@ -40,6 +40,13 @@ describe('TaskSource over tasks/*/task.toml', () => {
     expect(toy.instruction.length).toBeGreaterThan(20);
   });
 
+  it('parseTask reads [judge] effort: low, medium or high, default medium', async () => {
+    const files = { 'instruction.md': 'Do it.\n' };
+    expect((await parseTask({ id: 'a', files: { ...files, 'task.toml': toml('a') } })).judgeEffort).toBe('medium');
+    expect((await parseTask({ id: 'a', files: { ...files, 'task.toml': `${toml('a')}[judge]\neffort = "high"\n` } })).judgeEffort).toBe('high');
+    await expect(parseTask({ id: 'a', files: { ...files, 'task.toml': `${toml('a')}[judge]\neffort = "max"\n` } })).rejects.toThrow(/effort must be one of low, medium, high/);
+  });
+
   it('parseTask checks the id and the fields; taskVersion covers the files and the world hash', async () => {
     const files = { 'task.toml': toml('a'), 'instruction.md': 'Do a.\n' };
     const a = await parseTask({ id: 'a', files });

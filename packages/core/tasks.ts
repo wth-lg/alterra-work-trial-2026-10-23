@@ -15,12 +15,18 @@
 //   id = "RBC-X-01"; title = "..."; version = "1"; effective = "2026-01-01"; source = "..."; file = "x.md"
 //   [[catalog]]                     # optional, any number: an orderable (read/context.ts)
 //   kind = "lab"; code = "..."; system = "..."; display = "..."
+//   [judge]                         # optional
+//   effort = "medium"               # the judge's effort: low | medium | high, default medium;
+//                                   # calibrated per task by the pilot
 // instruction.md is the user turn the trial starts with.
 import { parse } from 'smol-toml';
 import { CATALOG_KINDS, type CatalogEntry, type Policy } from '../env/tools/read/context.ts';
 import { TOOLS } from '../env/tools/write/index.ts';
 
 export const DEFAULT_MAX_TURNS = 80;
+export const JUDGE_EFFORTS = ['low', 'medium', 'high'] as const;
+export type JudgeEffort = (typeof JUDGE_EFFORTS)[number];
+export const DEFAULT_JUDGE_EFFORT: JudgeEffort = 'medium';
 
 // One task directory as an adapter read it: its name and every file in it, by path relative
 // to the directory with '/' separators.
@@ -38,6 +44,8 @@ export interface Task {
   tools: string[] | null;
   policies: Policy[];
   catalog: CatalogEntry[];
+  // The effort the judge answers this task's judge and hybrid items at ([judge] effort).
+  judgeEffort: JudgeEffort;
   // sha256 over the task's files, path and content, in path order.
   filesHash: string;
 }
@@ -115,6 +123,11 @@ export async function parseTask({ id, files }: TaskFiles): Promise<Task> {
     return { kind: kind as CatalogEntry['kind'], code: s('code'), system: s('system'), display: s('display'), ...(strengths ? { strengths } : {}) };
   });
 
+  const judge = doc.judge ?? {};
+  if (!isRecord(judge)) throw new Error(`${where}/task.toml: [judge] must be a table`);
+  const effort = field(`${where}/task.toml [judge]`, judge, 'effort', 'string', false) ?? DEFAULT_JUDGE_EFFORT;
+  if (!(JUDGE_EFFORTS as readonly unknown[]).includes(effort)) throw new Error(`${where}/task.toml [judge]: effort must be one of ${JUDGE_EFFORTS.join(', ')}`);
+
   const paths = Object.keys(files).sort(byPath);
   const filesHash = await sha256Hex(JSON.stringify(paths.map((p) => [p, files[p]])));
   return {
@@ -125,6 +138,7 @@ export async function parseTask({ id, files }: TaskFiles): Promise<Task> {
     tools: tools === undefined ? null : TOOL_NAMES.filter((n) => tools.includes(n)),
     policies,
     catalog,
+    judgeEffort: effort as JudgeEffort,
     filesHash,
   };
 }

@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Transport } from '../../packages/core/anthropic.ts';
-import type { JudgeCacheEntry } from '../../packages/grader/judge.ts';
+import { JUDGE_MAX_CALL_USD, type JudgeCacheEntry } from '../../packages/grader/judge.ts';
 import type { MatrixTask } from '../../packages/grader/matrix/types.ts';
 import { tempDir } from '../../scripts/test/helpers.ts';
 import { loadMatrixTask } from '../matrix.ts';
@@ -63,7 +63,8 @@ describe('oracle', () => {
     expect(h.text()).toMatch(/^oracle dry run: --live-judge on _toy: 3 cases, 4 distinct judge questions x 2 calls/m);
     const p = Number(/^LIVE_PROJECTION_USD=(\d+\.\d{6})$/m.exec(h.text())![1]);
     expect(p).toBeGreaterThan(0);
-    expect(p).toBeLessThan(4 * 2 * 0.07);
+    // Each call at its real size is well under the $1 ceiling the dry run of run-one prices it at.
+    expect(p).toBeLessThan(4 * 2 * JUDGE_MAX_CALL_USD);
     expect(existsSync(join(h.home, '.chartr'))).toBe(false);
     expect(h.written).toHaveLength(0);
   });

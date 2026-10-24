@@ -14,6 +14,7 @@ import { main, projection, type Deps } from '../../../cli/run-one.ts';
 import { checks as TOY_CHECKS } from '../../../tasks/_toy/tests/grader.ts';
 import type { Transport } from '../anthropic.ts';
 import { PER_TRIAL_CAP_USD } from '../cost.ts';
+import { JUDGE_MAX_CALL_USD } from '../../grader/judge.ts';
 import { parseTrajectory } from '../trajectory.ts';
 
 function harness(env: Record<string, string>) {
@@ -73,12 +74,13 @@ describe('cli run-one', () => {
     const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     expect(rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed')).toHaveLength(5);
     // The loop's grant holds the per-trial cap; each judge call has its own grant, opened at
-    // that call's worst case from its real request body (no 64,000-byte bound) and closed after.
+    // that call's worst case from its real request body (under the $1 per-call ceiling) and closed
+    // after.
     const opens = rows.filter((r) => r.kind === 'open');
     expect(opens.map((r) => r.projection)).toEqual([6, expect.any(Number), expect.any(Number)]);
     const judgeReserves = rows.filter((r) => r.kind === 'reserve' && opens.slice(1).some((o) => o.batch_id === r.batch_id));
     expect(judgeReserves.map((r) => r.cost_usd)).toEqual(opens.slice(1).map((o) => o.projection));
-    for (const o of opens.slice(1)) expect(o.projection).toBeLessThan(0.07);
+    for (const o of opens.slice(1)) expect(o.projection).toBeLessThan(JUDGE_MAX_CALL_USD);
     expect(rows.filter((r) => r.kind === 'close')).toHaveLength(3);
     // The record carries every settled dollar of the trial: the loop's and the judge's.
     const settled = rows.filter((r) => r.kind === 'settle' && r.call_id !== 'seed').reduce((s, r) => s + r.cost_usd, 0);

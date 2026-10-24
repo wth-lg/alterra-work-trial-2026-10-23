@@ -266,7 +266,7 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
     resumed: false,
   };
   const checks = opts.checks ?? [];
-  const judge = judgeFor(checks, { judge: opts.judge === undefined ? opts.client : opts.judge });
+  const judge = judgeFor(checks, { judge: opts.judge === undefined ? opts.client : opts.judge, effort: task.judgeEffort });
   const graded = await gradeWith({ checks, initial: initialState, final: finalState, events, trial: facts }, judge);
   const emitted: TrialRecord = { ...facts, ended: iso(opts.now()), judge_cost_usd: judge.costUsd, ...graded, ...(sink.error !== null ? { sink_error: sink.error } : {}) };
   emitAll({ type: 'graded', turn: outcome.turns, record: emitted });
@@ -316,7 +316,7 @@ export async function gradeTrajectory(taskId: string, opts: GradeTrajectoryOptio
   const source: FixtureSource = { read: async () => bytes };
   const initial = [...(await loadStore(source)).resources()];
   const input = { checks: opts.checks, initial, events: opts.events, trial: opts.record };
-  const gradeOpts = { cache: opts.record.judge?.cache ?? [] };
+  const gradeOpts = { cache: opts.record.judge?.cache ?? [], effort: task.judgeEffort };
   const early = trialOutcome(opts.record);
   // An invalid trial is not graded: no state to compare.
   if (early !== null && !isValid(early)) return grade({ ...input, final: null }, gradeOpts);
