@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { repoRoot, runScript, tempDir, write } from '../../../scripts/test/helpers.ts';
 import { ACTUAL_CAP_USD, assertGrant, PROJECTED_CAP_USD, SpendRefused, totals, type LedgerRow } from '../../../packages/core/ledger.ts';
-import { AUDITOR_ALLOWANCE_USD, worstCaseUsd } from '../../../packages/core/cost.ts';
+import { AUDITOR_ALLOWANCE_USD, FINAL_TRIALS_PER_TASK, PER_TRIAL_CAP_USD, PLANNED_TASKS, RERUN_FACTOR, worstCaseUsd } from '../../../packages/core/cost.ts';
 import { openNodeLedger, readRows, reserveSpend, resolveLedgerPath, settleSpend } from '../ledger-node.ts';
 
 const ADAPTER = pathToFileURL(join(repoRoot, 'cli/adapters/ledger-node.ts')).href;
@@ -266,9 +266,11 @@ describe('spend command', () => {
 });
 
 describe('spend --check --final-reserve (case 16)', () => {
-  const reserve = 60 * 6 * 1.15 + AUDITOR_ALLOWANCE_USD;
+  // Every final trial: FINAL_TRIALS_PER_TASK of each planned task.
+  const FINAL = FINAL_TRIALS_PER_TASK * PLANNED_TASKS;
+  const reserve = FINAL * PER_TRIAL_CAP_USD * RERUN_FACTOR + AUDITOR_ALLOWANCE_USD;
 
-  it('with no runs prints 60 x $6 x 1.15 plus the auditor allowance and exits 1 exactly above the projected cap', () => {
+  it('with no runs prints every final trial x $6 x 1.15 plus the auditor allowance and exits 1 exactly above the projected cap', () => {
     for (const [seeded, status] of [
       [PROJECTED_CAP_USD - 10 - reserve, 0],
       [PROJECTED_CAP_USD - 10 - reserve + 0.01, 1],
@@ -277,7 +279,7 @@ describe('spend --check --final-reserve (case 16)', () => {
       const path = join(root, 'spend.jsonl');
       seed(path, [settleRow(seeded, 'seed')]);
       const r = spendCli(['--check', '--projected', '10', '--final-reserve'], envFor(join(root, 'home'), { SPEND_LEDGER: path }), root);
-      expect(r.stdout).toContain('6 tasks without data x 10 trials x $6.00');
+      expect(r.stdout).toContain(`${PLANNED_TASKS} tasks without data x ${FINAL_TRIALS_PER_TASK} trials x $6.00`);
       expect(r.stdout).toContain(`auditor allowance $${AUDITOR_ALLOWANCE_USD.toFixed(2)}`);
       expect(r.stdout).toMatch(new RegExp(`final-run reserve\\s+\\$${reserve.toFixed(2)}`));
       expect(r.stdout).toMatch(/projected\s+\$10\.00/);
@@ -286,23 +288,46 @@ describe('spend --check --final-reserve (case 16)', () => {
     }
   });
 
-  it('with a --cost-from run holding all 6 tasks uses their p90', () => {
+  it('with a --cost-from run holding all 6 tasks reserves every final trial at the p90 of cost_usd + judge_cost_usd, less the valid final trials', () => {
     const root = tempDir('ledger-c16b');
     const path = join(root, 'spend.jsonl');
     seed(path, []);
-    for (let t = 1; t <= 6; t++) write(root, `tasks/T${t}/task.toml`, `id = "T${t}"\n`);
-    for (let t = 1; t <= 6; t++)
-      for (let n = 1; n <= 10; n++)
-        write(root, `results/pilot-2/trials/T${t}/${n}.json`, JSON.stringify({ task_id: `T${t}`, task_version: `T${t}-v1`, cost_usd: n / 5, started: `2026-10-23T00:00:${n}Z`, outcome: 'PASS' }));
-    // One valid and one ENV_ERROR trial of T1 already in the final run.
-    write(root, 'results/runs/final-1/trials/T1/1.json', JSON.stringify({ task_id: 'T1', task_version: 'T1-v1', cost_usd: 1, outcome: 'FAIL' }));
-    write(root, 'results/runs/final-1/trials/T1/2.json', JSON.stringify({ task_id: 'T1', task_version: 'T1-v1', cost_usd: 1, outcome: 'ENV_ERROR' }));
-    const r = spendCli(['--check', '--projected', '0', '--final-reserve', '--cost-from', 'results/pilot-2'], envFor(join(root, 'home'), { SPEND_LEDGER: path }), root);
-    // p90 of 0.2..2.0 is 1.8; 59 trials remain.
-    const expected = 59 * 1.8 * 1.15 + AUDITOR_ALLOWANCE_USD;
-    expect(r.stdout).toContain('T1: 9 trials x $1.80 per trial (p90 of 10 trials of T1-v1 in results/pilot-2)');
-    expect(r.stdout).toMatch(new RegExp(`total\\s+\\$${expected.toFixed(2)}`));
-    expect(r.status).toBe(0);
+    const loop = (n: number) => n / 5;
+    const judge = (n: number) => (11 - n) / 10;
+    for (let t = 1; t <= PLANNED_TASKS; t++) write(root, `tasks/T${t}/task.toml`, `id = "T${t}"\n`);
+    for (let t = 1; t <= PLANNED_TASKS; t++)
+      for (let n = 1; n <= 10; n++) {
+        // T6's records predate judge_cost_usd: it counts as 0.
+        const rec = { task_id: `T${t}`, task_version: `T${t}-v1`, cost_usd: loop(n), started: `2026-10-23T00:00:${n}Z`, outcome: 'PASS' };
+        write(root, `results/pilot-2/trials/T${t}/${n}.json`, JSON.stringify(t === PLANNED_TASKS ? rec : { ...rec, judge_cost_usd: judge(n) }));
+      }
+    // p90 over the sums is trial 9's; it is neither the p90 of cost_usd (1.80) alone nor the sum of the two p90s.
+    const withJudge = loop(9) + judge(9);
+    const loopOnly = loop(9);
+    const check = () =>
+      spendCli(['--check', '--projected', '0', '--final-reserve', '--cost-from', 'results/pilot-2'], envFor(join(root, 'home'), { SPEND_LEDGER: path }), root);
+
+    const before = check();
+    const all = (FINAL_TRIALS_PER_TASK * (PLANNED_TASKS - 1) * withJudge + FINAL_TRIALS_PER_TASK * loopOnly) * RERUN_FACTOR + AUDITOR_ALLOWANCE_USD;
+    expect(before.stdout).toContain(`T1: ${FINAL_TRIALS_PER_TASK} trials x $${withJudge.toFixed(2)} per trial (p90 of 10 trials of T1-v1 in results/pilot-2)`);
+    expect(before.stdout).toContain(`T6: ${FINAL_TRIALS_PER_TASK} trials x $${loopOnly.toFixed(2)} per trial`);
+    expect(before.stdout).toMatch(new RegExp(`final-run reserve\\s+\\$${all.toFixed(2)}`));
+    expect(before.status, before.stdout + before.stderr).toBe(0);
+
+    // T1 in the final run: a FAIL and two GRADER_ERRORs regraded to PASS and FAIL are valid; an
+    // ENV_ERROR and a PASS regraded to GRADER_ERROR are not. The current grade decides, so k = 3
+    // (the recorded outcomes alone would give 2).
+    const final = (n: number, rec: object) => write(root, `results/runs/final-1/trials/T1/${n}.json`, JSON.stringify({ task_id: 'T1', task_version: 'T1-v1', cost_usd: 1, ...rec }));
+    final(1, { outcome: 'FAIL' });
+    final(2, { outcome: 'ENV_ERROR' });
+    final(3, { outcome: 'GRADER_ERROR', regrades: [{ outcome: 'PASS', score: 1, valid: true }] });
+    final(4, { outcome: 'GRADER_ERROR', regrades: [{ outcome: 'FAIL', score: 0, valid: true }] });
+    final(5, { outcome: 'PASS', regrades: [{ outcome: 'GRADER_ERROR', score: null, valid: false }] });
+    const k = 3;
+    const after = check();
+    expect(after.stdout).toContain(`T1: ${FINAL_TRIALS_PER_TASK - k} trials x $${withJudge.toFixed(2)} per trial`);
+    expect(after.stdout).toMatch(new RegExp(`final-run reserve\\s+\\$${(all - k * withJudge * RERUN_FACTOR).toFixed(2)}`));
+    expect(after.status, after.stdout + after.stderr).toBe(0);
   });
 });
 

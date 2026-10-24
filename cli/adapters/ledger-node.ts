@@ -21,6 +21,7 @@ import {
   admitStore, assertGrant, createLedger, parseRow, restrictGrants,
   type BatchGrant, type Ledger, type LedgerRow, type LedgerStore, type ReserveRequest, type Reservation,
 } from '../../packages/core/ledger.ts';
+import { currentGrade, type RegradeGrade } from '../../packages/core/summary.ts';
 
 export type LedgerMode = 'own-run' | 'default';
 type Env = Record<string, string | undefined>;
@@ -335,16 +336,19 @@ function readTrial(file: string): Record<string, unknown> {
   return JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
 }
 
-// Trial costs from the --cost-from runs, in list order (a later run is newer). A run with
-// no trials/ directory is an error: a mistyped path must not fall back to the cap silently.
+// Trial costs from the --cost-from runs, in list order (a later run is newer). A trial's cost
+// is its cost_usd plus its judge_cost_usd (0 when absent, as in records written before judge
+// calls were metered), so every p90 counts judge spend. A run with no trials/ directory is an
+// error: a mistyped path must not fall back to the cap silently.
 export function loadTrialObservations(runDirs: readonly string[]): TrialObservation[] {
   return runDirs.flatMap((run, run_order) => {
     if (!existsSync(join(run, 'trials'))) throw new Error(`--cost-from ${run}: no trials/ directory`);
     return trialFiles(run).flatMap((file) => {
       const t = readTrial(file);
-      if (typeof t.task_id !== 'string' || typeof t.task_version !== 'string' || typeof t.cost_usd !== 'number') return [];
+      const judge = t.judge_cost_usd ?? 0;
+      if (typeof t.task_id !== 'string' || typeof t.task_version !== 'string' || typeof t.cost_usd !== 'number' || typeof judge !== 'number') return [];
       return [{
-        run, run_order, task_id: t.task_id, task_version: t.task_version, cost_usd: t.cost_usd,
+        run, run_order, task_id: t.task_id, task_version: t.task_version, cost_usd: t.cost_usd + judge,
         ...(typeof t.started === 'string' ? { started: t.started } : {}),
         ...(typeof t.outcome === 'string' ? { outcome: t.outcome } : {}),
       }];
@@ -352,12 +356,17 @@ export function loadTrialObservations(runDirs: readonly string[]): TrialObservat
   });
 }
 
-// The final run's trials so far; none when the run has not started.
-export function loadFinalTrials(runDir: string): Array<{ task_id: string; outcome?: string }> {
+// The final run's trials so far, each with its current grade (summary.ts currentGrade: its
+// last cli regrade, else its recorded outcome); none when the run has not started.
+export function loadFinalTrials(runDir: string): Array<{ task_id: string; outcome: string; valid: boolean }> {
   return trialFiles(runDir).flatMap((file) => {
     const t = readTrial(file);
     if (typeof t.task_id !== 'string') return [];
-    return [{ task_id: t.task_id, ...(typeof t.outcome === 'string' ? { outcome: t.outcome } : {}) }];
+    const { outcome, valid } = currentGrade({
+      outcome: typeof t.outcome === 'string' ? t.outcome : '',
+      ...(Array.isArray(t.regrades) ? { regrades: t.regrades as RegradeGrade[] } : {}),
+    });
+    return [{ task_id: t.task_id, outcome, valid }];
   });
 }
 
