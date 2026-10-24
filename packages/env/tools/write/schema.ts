@@ -2,10 +2,11 @@
 import type { PropertySchema } from '../registry.ts';
 
 const ID = '[A-Za-z0-9.-]{1,64}';
-// A date, or a dateTime to the minute or second with an offset (validation step 1; the
-// calendar and the clock are checked in checks.ts).
-const WHEN = '^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2})?(Z|[+-]\\d{2}:\\d{2}))?$';
-const DATETIME = '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?(Z|[+-]\\d{2}:\\d{2})$';
+// A date, or a dateTime to the minute or second (with optional fractional seconds, as FHIR
+// allows) and an offset (validation step 1; the calendar and the clock are checked in checks.ts).
+const TIME = 'T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?(Z|[+-]\\d{2}:\\d{2})';
+const WHEN = `^\\d{4}-\\d{2}-\\d{2}(${TIME})?$`;
+const DATETIME = `^\\d{4}-\\d{2}-\\d{2}${TIME}$`;
 
 // One resource of a known type: its id, or Type/id.
 export const idOf = (type: string, example: string, what: string): PropertySchema => ({
@@ -24,17 +25,18 @@ export const refs = (what: string, maxItems: number): PropertySchema => ({ type:
 
 export const when = (what: string): PropertySchema => ({
   type: 'string',
-  description: `${what}: YYYY-MM-DD, or YYYY-MM-DDThh:mm[:ss] with an offset; not in the past`,
+  description: `${what}: YYYY-MM-DD, or YYYY-MM-DDThh:mm[:ss[.sss]] with an offset; not in the past`,
   pattern: WHEN,
 });
 
 export const dateTime = (what: string): PropertySchema => ({
   type: 'string',
-  description: `${what}: YYYY-MM-DDThh:mm[:ss] with an offset; not in the past`,
+  description: `${what}: YYYY-MM-DDThh:mm[:ss[.sss]] with an offset; not in the past`,
   pattern: DATETIME,
 });
 
 export const text = (what: string, maxLength: number): PropertySchema => ({ type: 'string', description: what, minLength: 1, maxLength });
 
-export const PRIORITIES = ['routine', 'urgent', 'stat'] as const;
+// FHIR R4 request-priority, in increasing urgency.
+export const PRIORITIES = ['routine', 'urgent', 'asap', 'stat'] as const;
 export const priority: PropertySchema = { type: 'string', description: 'Priority', enum: PRIORITIES };

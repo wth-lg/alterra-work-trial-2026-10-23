@@ -1,8 +1,9 @@
 // send_message (design section 3): a Communication to a patient, a clinician or a staff pool.
-// It is about at most one patient: the recipient if a patient, and every resource in about.
+// It is about at most one patient: the recipient if a patient, and every resource in about. A
+// panel Group in about belongs to no patient (checks.ts patientsOf), so a message to a
+// clinician about a panel has no patient context.
 import type { Communication } from '@medplum/fhirtypes';
-import { patientRefs } from '../../overlay.ts';
-import { key, resolve, samePatient } from './checks.ts';
+import { key, patientsOf, resolve, samePatient } from './checks.ts';
 import { commit } from './commit.ts';
 import { USER } from './context.ts';
 import { party, priority, refs, text, type PRIORITIES } from './schema.ts';
@@ -32,7 +33,7 @@ export const sendMessage = writeTool({
     let patient = recipient.resourceType === 'Patient' ? recipient.id : undefined;
     const about = input.about.map((v, i) => {
       const r = resolve(ctx, `about[${i}]`, v);
-      patient ??= r.resourceType === 'Patient' ? r.id : [...patientRefs(r)][0];
+      patient ??= [...patientsOf(r)][0];
       if (patient !== undefined) samePatient(`about[${i}]`, r, patient);
       return { reference: key(r) };
     });

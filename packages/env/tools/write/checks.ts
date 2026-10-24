@@ -46,10 +46,17 @@ export function resolve(ctx: WriteContext, field: string, value: string, types: 
 
 export const key = (r: Readonly<Resource>) => `${r.resourceType}/${r.id}`;
 
+// The patients a resource belongs to: itself for a Patient, none for a Group (a panel lists
+// patients as members, it does not belong to them), else every Patient it references.
+export function patientsOf(resource: Readonly<Resource>): Set<string> {
+  if (resource.resourceType === 'Patient') return new Set([resource.id!]);
+  if (resource.resourceType === 'Group') return new Set();
+  return patientRefs(resource);
+}
+
 // Throws unless the resource is about `patient` only (or about no patient).
 export function samePatient(field: string, resource: Readonly<Resource>, patient: string): void {
-  const patients = resource.resourceType === 'Patient' ? new Set([resource.id!]) : patientRefs(resource);
-  for (const p of patients) {
+  for (const p of patientsOf(resource)) {
     if (p !== patient) throw new ToolError('INVALID_INPUT', `'${field}' (${key(resource)}) belongs to Patient/${p}, not Patient/${patient}`, field);
   }
 }
@@ -61,7 +68,7 @@ export function catalogEntry(ctx: WriteContext, field: string, code: string, kin
   return entry;
 }
 
-const WHEN = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-](\d{2}):(\d{2})))?$/;
+const WHEN = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-](\d{2}):(\d{2})))?$/;
 
 export interface When {
   // The value in FHIR form: a date, or a dateTime with seconds.
@@ -72,7 +79,8 @@ export interface When {
 }
 
 // A date or dateTime that exists on the calendar and is not before NOW (a date: not before
-// NOW's date). The schema has already checked the shape.
+// NOW's date). The schema has already checked the shape. Fractional seconds are accepted and
+// dropped: every time the tools write is to the second.
 export function when(field: string, value: string, opts: { dateTime?: boolean } = {}): When {
   const m = WHEN.exec(value);
   const bad = (why: string) => new ToolError('INVALID_INPUT', `'${field}' ${why}`, field);

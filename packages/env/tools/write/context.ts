@@ -10,7 +10,8 @@ export interface WriteSession {
   // resource gets id <prefix>-t<n>, and its Provenance prov-t<n>. A rejected write does not
   // advance it.
   writeSeq: number;
-  // The agent's summary from finish; set once, when the trial ends.
+  // The agent's summary from finish; set once, when the episode ends. Its presence is what
+  // makes every later write CONFLICT (tool.ts).
   summary?: string;
 }
 

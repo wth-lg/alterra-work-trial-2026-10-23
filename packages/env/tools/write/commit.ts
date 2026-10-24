@@ -9,7 +9,7 @@
 // resource, the FHIR paths each input string was written to. Any other failure means the
 // environment built an invalid resource or a dangling reference from valid input; that is
 // thrown as a plain Error, which the loop records as INTERNAL (errors.ts).
-import type { Provenance, Resource } from '@medplum/fhirtypes';
+import type { Provenance, Reference, Resource } from '@medplum/fhirtypes';
 import { Store } from '../../store.ts';
 import { validate } from '../../validate.ts';
 import { RESOURCE_TYPES } from '../../world.ts';
@@ -38,11 +38,19 @@ export interface Draft {
   // The result payload the model sees.
   content: unknown;
   resources: readonly Written[];
-  // References the write was based on, recorded as Provenance.entity with role source.
-  sources?: readonly string[];
+  // What the write was based on, recorded as Provenance.entity with role source: a Type/id, or
+  // a Reference by identifier for a source that is not a resource (a policy).
+  sources?: readonly (string | Reference)[];
 }
 
 const tag = (seq: number) => `t${String(seq).padStart(4, '0')}`;
+
+const DATA_OPERATION = 'http://terminology.hl7.org/CodeSystem/v3-DataOperation';
+// R4 Provenance has one activity for all its targets. A write that creates one resource and
+// stops another (modify, replaces) records the write's activity there (CREATE if it creates
+// anything) and what it did to each target in this extension on the target's Reference.
+const TARGET_ACTIVITY = 'urn:riverbend:fhir:provenance-target-activity';
+const operation = (code: 'CREATE' | 'UPDATE') => ({ coding: [{ system: DATA_OPERATION, code }] });
 
 // The input field whose value an invalid path came from, or undefined.
 function fieldFor(path: string, fields: Written['fields']): string | undefined {
@@ -75,14 +83,15 @@ export function commit(ctx: WriteContext, tool: string, build: (a: Allocation) =
   const provenance: Provenance = {
     resourceType: 'Provenance',
     id: `prov-${tag(seq)}`,
-    target: draft.resources.map((w) => key(w.resource)).sort().map((reference) => ({ reference })),
+    target: [...draft.resources]
+      .sort((a, b) => (key(a.resource) < key(b.resource) ? -1 : 1))
+      .map((w) => ({ reference: key(w.resource), extension: [{ url: TARGET_ACTIVITY, valueCodeableConcept: operation(w.created ? 'CREATE' : 'UPDATE') }] })),
     recorded: stamp,
-    activity: {
-      coding: [{ system: 'http://terminology.hl7.org/CodeSystem/v3-DataOperation', code: draft.resources.some((w) => w.created) ? 'CREATE' : 'UPDATE' }],
-      text: tool,
-    },
+    activity: { ...operation(draft.resources.some((w) => w.created) ? 'CREATE' : 'UPDATE'), text: tool },
     agent: [{ type: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/provenance-participant-type', code: 'author' }] }, who: { reference: USER } }],
-    ...(draft.sources?.length ? { entity: draft.sources.map((reference) => ({ role: 'source' as const, what: { reference } })) } : {}),
+    ...(draft.sources?.length
+      ? { entity: draft.sources.map((s) => ({ role: 'source' as const, what: typeof s === 'string' ? { reference: s } : s })) }
+      : {}),
   };
   const all: Written[] = [...draft.resources, { resource: provenance, created: true }];
 
