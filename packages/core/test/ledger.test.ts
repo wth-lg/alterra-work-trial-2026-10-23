@@ -97,6 +97,35 @@ describe('cost model', () => {
   });
 });
 
+// The decided caps (2026-10-24): $950 projected, $1,000 actual. Every other test derives its
+// thresholds from the constants; this one pins the numbers.
+describe('cap values', () => {
+  it('starts a batch at 949.99 and refuses 950.01', async () => {
+    expect(PROJECTED_CAP_USD).toBe(950);
+    assertGrant(await ledgerOn(new MemoryStore()).batchStart(949.99));
+    await expect(ledgerOn(new MemoryStore()).batchStart(950.01)).rejects.toThrow(/projected/);
+  });
+
+  // The smallest call reserves about $0.03 (the input overhead allowance), so the cheapest call
+  // that fits is one whose worst case takes settled + reserved to exactly $1,000.
+  it('is not blocked at settled 999.99, admits a call that ends exactly at 1000, and blocks every call at 1000', async () => {
+    expect(ACTUAL_CAP_USD).toBe(1000);
+    const store = new MemoryStore();
+    const grant = await ledgerOn(store).batchStart(0);
+    seedSettled(store, 999.99);
+    expect(totals(store.rows).blocked).toBe(false);
+    await expect(grant.reserve({ bodyBytes: 0, maxTokens: 0 })).rejects.toThrow(/actual cap: .* worst case/);
+    store.rows.length = 0;
+    const grant2 = await ledgerOn(store).batchStart(0);
+    seedSettled(store, 1000 - worstCaseUsd({ bodyBytes: 0, maxTokens: 0 }));
+    const res = await grant2.reserve({ bodyBytes: 0, maxTokens: 0 });
+    await grant2.settle(res, { input_tokens: 0, output_tokens: 0 });
+    seedSettled(store, 1000 - totals(store.rows).settled);
+    expect(totals(store.rows).blocked).toBe(true);
+    await expect(grant2.reserve({ bodyBytes: 0, maxTokens: 0 })).rejects.toThrow(/actual cap: settled .* has reached/);
+  });
+});
+
 describe('projected cap at batch start', () => {
   it('starts a batch one cent under the projected cap and refuses one cent over with 0 calls made (case 4)', async () => {
     const ok = await ledgerOn(new MemoryStore()).batchStart(PROJECTED_CAP_USD - 0.01);

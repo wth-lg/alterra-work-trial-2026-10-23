@@ -17,8 +17,8 @@
 // reaches a cap check.
 import { usageCostUsd, worstCaseUsd, type Usage } from './cost.ts';
 
-export const PROJECTED_CAP_USD = 450;
-export const ACTUAL_CAP_USD = 500;
+export const PROJECTED_CAP_USD = 950;
+export const ACTUAL_CAP_USD = 1000;
 
 export type RowKind = 'reserve' | 'settle' | 'open' | 'close';
 export type Source = 'node' | 'browser';
