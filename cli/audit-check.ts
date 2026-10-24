@@ -2,35 +2,37 @@
 // Checks a run's human audit, <run>/audit.jsonl, one label per line (design section 5, "Human
 // audit"; packages/core/explain.ts AuditRow):
 //   {trial: "<task>/<index>", outcome, taxonomy, label?, label_subtype?, model_fault: yes|no|unclear,
-//    decisive_step, evidence_ids: [...], llm_auditor_agrees, adjudication?, note, criteria?}
+//    decisive_step, evidence_ids: [...], llm_auditor_agrees, adjudicated_label?, note, criteria?}
 // A PASS label has taxonomy, model_fault and decisive_step null. A label without label reads its
 // label from its taxonomy (explain.ts auditLabelOf). Every check reads each record's current grade
 // (packages/core/summary.ts currentGrade: its last cli regrade, else its recorded outcome), and the
-// label set, the fault and the criteria come from packages/core/outcomes.ts through
-// explain.ts explainTrial; nothing here lists them. It exits 1, naming each violation, unless:
+// label set, the fault, the criteria and their texts come from packages/core/outcomes.ts through
+// explain.ts explainTrial; nothing here restates them. It exits 1, naming each violation, unless:
 //   - every failure (a valid trial that is not a PASS) has exactly one label, whose outcome is the
 //     current grade, whose label is one of AUDIT_LABELS and equals AUDIT_LABEL of the trial's
-//     fault (a model failure is labelled model, a refusal model with subtype refusal), and whose
-//     taxonomy, on a model label that is not a refusal, is in packages/grader/attribution.ts
-//     TAXONOMY; an environment or grader label is counted;
+//     fault (a refusal: model with subtype refusal), and whose taxonomy, on a model label that is
+//     not a refusal, is in packages/grader/attribution.ts TAXONOMY;
 //   - no INFRA or CANCELLED trial (FAULT infra) carries a label or is in the valid set;
-//   - no failure label contradicts itself: on an outcome that is the model's fault
-//     (packages/core/outcomes.ts FAULT: FAIL, LIMIT), a model label says model_fault yes or
-//     unclear, never no, and an environment or grader label never says yes;
+//   - no failure label contradicts itself: on an outcome FAULT gives model, a model label never
+//     says model_fault no, and an environment or grader label never says yes;
 //   - each failure label names a decisive step that is a step of the trajectory;
 //   - every evidence id of every label appears in the trajectory (exposed, referenced or written);
-//   - criterion M1 holds for every failure: every decisive id was exposed, or is exposable (it is
-//     in the world, so the tool would have returned it had the model asked);
+//   - confirmation criteria M1 and M4 (outcomes.ts CONFIRMATION_CRITERIA) are met on every failure:
+//     pending is a violation too, because an audited trial must show met or not met;
 //   - no attempt, re-queued ones included, had an INTERNAL tool error;
 //   - every record's replay_final equals its final hash, and replay.json, when present, says
 //     every trial reproduced;
-//   - every label with model_fault unclear or llm_auditor_agrees false carries an adjudication;
+//   - every label with model_fault unclear or llm_auditor_agrees false carries an adjudicated_label,
+//     one of AUDIT_LABELS;
 //   - each task has at least 2 audited PASS trials with evidence ids (all of them when it has
 //     fewer than 2 passes).
 // It writes each label's criteria, explainTrial's M1-M5 for its trial, into audit.jsonl (only when
-// they changed, so a second run leaves the file as it was). The context it gives explainTrial:
-// the trajectory, the run manifest's world_hash as the manifest hash, and the world for
-// exposability; no matrix result, so M4 is pending here.
+// they changed, so a second run leaves the file as it was). The context it gives explainTrial
+// (explainContext): the trajectory; the run manifest's world_hash as the manifest hash; the world
+// for exposability; <run>/matrix.json, {task_versions: {<task_version>: {oracle_pass,
+// alternatives_pass}}}, for M4; and, on a regraded trial whose first failed check is not the one
+// its recorded attribution names, that check's decisive ids (from the task's gate checks) with the
+// step each was first exposed at in the trajectory (packages/grader/exposure.ts firstExposed).
 // --json prints {failures, labelled, environment, grader, violations}. Exit 2 on a usage error.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -38,28 +40,33 @@ import { pathToFileURL } from 'node:url';
 import type { BatchRecord } from '../packages/core/batch.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import type { TrialEvent } from '../packages/core/events.ts';
-import { auditLabelOf, explainTrial, type AuditRow, type ExplainContext, type ExplainRecord } from '../packages/core/explain.ts';
+import { auditLabelOf, explainTrial, formatCriterion, type AuditRow, type ExplainContext, type ExplainRecord } from '../packages/core/explain.ts';
 import { AUDIT_LABEL, AUDIT_LABELS, FAULT, type Outcome } from '../packages/core/outcomes.ts';
 import { parseTrajectory } from '../packages/core/trajectory.ts';
 import { currentGrade } from '../packages/core/summary.ts';
 import { loadStore } from '../packages/env/fixture-source.ts';
 import { TAXONOMY, type Attribution } from '../packages/grader/attribution.ts';
-import { sameId, stepsOf } from '../packages/grader/exposure.ts';
+import { firstExposed, sameId, stepsOf } from '../packages/grader/exposure.ts';
 import { requeuedRecords, settledRecords, trajectoryOf } from './adapters/result-sink-node.ts';
 import { trialName } from './replay.ts';
-import { repoWorld } from './run.ts';
+import { repoWorld, taskChecks } from './run.ts';
 import { readReplay } from './summary.ts';
+
+// A task's checks as far as audit-check reads them: a gate's decisive ids.
+export type TaskChecks = (task: string) => Promise<ReadonlyArray<{ id: string; decisive_ids?: readonly string[] }>>;
 
 export interface Deps {
   out: (line: string) => void;
   err: (line: string) => void;
+  // Default cli/run.ts taskChecks.
+  checks?: TaskChecks;
 }
 
 export type AuditLabel = AuditRow;
 
 const defaults: Deps = { out: (l) => process.stdout.write(`${l}\n`), err: (l) => process.stderr.write(`${l}\n`) };
 const MIN_AUDITED_PASSES = 2;
-const isLabel = (l: string | null): boolean => (AUDIT_LABELS as readonly (string | null)[]).includes(l);
+const isLabel = (l: string | null | undefined): boolean => (AUDIT_LABELS as readonly (string | null | undefined)[]).includes(l);
 
 // audit.jsonl's lines, each with its label when it parses.
 function readLabels(dir: string, violations: string[]): Array<{ raw: string; label: AuditLabel | null }> | null {
@@ -81,12 +88,23 @@ function readLabels(dir: string, violations: string[]): Array<{ raw: string; lab
   });
 }
 
-// What explainTrial gets for each record of the run in dir: its trajectory, the run manifest's
-// world_hash and, for each decisive id never exposed, whether it is in the world.
-export async function explainContext(dir: string): Promise<(r: BatchRecord) => Promise<ExplainContext & { events: TrialEvent[] }>> {
+type Matrix = NonNullable<ExplainContext['matrix']>;
+
+// <run>/matrix.json's verdict per task_version, or an empty map when there is none.
+function readMatrix(dir: string): Map<string, Matrix> {
+  const file = join(dir, 'matrix.json');
+  if (!existsSync(file)) return new Map();
+  const { task_versions } = JSON.parse(readFileSync(file, 'utf8')) as { task_versions?: Record<string, { oracle_pass?: unknown; alternatives_pass?: unknown }> };
+  return new Map(Object.entries(task_versions ?? {}).flatMap(([task_version, m]) =>
+    typeof m.oracle_pass === 'boolean' && typeof m.alternatives_pass === 'boolean' ? [[task_version, { task_version, oracle_pass: m.oracle_pass, alternatives_pass: m.alternatives_pass }] as const] : []));
+}
+
+// What explainTrial gets for each record of the run in dir (see the header).
+export async function explainContext(dir: string, checks: TaskChecks = taskChecks): Promise<(r: BatchRecord) => Promise<ExplainContext & { events: TrialEvent[] }>> {
   const manifestFile = join(dir, 'manifest.json');
   const manifest = existsSync(manifestFile) ? (JSON.parse(readFileSync(manifestFile, 'utf8')) as { world_hash?: unknown }) : null;
   const world_state_hash = typeof manifest?.world_hash === 'string' ? manifest.world_hash : null;
+  const matrix = readMatrix(dir);
   const events = new Map<string, TrialEvent[]>();
   let world: Promise<Set<string>> | undefined;
   const inWorld = async (id: string) => {
@@ -97,15 +115,27 @@ export async function explainContext(dir: string): Promise<(r: BatchRecord) => P
     const keys = await world;
     return id.includes('/') ? keys.has(id) : [...keys].some((k) => sameId(k, id));
   };
+  const gates = new Map<string, Promise<ReadonlyArray<{ id: string; decisive_ids?: readonly string[] }>>>();
+  // The decisive ids of the check a regrade failed first, when it is not the recorded attribution's.
+  const regradedDecisive = async (r: BatchRecord): Promise<{ check: string; ids: string[] } | null> => {
+    const failed = (currentGrade(r).checks ?? []).find((c) => (c as { kind?: string }).kind !== 'rubric' && c.met === false);
+    if (failed === undefined || (r.attribution as Attribution | null)?.first_failed === failed.id) return null;
+    if (!gates.has(r.task_id)) gates.set(r.task_id, checks(r.task_id).catch(() => []));
+    const ids = (await gates.get(r.task_id)!).find((g) => g.id === failed.id)?.decisive_ids;
+    return ids === undefined ? null : { check: failed.id, ids: [...ids] };
+  };
   return async (r) => {
     const name = trialName(r);
     if (!events.has(name)) {
       const file = trajectoryOf(dir, r);
       events.set(name, existsSync(file) ? parseTrajectory(readFileSync(file, 'utf8')) : []);
     }
+    const trajectory = events.get(name) as TrialEvent[];
+    const moved = await regradedDecisive(r);
+    const exposure = moved === null ? null : { check: moved.check, ids: moved.ids.map((id) => ({ id, first_exposed_step: firstExposed(stepsOf(trajectory), id) })) };
     const exposable = new Set<string>();
-    for (const e of (r.attribution as Attribution | null)?.exposure ?? []) if (e.first_exposed_step === null && (await inWorld(e.id))) exposable.add(e.id);
-    return { events: events.get(name) as TrialEvent[], world_state_hash, exposable: (id) => exposable.has(id) };
+    for (const e of [...((r.attribution as Attribution | null)?.exposure ?? []), ...(exposure?.ids ?? [])]) if (e.first_exposed_step === null && (await inWorld(e.id))) exposable.add(e.id);
+    return { events: trajectory, world_state_hash, exposable: (id) => exposable.has(id), matrix: matrix.get(r.task_version ?? '') ?? null, exposure };
   };
 }
 
@@ -131,7 +161,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     if (byTrial.has(l.trial)) v.push(`${l.trial}: more than one audit label`);
     byTrial.set(l.trial, l);
   }
-  const ctxOf = await explainContext(dir);
+  const ctxOf = await explainContext(dir, deps.checks);
   const explain = async (r: BatchRecord, row?: AuditLabel) => {
     const { criteria: _criteria, ...audit } = row ?? ({} as AuditLabel);
     return explainTrial(r as ExplainRecord, row === undefined ? undefined : audit, await ctxOf(r));
@@ -153,10 +183,9 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     const steps = await stepsFor(r);
     const ids = new Set(steps.flatMap((s) => [...s.exposed_ids, ...s.referenced_ids, ...s.written_ids]));
     for (const id of l.evidence_ids) if (![...ids].some((k) => sameId(k, id))) v.push(`${l.trial}: evidence id ${id} is not in the trajectory`);
-    if (l.model_fault === 'unclear' || l.llm_auditor_agrees === false) {
-      if (typeof l.adjudication !== 'string' || l.adjudication.trim() === '') {
-        v.push(`${l.trial}: ${l.model_fault === 'unclear' ? 'model_fault unclear' : 'the LLM auditor disagrees'}, and no adjudication is recorded`);
-      }
+    if (l.adjudicated_label !== undefined && l.adjudicated_label !== null && !isLabel(l.adjudicated_label)) v.push(`${l.trial}: adjudicated_label ${l.adjudicated_label} is not one of ${AUDIT_LABELS.join(', ')}`);
+    else if ((l.model_fault === 'unclear' || l.llm_auditor_agrees === false) && !isLabel(l.adjudicated_label)) {
+      v.push(`${l.trial}: ${l.model_fault === 'unclear' ? 'model_fault unclear' : 'the LLM auditor disagrees'}, and no adjudicated_label is recorded`);
     }
     if (outcome === 'PASS') continue;
     // The trial's fault without the audit: the label must agree with it, not define it.
@@ -188,8 +217,9 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   for (const r of failures) {
     const name = trialName(r);
     if (!byTrial.has(name)) v.push(`${name}: ${currentGrade(r).outcome}, no audit label`);
-    const m1 = (await explain(r, byTrial.get(name))).criteria.find((c) => c.id === 'M1');
-    if (m1?.met === false) v.push(`${name}: M1 not met: ${m1.evidence}`);
+    for (const c of (await explain(r, byTrial.get(name))).criteria) {
+      if ((c.id === 'M1' || c.id === 'M4') && (c.met === false || c.met === 'pending')) v.push(`${name}: ${formatCriterion(c).replace(': ', ' ')}: ${c.evidence}`);
+    }
   }
   for (const r of [...records.values(), ...requeued]) {
     const g = currentGrade(r);

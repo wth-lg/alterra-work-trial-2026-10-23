@@ -1,5 +1,5 @@
 // Run directories for the summary, audit-check and donewhen tests: a live run of two tasks of 10
-// trials, 5 PASS and 5 FAIL each, with trajectories, replay.json, audit.jsonl and a manifest that
+// trials, 5 PASS and 5 FAIL each, with trajectories, replay.json, audit.jsonl, matrix.json and a manifest that
 // expects both tasks, and one variant per violation the gate names. Records carry the fields summary and audit-check read, as cli run writes them.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -98,5 +98,7 @@ export function writeFixtureRun(dir: string, fixture: Fixture): void {
   }
   put(dir, 'replay.json', `${JSON.stringify({ trials: replay }, null, 2)}\n`);
   put(dir, 'audit.jsonl', labels.map((l) => JSON.stringify(l)).join('\n') + '\n');
-  put(dir, 'manifest.json', `${JSON.stringify({ run_id: 'final-1', model: MODEL, effort: 'high', mode, trials: 10, task_versions: Object.fromEntries(TASKS.map((t) => [t, `v-${t}`])), batches: [] }, null, 2)}\n`);
+  put(dir, 'manifest.json', `${JSON.stringify({ run_id: 'final-1', model: MODEL, effort: 'high', mode, trials: 10, world_hash: 'h-initial', task_versions: Object.fromEntries(TASKS.map((t) => [t, `v-${t}`])), batches: [] }, null, 2)}\n`);
+  // The grader validation matrix of each task_version (audit-check reads it for criterion M4).
+  put(dir, 'matrix.json', `${JSON.stringify({ task_versions: Object.fromEntries(TASKS.map((t) => [`v-${t}`, { oracle_pass: true, alternatives_pass: true }])) }, null, 2)}\n`);
 }
