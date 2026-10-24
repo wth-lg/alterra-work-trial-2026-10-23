@@ -324,7 +324,7 @@ export function judgeAllowanceUsd(checks: readonly Check[]): number {
 
 // A judge client whose every call runs under its own batch grant, opened at that call's worst
 // case from its real request (body bytes and max_tokens, what the client reserves) and closed
-// after it. batchStart checks the $450 projected cap right then, and an open grant never holds
+// after it. batchStart checks PROJECTED_CAP_USD right then, and an open grant never holds
 // more than the one call it covers. `client` builds the call's MessagesClient on the grant.
 export function perCallGrantClient(opts: { ledger: Pick<Ledger, 'batchStart'>; client: (grant: BatchGrant) => JudgeClient; onGrant?: (projection: number) => void }): JudgeClient {
   return {
