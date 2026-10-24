@@ -224,13 +224,13 @@ const overlay: Overlay = {
     const put: Resource[] = [
       renamed,
       RADIOLOGIST_RESOURCE,
-      encounter('enc-t5-0514', ['77477000', 'Computed tomography (procedure)'], '2019-05-14T10:00:00-04:00', '2019-05-14T11:40:00-04:00', HOSPITAL, RADIOLOGIST),
+      encounter('enc-t5-0514', ['77477000', 'Computed tomography (procedure)'], '2019-05-14T10:00:00-04:00', '2019-05-14T12:40:00-04:00', HOSPITAL, RADIOLOGIST),
       encounter('enc-t5-0612', ['185347001', 'Encounter for problem (procedure)'], '2023-06-12T14:00:00-04:00', '2023-06-12T14:30:00-04:00', CLINIC, { reference: 'Practitioner/pr-lin' }),
       encounter('enc-t5-0620', ['77477000', 'Computed tomography (procedure)'], '2023-06-20T14:00:00-04:00', '2023-06-20T14:45:00-04:00', HOSPITAL, RADIOLOGIST),
       encounter('enc-t5-0814', ['185349003', 'Encounter for check up (procedure)'], '2025-08-14T09:00:00-04:00', '2025-08-14T09:30:00-04:00', CLINIC, OKAFOR),
       condition('cond-t5-t2dm', '44054006', 'Diabetes mellitus type 2 (disorder)', '2014-03-11T10:00:00-04:00'),
       condition('cond-t5-pcyst', '31258000', 'Cyst of pancreas (disorder)', '2023-06-20T14:45:00-04:00'),
-      allergy('alg-t5-iohexol', 'medication', [RXNORM, '5956', 'iohexol'], 'confirmed', '2019-05-14T10:20:00-04:00', '2019-05-14T11:40:00-04:00', ['126485001', 'Urticaria'], 'moderate'),
+      allergy('alg-t5-iohexol', 'medication', [RXNORM, '5956', 'iohexol'], 'confirmed', '2019-05-14T10:20:00-04:00', '2019-05-14T12:30:00-04:00', ['126485001', 'Urticaria'], 'moderate'),
       allergy('alg-t5-shellfish', 'food', [SNOMED, '735029006', 'Shellfish (substance)'], 'unconfirmed', '1998', '2014-03-11T10:00:00-04:00', ['271807003', 'Eruption of skin'], 'mild'),
       allergy('alg-t5-pvp', 'medication', [RXNORM, '8611', 'povidone-iodine'], 'confirmed', '2016-09', '2016-09-20T10:00:00-04:00', ['40275004', 'Contact dermatitis'], 'mild'),
       creatinine('obs-t5-scr-0612', '2023-06-12T14:20:00-04:00', '2023-06-12T18:05:00-04:00', 0.94, 'enc-t5-0612'),
@@ -248,7 +248,7 @@ const overlay: Overlay = {
         valueQuantity: { value: 7.1, unit: '%', system: UCUM, code: '%' },
       },
       // The 2026-04-20 annual exam (Synthea's enc-00089): a point-of-care A1c, and a metabolic
-      // panel that was not drawn and was cancelled.
+      // panel ordered after the blood draw and cancelled.
       {
         resourceType: 'Observation',
         id: 'obs-t5-a1c-0420',
@@ -276,7 +276,7 @@ const overlay: Overlay = {
         authoredOn: '2026-04-20T15:25:00-04:00',
         requester: OKAFOR,
         reasonCode: [{ text: 'Type 2 diabetes mellitus: annual labs' }],
-        note: [{ text: 'Not drawn: the patient left before the lab draw. Cancelled; to be drawn at the next visit.' }],
+        note: [{ text: 'Not sent: ordered after the blood draw. Cancelled; to be drawn at the next visit.' }],
       },
       {
         resourceType: 'MedicationRequest',
@@ -314,7 +314,7 @@ const overlay: Overlay = {
         created: '2026-10-09T10:15:00-04:00',
         participant: [{ actor: SUBJECT, status: 'accepted' }],
       },
-      note('doc-t5-ct-2019', '2019-05-14T11:40:00-04:00', ['18748-4', 'Diagnostic imaging study'], 'enc-t5-0514', RADIOLOGIST, HOSPITAL, CT_2019),
+      note('doc-t5-ct-2019', '2019-05-14T12:40:00-04:00', ['18748-4', 'Diagnostic imaging study'], 'enc-t5-0514', RADIOLOGIST, HOSPITAL, CT_2019),
       note('doc-t5-ct-2023', '2023-06-20T16:30:00-04:00', ['18748-4', 'Diagnostic imaging study'], 'enc-t5-0620', RADIOLOGIST, HOSPITAL, CT_2023),
       note('doc-t5-tel-0922', '2026-09-22T15:10:00-04:00', ['34748-4', 'Telephone encounter Note'], null, OKAFOR, CLINIC, PHONE_0922),
       note('doc-t5-tel-1009', '2026-10-09T10:20:00-04:00', ['34748-4', 'Telephone encounter Note'], null, REYES, CLINIC, PHONE_1009),

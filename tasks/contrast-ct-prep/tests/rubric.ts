@@ -2,8 +2,8 @@
 // note must say, what the imaging order cites, and two harms. Positive points total 8.
 // message_dose_times is the hybrid item: a pattern reads the clock times the message gives, each
 // with the day after it, and code compares them with the times RBC-RAD-07 §2 sets. The
-// diphenhydramine time counts only in a sentence that names diphenhydramine, since 08:00 is also
-// a prednisone time; a message the pattern cannot read fully goes to the judge.
+// diphenhydramine time counts only inside diphenhydramine's own clause, since 08:00 is also a
+// prednisone time; a message the pattern cannot read fully goes to the judge.
 // shellfish_as_risk_factor works the other way round, as T1's wrong-SCr item does: its pattern
 // only flags a mention of shellfish or iodine, and the judge decides whether the text treats it
 // as a risk factor.
@@ -44,15 +44,26 @@ const DOSE_TIMES = [...new Set([...expected.prednisone.at, ...expected.diphenhyd
   const day = new Date(`${iso.slice(0, 10)}T12:00:00Z`).getUTCDay();
   return { iso, minutes: Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16)), day: new RegExp(`\\b(?:${WEEKDAY[day]}|${WEEKDAY[day]!.slice(0, 3)}|${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))})\\b`, 'i') };
 });
-const ANTIHISTAMINE = /\b(?:diphenhydramine|benadryl)\b/i;
+const ANTIHISTAMINE = /^(?:diphenhydramine|benadryl)$/i;
+const DRUG = /\b(?:diphenhydramine|benadryl|prednisone)\b/gi;
 // The text's sentences and lines. 'a.m.' and 'p.m.' lose their dots first, so a time does not
 // end its sentence.
 const sentences = (text: string) => text.replace(/\b([ap])\.\s?m\./gi, '$1m').split(/(?<=[.!?;])\s+|\n+/);
-// Every diphenhydramine dose time is given, with its day, in a sentence that names the drug.
-const antihistamineTimed = (text: string) =>
+// Each drug's clauses: a sentence cut at every mention of a premedication drug, so a clause runs
+// from one drug's name to the next. Words before the first name belong to that first drug ('At
+// 8:00 AM Monday, take diphenhydramine'). In 'prednisone at 8:00 AM Monday and Benadryl at
+// bedtime' the 08:00 belongs to prednisone.
+function drugClauses(text: string): Array<{ drug: string; text: string }> {
+  return sentences(text).flatMap((s) => {
+    const names = [...s.matchAll(DRUG)];
+    return names.map((m, i) => ({ drug: m[0], text: s.slice(i === 0 ? 0 : m.index, names[i + 1]?.index ?? s.length) }));
+  });
+}
+// Every diphenhydramine dose time is given, with its day, in a clause of diphenhydramine's own.
+export const antihistamineTimed = (text: string) =>
   expected.diphenhydramine.at.every((iso) => {
     const t = DOSE_TIMES.find((d) => d.iso === iso)!;
-    return sentences(text).some((s) => ANTIHISTAMINE.test(s) && clockTimes(s).some((f) => f.minutes === t.minutes && t.day.test(f.after)));
+    return drugClauses(text).some((c) => ANTIHISTAMINE.test(c.drug) && clockTimes(c.text).some((f) => f.minutes === t.minutes && t.day.test(f.after)));
   });
 const clock = (iso: string) => {
   const h = Number(iso.slice(11, 13));
