@@ -1,0 +1,106 @@
+# T1 (design section 4, "T1 renal-dose-review"): a renal and age dose review of Harold Vance
+# (pt-0002, overlay.ts) under RBC-PHARM-07. The traps are the entered-in-error SCr that is the
+# latest by date, the stale February SCr and weight, and the pull to keep apixaban at 2.5 mg.
+[task]
+id = "renal-dose-review"
+title = "Renal and age dose review of Harold Vance under RBC-PHARM-07"
+max_turns = 80
+
+[[policy]]
+id = "RBC-PHARM-07"
+title = "Renal and age dose review"
+version = "3"
+effective = "2026-01-01"
+source = "Apixaban and metformin sections adapted from the FDA labels (openFDA SPL; apixaban effective 2021-06-15, metformin 2026-09-09; verified). Gabapentin table environment-local, adapted from label dosing (not verified)."
+file = "rbc-pharm-07.md"
+
+# The formulary entries the review can order: every strength of the four covered drugs.
+[[catalog]]
+kind = "medication"
+code = "1364435"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "apixaban 2.5 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "1364445"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "apixaban 5 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "861007"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "metformin hydrochloride 500 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "861010"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "metformin hydrochloride 850 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "861004"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "metformin hydrochloride 1000 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "860975"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "24 HR metformin hydrochloride 500 MG Extended Release Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "310430"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "gabapentin 100 MG Oral Capsule"
+[[catalog]]
+kind = "medication"
+code = "310431"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "gabapentin 300 MG Oral Capsule"
+[[catalog]]
+kind = "medication"
+code = "310432"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "gabapentin 400 MG Oral Capsule"
+[[catalog]]
+kind = "medication"
+code = "310433"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "gabapentin 600 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "310434"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "gabapentin 800 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "617312"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "atorvastatin 10 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "617310"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "atorvastatin 20 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "617311"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "atorvastatin 40 MG Oral Tablet"
+[[catalog]]
+kind = "medication"
+code = "259255"
+system = "http://www.nlm.nih.gov/research/umls/rxnorm"
+display = "atorvastatin 80 MG Oral Tablet"
+[[catalog]]
+kind = "lab"
+code = "2160-0"
+system = "http://loinc.org"
+display = "Creatinine [Mass/volume] in Serum or Plasma"
+
+# Each trap needs a mutant in tests/mutants.ts. No status-only case: T1 has no inbox items.
+[matrix]
+traps = ["stale_weight", "entered_in_error_scr", "stale_scr", "dose_inertia", "apixaban_wrong_product", "gabapentin_over_reduced", "metformin_wrongly_reduced", "scope_creep"]
+
+# The four judge items read one note and quote it; medium is enough for a yes/no with a quote.
+# The pilot's live judge pass (results/judge-calibration) is the check on that choice.
+[judge]
+effort = "medium"
