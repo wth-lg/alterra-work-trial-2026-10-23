@@ -249,6 +249,18 @@ describe('order_service', () => {
   });
 });
 
+// Every inbox row in the world, paged through with next_offset, less the rows task overlays add
+// (ids tagged '<prefix>-t<N>-', as write-gate.test.ts filters them): the rest compare exactly.
+function inbox(c: WriteContext, input: Record<string, unknown>): Array<{ task: string }> {
+  const rows: Array<{ task: string }> = [];
+  for (let offset: number | undefined = 0; offset !== undefined; ) {
+    const p = ok(callTool(READ_TOOLS, 'list_inbox', { ...input, offset }, c));
+    rows.push(...(p.entries as Array<{ task: string }>));
+    offset = p.next_offset as number | undefined;
+  }
+  return rows.filter((x) => !/^Task\/[a-z]+-t\d+-/.test(x.task));
+}
+
 describe('create_task', () => {
   const task = { patient: 'pt-0001', owner: 'Group/pool-rn-triage', due: '2026-11-06', priority: 'routine', description: 'Call with results' };
   it('creates a requested Task that is not an inbox item', () => {
@@ -258,7 +270,7 @@ describe('create_task', () => {
     const t = get<Task>(c, 'Task/task-t0001');
     expect(t).toMatchObject({ status: 'requested', intent: 'order', for: { reference: 'Patient/pt-0001' }, owner: { reference: 'Group/pool-rn-triage' }, restriction: { period: { end: '2026-11-06' } }, authoredOn: stamp(1) });
     expect(t.code).toBeUndefined();
-    expect(ok(callTool(READ_TOOLS, 'list_inbox', { queue: 'results' }, c)).total).toBe(2);
+    expect(inbox(c, { queue: 'results' })).toHaveLength(2);
   });
   it('rejects a bad owner, a past due date and a focus on another patient', async () => {
     const c = fresh();
@@ -368,8 +380,7 @@ describe('update_inbox_item', () => {
     });
     expect(await rejected(c, 'update_inbox_item', { task_id: 'Task/task-w-1', action: 'complete' })).toMatchObject({ code: 'CONFLICT', field: 'task_id' });
     expect(await rejected(c, 'update_inbox_item', { task_id: 'task-w-3', action: 'reassign', new_owner: 'pool-oncall' })).toMatchObject({ code: 'CONFLICT', field: 'task_id' });
-    const rows = ok(callTool(READ_TOOLS, 'list_inbox', { queue: 'results', status: 'completed' }, c)).entries as Array<{ task: string }>;
-    expect(rows.map((x) => x.task)).toEqual(['Task/task-w-1', 'Task/task-w-3']);
+    expect(inbox(c, { queue: 'results', status: 'completed' }).map((x) => x.task)).toEqual(['Task/task-w-1', 'Task/task-w-3']);
   });
   it('reassigns, and rejects inconsistent arguments and non-inbox Tasks', async () => {
     const c = fresh();

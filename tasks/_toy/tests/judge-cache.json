@@ -1,5 +1,23 @@
 [
   {
+    "key": "04a8e0405243154737e45fa3de07f1d6bc91640576c2ac644fbeb05fab6d87ff",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": ""
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-53)",
+      "at": "2026-10-24T11:28:02Z"
+    }
+  },
+  {
     "key": "06a4cd98d8ffb0d3fba51938b5540fd7c320c8912f4b0289cf677948059d4d23",
     "kind": "judge",
     "model": "claude-opus-5-5",
@@ -87,6 +105,24 @@
       "source": "scripted",
       "model": "none: a rule-based script with no network call (builder-32)",
       "at": "2026-10-24T05:34:02Z"
+    }
+  },
+  {
+    "key": "366cd824744a2b12a918789783373946510161853b1dee65eea24793d10b8ff3",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "Signed in as Maya Okafor, MD, I reviewed the chart of Peter Prosacco; the chart rejected my note."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-53)",
+      "at": "2026-10-24T11:28:02Z"
     }
   },
   {

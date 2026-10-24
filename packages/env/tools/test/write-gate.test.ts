@@ -128,10 +128,14 @@ const PRN = (f: unknown) => typeof f === 'string' && f.endsWith('_PRN');
 const AS_NEEDED = ['pain', 'nausea', 'wheeze', 'insomnia', 'anxiety — acute'];
 
 const patientOf = (r: Readonly<Resource>): string | undefined => (r.resourceType === 'Patient' ? r.id : [...patientRefs(r)][0]);
-const all = <T extends Resource>(c: WriteContext, type: string) => [...c.world.search<T>(type, {}).resources];
+// Task overlays add resources with ids tagged '<prefix>-t<N>-' to the shared world. The pools
+// below leave them out, so an overlay cannot change what a seeded run draws; this run's own writes
+// ('mr-t0001') stay in.
+const overlay = (id: string | undefined) => /^[a-z]+-t\d+-/.test(id ?? '');
+const all = <T extends Resource>(c: WriteContext, type: string) => c.world.search<T>(type, {}).resources.filter((r) => !overlay(r.id));
 const REF_TYPES = ['Observation', 'Condition', 'DocumentReference', 'DiagnosticReport', 'MedicationRequest', 'Procedure', 'Encounter'];
 function refsOf(c: WriteContext, patient: string, types = REF_TYPES): string[] {
-  return types.flatMap((t) => c.world.search(t, { patient }).resources.map((r) => `${t}/${r.id}`));
+  return types.flatMap((t) => c.world.search(t, { patient }).resources.filter((r) => !overlay(r.id)).map((r) => `${t}/${r.id}`));
 }
 const someRefs = (rnd: Rnd, refs: string[], max: number) => Array.from({ length: Math.floor(rnd() * (max + 1)) }, () => pick(rnd, refs)).filter((r, i, a) => r && a.indexOf(r) === i);
 const OWNERS = ['pr-okafor', 'Practitioner/pr-lin', 'pr-reyes', 'Group/pool-oncall', 'pool-rn-triage', 'pool-scheduling'];
