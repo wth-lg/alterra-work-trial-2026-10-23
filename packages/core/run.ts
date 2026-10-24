@@ -15,8 +15,9 @@
 // record, grade included, is emitted as the graded event, last for every outcome, and
 // returned. An invalid trial (INVALID, INFRA, CANCELLED, ENV_ERROR) runs no check and no judge
 // call. Grading does not throw: a check that throws grades the trial GRADER_ERROR and a judge
-// call the client failed grades it INFRA_API, both invalid, both graded last with the cost,
-// turns, tool calls, models and hashes the trial really had.
+// call the client failed grades it as classifyFailure says (INFRA_API for a 401 or retries
+// exhausted), both invalid, both graded last with the cost, turns, tool calls, models and
+// hashes the trial really had.
 import { ANTHROPIC_VERSION, MODEL, type MessageParam, type MessageParams } from './anthropic.ts';
 import { PER_TRIAL_CAP_USD } from './cost.ts';
 import { createEmitter, type TrialEvent, type TrialStatus } from './events.ts';

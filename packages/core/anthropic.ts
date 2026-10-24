@@ -18,10 +18,12 @@
 // network error; up to maxAttempts, waiting retry-after or an exponential backoff. An abort is
 // never retried: send takes a per-request signal, combined with the grant's, and once either
 // has aborted the call throws the abort reason. Aborted before the reserve, nothing is
-// reserved or sent; aborted in flight, the attempt is settled at the worst case. A 400
-// closes the grant, which stops every client of the batch; any other 4xx fails the call
-// only. Headers are never logged, and the key is redacted from every log line and error
-// message.
+// reserved or sent; aborted in flight, the attempt is settled at the worst case. A 400, 401,
+// 403, 404 (the model: /v1/messages is the only endpoint) or billing error closes the grant,
+// which stops every client of the batch (design section 1, "Failure modes"); any other 4xx
+// fails the call only. classifyFailure says how a failed call ends a trial, for the trial
+// loop and the judge alike. Headers are never logged, and the key is redacted from every log
+// line and error message.
 //
 // Threat model: these checks guard against accidental unmetered or under-metered calls by code
 // in this repo: a send that skips MessagesClient (refused by the egress guard where an entry
@@ -46,7 +48,7 @@
 //   - Node's http, https, http2, net and tls modules with a host built at runtime (lint flags a
 //     literal API host passed to them)
 import { usageCostUsd, type Usage } from './cost.ts';
-import { assertClientGrant, type BatchGrant, type Ledger, type Reservation, type ReserveRequest } from './ledger.ts';
+import { assertClientGrant, SpendRefused, type BatchGrant, type Ledger, type Reservation, type ReserveRequest } from './ledger.ts';
 import { redactText } from './redact.ts';
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
@@ -266,6 +268,10 @@ export function reserveRequest(history: readonly MessageParam[], params: Message
 }
 
 const retryableStatus = (s: number) => s === 408 || s === 409 || s === 429 || s >= 500;
+// The statuses that stop the batch: no other request of it can succeed either.
+const stopsBatchStatus = (s: number, type: string | null) => s === 400 || s === 401 || s === 403 || s === 404 || type === 'billing_error';
+// A billing failure: a billing_error, or a 400 about the credit balance or billing.
+const isBilling = (e: ApiError) => e.errorType === 'billing_error' || (e.status === 400 && /credit balance|billing/i.test(e.message));
 const broken = (message: string, type: string | null = null, retryable = true) =>
   new ApiError(message, { status: 200, type, retryable, stopsBatch: false, partial: true });
 const retryableStreamError = (type: string | null) => type === 'overloaded_error' || type === 'api_error' || type === 'rate_limit_error';
@@ -283,7 +289,7 @@ async function errorStatus(res: Response): Promise<ApiError> {
   const retryable = retryableStatus(res.status);
   const after = Number(res.headers.get('retry-after') ?? NaN);
   return new ApiError(`HTTP ${res.status}${type ? ` ${type}` : ''}${detail ? `: ${detail}` : ''}`, {
-    status: res.status, type, retryable, stopsBatch: res.status === 400, retryAfter: Number.isFinite(after) && after >= 0 ? after : null,
+    status: res.status, type, retryable, stopsBatch: stopsBatchStatus(res.status, type), retryAfter: Number.isFinite(after) && after >= 0 ? after : null,
   });
 }
 
@@ -406,6 +412,33 @@ async function sendOnce(f: Transport, apiKey: string, body: string, signal?: Abo
   if (res.status !== 200) throw await errorStatus(res);
   if (!res.body) throw broken('HTTP 200 without a body');
   return { status: res.status, message: await readStream(res.body) };
+}
+
+// How a failed call ends a trial (design section 1, "Failure modes"; section 5, "Outcomes"),
+// whichever call failed: a model call in the trial loop or a judge call in the grader.
+//   INVALID        a response from another model
+//   INFRA_HARNESS  a request we built wrong (a 400 that is not billing), the egress guard, a
+//                  spend refusal, or a request the client refused to build
+//   INFRA_API      401, 403, 404, a billing error, retries exhausted, a network error
+// stopsBatch is the client's: true where it closed the grant (and for a spend refusal, whose
+// cap closes the batch anyway). Retries exhausted does not stop the batch: the trial is rerun.
+export interface ClientFailure {
+  status: 'INVALID' | 'INFRA_HARNESS' | 'INFRA_API';
+  code: string;
+  stopsBatch: boolean;
+  message: string;
+}
+
+export function classifyFailure(e: unknown): ClientFailure {
+  if (e instanceof SpendRefused) return { status: 'INFRA_HARNESS', code: `spend_refused_${e.cap}`, stopsBatch: true, message: e.message };
+  if (e instanceof ApiError) {
+    const f = { stopsBatch: e.stopsBatch, message: e.message };
+    if (e.errorType === 'model_mismatch') return { status: 'INVALID', code: 'model_mismatch', ...f };
+    if (isBilling(e)) return { status: 'INFRA_API', code: 'billing_error', ...f };
+    const harness = e.status === 400 || e.errorType === 'egress_refused';
+    return { status: harness ? 'INFRA_HARNESS' : 'INFRA_API', code: e.errorType ?? (e.status === null ? 'network' : `http_${e.status}`), ...f };
+  }
+  return { status: 'INFRA_HARNESS', code: 'client_error', stopsBatch: false, message: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
 }
 
 // What the client sends through: the global fetch by default. A transport receives one Request

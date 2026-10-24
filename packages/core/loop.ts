@@ -21,10 +21,9 @@
 //   a client error         INFRA_API, INFRA_HARNESS or INVALID (a response from another model)
 // It reads no clock and draws no randomness (eslint-rules/determinism.js): time comes from the
 // injected `now` and `timeout`, used only for the wall-clock cap.
-import { ApiError, type CallResult, type MessageParam, type MessageParams, type SendOptions } from './anthropic.ts';
+import { classifyFailure, type CallResult, type MessageParam, type MessageParams, type SendOptions } from './anthropic.ts';
 import { usageCostUsd, type Usage } from './cost.ts';
 import type { ErrorStatus, EventBody, Limit, TrialStatus } from './events.ts';
-import { SpendRefused } from './ledger.ts';
 import { ERROR_CODES, internalError, type ErrorCode } from '../env/tools/errors.ts';
 import { callTool, type Tool, type ToolResult } from '../env/tools/registry.ts';
 import type { WriteContext } from '../env/tools/write/index.ts';
@@ -90,17 +89,11 @@ interface ToolUse {
 
 export const errorText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-// How a failed send ends the trial (design section 1, "Failure modes").
+// How a failed send ends the trial: cancelled, or as classifyFailure says.
 function clientFailure(e: unknown, signal: AbortSignal | undefined): Exclude<Terminal, { type: 'limit' }> {
   if (signal?.aborted) return { type: 'cancelled', reason: errorText(signal.reason ?? e) };
-  if (e instanceof SpendRefused) return { type: 'error', status: 'INFRA_HARNESS', code: `spend_refused_${e.cap}`, message: e.message };
-  if (e instanceof ApiError) {
-    if (e.errorType === 'model_mismatch') return { type: 'error', status: 'INVALID', code: 'model_mismatch', message: e.message };
-    const harness = e.stopsBatch || e.errorType === 'egress_refused';
-    return { type: 'error', status: harness ? 'INFRA_HARNESS' : 'INFRA_API', code: e.errorType ?? (e.status === null ? 'network' : `http_${e.status}`), message: e.message };
-  }
-  // A request the client refused to build, or a ledger failure: a harness bug.
-  return { type: 'error', status: 'INFRA_HARNESS', code: 'client_error', message: errorText(e) };
+  const { status, code, message } = classifyFailure(e);
+  return { type: 'error', status, code, message };
 }
 
 const toolResultBlock = (id: string, r: Pick<ToolResult, 'content' | 'is_error'>) => ({

@@ -369,15 +369,18 @@ describe('GateCtx projection', () => {
 
 describe('judge failures are infrastructure', () => {
   it.each([
-    ['401', new ApiError('401 invalid x-api-key', { status: 401, type: 'authentication_error', retryable: false, stopsBatch: true })],
-    ['billing 400', new ApiError('400 credit balance too low', { status: 400, type: 'invalid_request_error', retryable: false, stopsBatch: true })],
-    ['model_mismatch', new ApiError('response model claude-sonnet-5-5 is not claude-opus-5-5', { status: 200, type: 'model_mismatch', retryable: false, stopsBatch: true })],
-    ['retries exhausted', new ApiError('529 overloaded after 4 attempts', { status: 529, type: 'overloaded_error', retryable: true, stopsBatch: false })],
-  ] as const)('%s: INFRA_API, invalid, never cached, the batch stops where the client says so', async (_name, err) => {
+    ['401', 'INFRA_API', new ApiError('401 invalid x-api-key', { status: 401, type: 'authentication_error', retryable: false, stopsBatch: true })],
+    ['billing 400', 'INFRA_API', new ApiError('400 credit balance too low', { status: 400, type: 'invalid_request_error', retryable: false, stopsBatch: true })],
+    ['retries exhausted', 'INFRA_API', new ApiError('529 overloaded after 4 attempts', { status: 529, type: 'overloaded_error', retryable: true, stopsBatch: false })],
+    // As for a model call in the trial loop (classifyFailure): another model is INVALID, a
+    // request we built wrong INFRA_HARNESS.
+    ['model_mismatch', 'INVALID', new ApiError('response model claude-sonnet-5-5 is not claude-opus-5-5', { status: 200, type: 'model_mismatch', retryable: false, stopsBatch: true })],
+    ['other 400', 'INFRA_HARNESS', new ApiError('400 messages: roles must alternate', { status: 400, type: 'invalid_request_error', retryable: false, stopsBatch: true })],
+  ] as const)('%s: %s, invalid, never cached, the batch stops where the client says so', async (_name, outcome, err) => {
     let calls = 0;
     const client = { send: () => (calls++, Promise.reject(err)) };
     const g = await grade(input([...READS, ...WRITES], GOOD_FINAL), { judge: client });
-    expect(g).toMatchObject({ outcome: 'INFRA_API', valid: false, fault: 'infra', score: null, attribution: null, error: { check: 'R2', message: `ApiError: ${err.message}`, stops_batch: err.stopsBatch } });
+    expect(g).toMatchObject({ outcome, valid: false, fault: 'infra', score: null, attribution: null, error: { check: 'R2', message: `ApiError: ${err.message}`, stops_batch: err.stopsBatch } });
     expect(g.judge.cache).toEqual([]);
     expect(g.judge.cache_keys).toEqual([]);
     expect(calls).toBe(1);

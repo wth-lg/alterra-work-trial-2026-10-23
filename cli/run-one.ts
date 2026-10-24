@@ -22,7 +22,8 @@
 // trajectory as it arrives, so a crash leaves a valid prefix, and the last line is the graded
 // record; the record (outcome, gate checks, rubric scores included) is written at the end. A
 // check that throws or a judge call that fails does not make run() throw: the trial is graded
-// GRADER_ERROR or INFRA_API with its real cost and turns. If run() throws (the task cannot be
+// GRADER_ERROR, or as classifyFailure says for the judge (INFRA_API for a 401), with its real
+// cost and turns. If run() throws (the task cannot be
 // resolved again, before any spend), the record says ENV_ERROR INTERNAL: never a valid trial,
 // never the model's failure. That record is written only while the ledger shows no call for the
 // trial: after a call, run-one writes no record and says so, so no record claims $0 for spend.

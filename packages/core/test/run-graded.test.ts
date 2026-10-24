@@ -148,11 +148,11 @@ describe('run() grades', () => {
   });
 
   it.each([
-    ['401', 401, 'authentication_error', false],
-    ['billing 400', 400, 'invalid_request_error', true],
-  ] as const)('a judge %s: INFRA_API, invalid, not cached, graded last with the trial facts', async (_name, status, type, stops) => {
-    const { result, events } = await trial({}, () => new Response(JSON.stringify({ type: 'error', error: { type, message: `${status} from the judge` } }), { status, headers: { 'content-type': 'application/json' } }));
-    expect(events.at(-1)).toMatchObject({ type: 'graded', record: { outcome: 'INFRA_API', valid: false, fault: 'infra', error: { check: 'R1', stops_batch: stops } } });
+    ['401', 401, 'authentication_error', 'invalid x-api-key'],
+    ['billing 400', 400, 'invalid_request_error', 'Your credit balance is too low to access the Anthropic API.'],
+  ] as const)('a judge %s: INFRA_API, invalid, not cached, the batch stops, graded last with the trial facts', async (_name, status, type, message) => {
+    const { result, events } = await trial({}, () => new Response(JSON.stringify({ type: 'error', error: { type, message } }), { status, headers: { 'content-type': 'application/json' } }));
+    expect(events.at(-1)).toMatchObject({ type: 'graded', record: { outcome: 'INFRA_API', valid: false, fault: 'infra', error: { check: 'R1', stops_batch: true } } });
     expect(result.record.judge.cache).toEqual([]);
     expect(result.record.cost_usd).toBeGreaterThan(0);
     expect(result.record.turns).toBe(2);

@@ -11,7 +11,9 @@
 //
 // Grading never throws on the trial's account. A check that throws is the grader's fault: the
 // trial is GRADER_ERROR, invalid, fault grader, with the check and the message in `error`. A
-// judge call the client failed is INFRA_API, invalid, with stops_batch as the client says. A
+// judge call the client failed ends the trial as classifyFailure says, as a model call would
+// (INFRA_API for a 401, 403, 404, billing error or retries exhausted), invalid, with stops_batch
+// as the client says. A
 // trial whose facts say it reached a final state that is not here is GRADER_ERROR too. Only a
 // judge cache miss on a regrade throws (JudgeCacheMiss): a regrade never calls the judge.
 import type { TrialEvent } from '../core/events.ts';
@@ -196,11 +198,11 @@ export async function gradeWith(input: GradeInput, judge: Judge): Promise<Grade>
       const infra = e instanceof JudgeClientError;
       const message = infra ? e.message : errorText(e);
       byCheck.set(c, result(c, { met: 'unknown', evidence: { [infra ? 'judge_error' : 'grader_error']: message } }));
-      const outcome: Outcome = infra ? 'INFRA_API' : 'GRADER_ERROR';
+      const outcome: Outcome = infra ? e.failure.status : 'GRADER_ERROR';
       const checks = ordered();
       return {
         grader_version: GRADER_VERSION, outcome, valid: false, fault: FAULT[outcome], checks, score: null, judge: judgeOf(judge, checks), attribution: null,
-        error: { check: c.id, message, stops_batch: infra && e.stopsBatch },
+        error: { check: c.id, message, stops_batch: infra && e.failure.stopsBatch },
       };
     }
   }

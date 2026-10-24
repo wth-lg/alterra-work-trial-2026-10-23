@@ -16,7 +16,9 @@
 //
 // Failures: a client error (401, 403, a billing 400, retries exhausted, a substituted model, a
 // spend refusal, any error that stops the batch) is not an answer. It is thrown as
-// JudgeClientError, never cached, and the grader ends the trial INFRA_API. Only a response that
+// JudgeClientError, never cached, and the grader ends the trial with the outcome
+// classifyFailure gives it, the same as for a model call in the trial loop (INFRA_API for a
+// 401, 403, 404, billing error or retries exhausted). Only a response that
 // parsed (or failed to parse twice) is cached as an answer or an unknown.
 //
 // Allowance: a trial's judge calls are bounded by its projection, two calls (the schema retry)
@@ -28,9 +30,8 @@
 // text), with the calls it took, and the entries go into the trial record, so a regrade from
 // them is byte-identical and free. With a cache and no client (regrade, replay), a miss is an
 // error: JudgeCacheMiss. With neither, judge and hybrid-fallback items are unknown.
-import { ApiError, MODEL, reserveRequest, type CallResult, type MessageParam, type MessageParams, type SendOptions } from '../core/anthropic.ts';
+import { classifyFailure, MODEL, reserveRequest, type CallResult, type ClientFailure, type MessageParam, type MessageParams, type SendOptions } from '../core/anthropic.ts';
 import { worstCaseUsd } from '../core/cost.ts';
-import { SpendRefused } from '../core/ledger.ts';
 import type { Check, Json, Verdict } from './check.ts';
 import { canonicalNumber } from './normalize.ts';
 
@@ -87,11 +88,11 @@ export interface JudgeCacheEntry {
 // A judge or extractor call the client failed: infrastructure, not an answer.
 export class JudgeClientError extends Error {
   override readonly name = 'JudgeClientError';
-  // The client says the batch stops (a 400, a substituted model, a spend refusal).
-  readonly stopsBatch: boolean;
+  // How the failure ends the trial, and whether the batch stops.
+  readonly failure: ClientFailure;
   constructor(cause: unknown) {
     super(cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause));
-    this.stopsBatch = (cause instanceof ApiError && cause.stopsBatch) || cause instanceof SpendRefused;
+    this.failure = classifyFailure(cause);
   }
 }
 

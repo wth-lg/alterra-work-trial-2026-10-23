@@ -128,6 +128,8 @@ describe('retries', () => {
     expect(t.calls).toHaveLength(4);
     expect(t.sleeps).toEqual([1000, 2000, 4000]);
     expect(rows(t.store, 'settle')).toHaveLength(4);
+    // Retries exhausted does not stop the batch: the trial is INFRA_API and rerun.
+    expect(rows(t.store, 'close')).toHaveLength(0);
   });
 
   it('400 stops the batch: no retry, the grant is closed, and the next call sends nothing', async () => {
@@ -323,7 +325,7 @@ describe('pnpm live:node refuses before any call', () => {
 // P2 fix round (findings p2-findings-1): each test below failed at 63259f5.
 describe('MessagesClient is the only way to send', () => {
   it('exports only the metered client, its error and pure helpers', () => {
-    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'EgressRefusal', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'isApiHost', 'requestUrl', 'reserveRequest']);
+    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'EgressRefusal', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'classifyFailure', 'isApiHost', 'requestUrl', 'reserveRequest']);
   });
 
   it('no exported function sends without a grant', async () => {
@@ -403,12 +405,20 @@ describe('status and local failure handling', () => {
     expect(rows(t.store, 'close')).toHaveLength(0);
   });
 
-  it('a 401 is not retried and does not close the batch: only 400 stops it', async () => {
-    const t = await client([status(401, 'authentication_error'), ok()]);
-    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: 401, retryable: false, stopsBatch: false });
+  it.each([[401, 'authentication_error'], [403, 'permission_error'], [404, 'not_found_error'], [402, 'billing_error']])('a %i %s is not retried and stops the batch: the grant is closed, the next call sends nothing', async (code, type) => {
+    const t = await client([status(code, type), ok()]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: code, retryable: false, stopsBatch: true });
     expect(t.calls).toHaveLength(1);
-    expect(rows(t.store, 'close')).toHaveLength(0);
+    expect(rows(t.store, 'close')).toHaveLength(1);
     expect(rows(t.store, 'settle').map((x) => x.cost_usd)).toEqual([0]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toThrow(/closed|stopped/);
+    expect(t.calls).toHaveLength(1);
+  });
+
+  it('a 422 fails the call only', async () => {
+    const t = await client([status(422, 'invalid_request_error'), ok()]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: 422, retryable: false, stopsBatch: false });
+    expect(rows(t.store, 'close')).toHaveLength(0);
   });
 
   it('a key that is not a valid header value throws in the constructor with 0 reserves and 0 fetch calls', async () => {
