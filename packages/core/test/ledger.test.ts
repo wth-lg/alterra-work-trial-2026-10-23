@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACTUAL_CAP_USD,
   admitStore,
   assertGrant,
   createLedger,
   parseRow,
+  PROJECTED_CAP_USD,
   SpendRefused,
   totals,
   type BatchGrant,
@@ -95,62 +97,92 @@ describe('cost model', () => {
   });
 });
 
+// The decided caps (2026-10-24): $950 projected, $1,000 actual. Every other test derives its
+// thresholds from the constants; this one pins the numbers.
+describe('cap values', () => {
+  it('starts a batch at 949.99 and refuses 950.01', async () => {
+    expect(PROJECTED_CAP_USD).toBe(950);
+    assertGrant(await ledgerOn(new MemoryStore()).batchStart(949.99));
+    await expect(ledgerOn(new MemoryStore()).batchStart(950.01)).rejects.toThrow(/projected/);
+  });
+
+  // The smallest call reserves about $0.03 (the input overhead allowance), so the cheapest call
+  // that fits is one whose worst case takes settled + reserved to exactly $1,000.
+  it('is not blocked at settled 999.99, admits a call that ends exactly at 1000, and blocks every call at 1000', async () => {
+    expect(ACTUAL_CAP_USD).toBe(1000);
+    const store = new MemoryStore();
+    const grant = await ledgerOn(store).batchStart(0);
+    seedSettled(store, 999.99);
+    expect(totals(store.rows).blocked).toBe(false);
+    await expect(grant.reserve({ bodyBytes: 0, maxTokens: 0 })).rejects.toThrow(/actual cap: .* worst case/);
+    store.rows.length = 0;
+    const grant2 = await ledgerOn(store).batchStart(0);
+    seedSettled(store, 1000 - worstCaseUsd({ bodyBytes: 0, maxTokens: 0 }));
+    const res = await grant2.reserve({ bodyBytes: 0, maxTokens: 0 });
+    await grant2.settle(res, { input_tokens: 0, output_tokens: 0 });
+    seedSettled(store, 1000 - totals(store.rows).settled);
+    expect(totals(store.rows).blocked).toBe(true);
+    await expect(grant2.reserve({ bodyBytes: 0, maxTokens: 0 })).rejects.toThrow(/actual cap: settled .* has reached/);
+  });
+});
+
 describe('projected cap at batch start', () => {
-  it('starts a batch at 449.99 and refuses 450.01 with 0 calls made (case 4)', async () => {
-    const ok = await ledgerOn(new MemoryStore()).batchStart(449.99);
+  it('starts a batch one cent under the projected cap and refuses one cent over with 0 calls made (case 4)', async () => {
+    const ok = await ledgerOn(new MemoryStore()).batchStart(PROJECTED_CAP_USD - 0.01);
     assertGrant(ok);
 
     const store = new MemoryStore();
     let calls = 0;
     await expect(
       ledgerOn(store)
-        .batchStart(450.01)
+        .batchStart(PROJECTED_CAP_USD + 0.01)
         .then((g) => fakeClient(g, async () => (calls++, SMALL)).send()),
     ).rejects.toThrow(SpendRefused);
     expect(calls).toBe(0);
     expect(store.rows).toEqual([]);
   });
 
-  it('throws and returns no grant when ledger + projection = 450.01 (case 11)', async () => {
+  it('throws and returns no grant when ledger + projection is one cent over the projected cap (case 11)', async () => {
     const store = new MemoryStore();
     seedSettled(store, 100);
     let grant: BatchGrant | undefined;
     await expect(
       ledgerOn(store)
-        .batchStart(350.01)
+        .batchStart(PROJECTED_CAP_USD - 100 + 0.01)
         .then((g) => (grant = g)),
     ).rejects.toThrow(/projected/);
     expect(grant).toBeUndefined();
     expect(store.rows.filter((r) => r.kind === 'open')).toEqual([]);
     // The same batch one cent smaller fits.
-    assertGrant(await ledgerOn(store).batchStart(350));
+    assertGrant(await ledgerOn(store).batchStart(PROJECTED_CAP_USD - 100));
   });
 
   it('counts other open batches at max(projection, own settled + reserved) until closed', async () => {
     const store = new MemoryStore();
     const a = await ledgerOn(store, 1).batchStart(200);
-    await expect(ledgerOn(store, 2).batchStart(250.01)).rejects.toThrow(SpendRefused);
+    await expect(ledgerOn(store, 2).batchStart(PROJECTED_CAP_USD - 200 + 0.01)).rejects.toThrow(SpendRefused);
     // a overruns its projection: it counts at its own spend, 210.
     await a.settle(await a.reserve({ bodyBytes: 0, maxTokens: 0 }), usdOutput(210));
     expect(totals(store.rows).exposure).toBeCloseTo(210, 6);
-    await expect(ledgerOn(store, 2).batchStart(240.01)).rejects.toThrow(SpendRefused);
+    await expect(ledgerOn(store, 2).batchStart(PROJECTED_CAP_USD - 210 + 0.01)).rejects.toThrow(SpendRefused);
     await a.close();
     // Closed: only its settled 210 counts.
-    assertGrant(await ledgerOn(store, 2).batchStart(240));
+    assertGrant(await ledgerOn(store, 2).batchStart(PROJECTED_CAP_USD - 210));
   });
 });
 
 describe('actual cap', () => {
-  it('aborts in-flight calls and refuses the next call at 500.00 actual (case 5)', async () => {
+  it('aborts in-flight calls and refuses the next call when settled reaches the actual cap (case 5)', async () => {
     const store = new MemoryStore();
-    seedSettled(store, 300);
+    // The batch opens before the seed, so this setup holds for any PROJECTED_CAP_USD >= 100.
     const grant = await ledgerOn(store).batchStart(100);
+    seedSettled(store, ACTUAL_CAP_USD - 200);
     const hang = fakeClient(grant, (signal) => new Promise<Usage>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
     const inFlight = hang.send();
-    // Another call settles at $200.00 actual, so settled reaches exactly $500.00.
+    // Another call settles at $200.00 actual, so settled reaches exactly ACTUAL_CAP_USD.
     const big = fakeClient(grant, async () => usdOutput(200));
     await big.send();
-    expect(totals(store.rows).settled).toBeCloseTo(500, 6);
+    expect(totals(store.rows).settled).toBeCloseTo(ACTUAL_CAP_USD, 6);
     expect(grant.signal.aborted).toBe(true);
     await expect(inFlight).rejects.toThrow();
     const next = fakeClient(grant, async () => SMALL);
@@ -160,41 +192,54 @@ describe('actual cap', () => {
     await expect(ledgerOn(store, 2).batchStart(0)).rejects.toThrow(SpendRefused);
   });
 
-  it('aborts every grant of this process when another process takes settled to $500', async () => {
+  it('aborts every grant of this process when another process takes settled to the actual cap', async () => {
     const store = new MemoryStore();
-    seedSettled(store, 400);
     const ledger = ledgerOn(store);
     const a = await ledger.batchStart(10);
     const b = await ledger.batchStart(10);
-    seedSettled(store, 100); // settled by another process
+    seedSettled(store, ACTUAL_CAP_USD); // settled by another process
     await expect(a.reserve({ bodyBytes: 1, maxTokens: 1 })).rejects.toThrow(/actual/);
     expect(a.signal.aborted).toBe(true);
     expect(b.signal.aborted).toBe(true);
   });
 
-  it('refuses a reservation that would take settled + reserved past $500', async () => {
+  it('refuses a reservation that would take settled + reserved past the actual cap', async () => {
     const store = new MemoryStore();
-    seedSettled(store, 400);
-    const grant = await ledgerOn(store).batchStart(50);
+    // The batch fills the projected cap exactly.
+    const grant = await ledgerOn(store).batchStart(PROJECTED_CAP_USD);
     const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 50_000 }); // about $1.03
-    seedSettled(store, 100 - w); // spend from another source after batch start
-    await grant.reserve({ bodyBytes: 0, maxTokens: 50_000 }); // settled + reserved = 500.00
+    seedSettled(store, ACTUAL_CAP_USD - w); // spend from another source after batch start
+    await grant.reserve({ bodyBytes: 0, maxTokens: 50_000 }); // settled + reserved = ACTUAL_CAP_USD
     await expect(grant.reserve({ bodyBytes: 0, maxTokens: 1 })).rejects.toThrow(/actual/);
     const t = totals(store.rows);
-    expect(t.settled + t.reserved).toBeCloseTo(500, 6);
+    expect(t.settled + t.reserved).toBeCloseTo(ACTUAL_CAP_USD, 6);
+  });
+
+  it('refuses a batch at the actual cap, not the projected one, and aborts live grants', async () => {
+    const store = new MemoryStore();
+    const ledger = ledgerOn(store);
+    const a = await ledger.batchStart(0);
+    seedSettled(store, ACTUAL_CAP_USD);
+    // Settled at ACTUAL_CAP_USD is also past the projected cap; the refusal must name the actual
+    // cap, since only that refusal aborts this process's grants.
+    const refused = await ledger.batchStart(0).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(SpendRefused);
+    expect((refused as SpendRefused).cap).toBe('actual');
+    expect((refused as SpendRefused).message).toMatch(/has reached/);
+    expect(a.signal.aborted).toBe(true);
   });
 
   it('records a settle above its reservation at actual and blocks the next call (case 15)', async () => {
     const store = new MemoryStore();
-    seedSettled(store, 440);
     const grant = await ledgerOn(store).batchStart(5);
+    seedSettled(store, ACTUAL_CAP_USD - 60);
     const res = await grant.reserve({ bodyBytes: 100, maxTokens: 100 });
     expect(res.worst_usd).toBeLessThan(0.1);
     // 1-hour cache writes at $8/MTok: 7.5M tokens is $60, far above the reservation.
     await grant.settle(res, { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 7.5e6, cache_creation: { ephemeral_1h_input_tokens: 7.5e6 } });
     const settle = store.rows.find((r) => r.kind === 'settle' && r.call_id === res.call_id);
     expect(settle?.cost_usd).toBeCloseTo(60, 6);
-    expect(totals(store.rows).settled).toBeCloseTo(500, 6);
+    expect(totals(store.rows).settled).toBeCloseTo(ACTUAL_CAP_USD, 6);
     expect(grant.signal.aborted).toBe(true);
     await expect(grant.reserve({ bodyBytes: 1, maxTokens: 1 })).rejects.toThrow(/actual/);
   });
@@ -306,7 +351,7 @@ describe('numeric inputs at the ledger boundary', () => {
   it('rejects a non-finite, negative or fractional bodyBytes or maxTokens before any row or call', async () => {
     const store = new MemoryStore();
     const grant = await ledgerOn(store).batchStart(0);
-    seedSettled(store, 499.99);
+    seedSettled(store, ACTUAL_CAP_USD - 0.01);
     const before = store.rows.length;
     for (const [why, req] of bad) {
       let calls = 0;
@@ -440,7 +485,8 @@ describe('closing a batch', () => {
     const cli = ledgerOn(store, 2, [1, 2]); // pid 1 is still running
     await expect(cli.close(grant.batch_id)).rejects.toThrow(/alive/);
     expect(store.rows.filter((r) => r.kind === 'close')).toEqual([]);
-    await expect(ledgerOn(store, 3).batchStart(300)).rejects.toThrow(SpendRefused);
+    // The open batch still counts at its 300 projection.
+    await expect(ledgerOn(store, 3).batchStart(PROJECTED_CAP_USD - 100 - 300 + 0.01)).rejects.toThrow(SpendRefused);
 
     expect(await cli.close(grant.batch_id, { force: 'stuck in a retry loop, killed by hand' })).toBe(true);
     expect(store.rows.find((r) => r.kind === 'close')?.reason).toBe('stuck in a retry loop, killed by hand');

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { repoRoot, runScript, tempDir } from '../../../scripts/test/helpers.ts';
-import { SpendRefused, totals, type LedgerRow } from '../../../packages/core/ledger.ts';
+import { ACTUAL_CAP_USD, PROJECTED_CAP_USD, SpendRefused, totals, type LedgerRow } from '../../../packages/core/ledger.ts';
 import { worstCaseUsd } from '../../../packages/core/cost.ts';
 import { openNodeLedger, readRows } from '../ledger-node.ts';
 
@@ -66,7 +66,7 @@ describe('grant binding is decided by each open, from the env that opened it', (
   it('an own-run open through opts.env leaves only canonical grants passing, whichever ledger minted the others and when', async () => {
     const root = tempDir('bind-optsenv');
     const canon = join(root, 'canon', 'spend.jsonl');
-    seed(canon, [settleRow(449, 'seed')]);
+    seed(canon, [settleRow(PROJECTED_CAP_USD - 1, 'seed')]);
     const shadow = join(root, 'shadow', 'spend.jsonl');
     const home = join(root, 'home');
     const r = await child(`
@@ -77,7 +77,7 @@ const shadowLedger = L.openNodeLedger({ transport: 'live', env: shadowEnv }).led
 const before = await shadowLedger.batchStart(1);
 out.defaultBeforeOwnRun = check(before);
 const { ledger } = L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, CLINENV_CANONICAL_LEDGER: ${JSON.stringify(canon)} } });
-try { await ledger.batchStart(10); out.canonicalAt449 = 'granted'; } catch (e) { out.canonicalAt449 = e.name; }
+try { await ledger.batchStart(10); out.canonicalNearCap = 'granted'; } catch (e) { out.canonicalNearCap = e.name; }
 const g = await ledger.batchStart(0.5);
 out.canonical = check(g);
 out.canonicalClient = check(g, ledger);
@@ -97,7 +97,7 @@ console.log(JSON.stringify(out));
     expect(r.err).toBe('');
     expect(JSON.parse(r.out)).toEqual({
       defaultBeforeOwnRun: 'passes',
-      canonicalAt449: 'SpendRefused',
+      canonicalNearCap: 'SpendRefused',
       canonical: 'passes',
       canonicalClient: 'passes',
       canonicalClientOtherLedger: 'throws',
@@ -114,7 +114,7 @@ console.log(JSON.stringify(out));
   it('a marker set in process.env after the adapter loaded binds the next open', async () => {
     const root = tempDir('bind-late');
     const canon = join(root, 'canon', 'spend.jsonl');
-    seed(canon, [settleRow(449, 'seed')]);
+    seed(canon, [settleRow(PROJECTED_CAP_USD - 1, 'seed')]);
     const shadow = join(root, 'shadow', 'spend.jsonl');
     const home = join(root, 'home');
     const r = await child(`
@@ -125,7 +125,7 @@ const early = await mem.batchStart(1);
 process.env.CLINENV_CANONICAL_LEDGER = ${JSON.stringify(canon)};
 const { ledger, mode } = L.openNodeLedger({ transport: 'live' });
 out.mode = mode;
-try { await ledger.batchStart(10); out.canonicalAt449 = 'granted'; } catch (e) { out.canonicalAt449 = e.name; }
+try { await ledger.batchStart(10); out.canonicalNearCap = 'granted'; } catch (e) { out.canonicalNearCap = e.name; }
 out.memoryMintedBefore = check(early);
 out.memoryMintedAfter = check(await mem.batchStart(1));
 out.otherPath = check(await L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, SPEND_LEDGER: ${JSON.stringify(shadow)} } }).ledger.batchStart(1));
@@ -134,7 +134,7 @@ console.log(JSON.stringify(out));
 `, envFor(home), root);
     expect(r.err).toBe('');
     expect(JSON.parse(r.out)).toEqual({
-      mode: 'own-run', canonicalAt449: 'SpendRefused', memoryMintedBefore: 'throws', memoryMintedAfter: 'throws', otherPath: 'throws', reserveSpend: 'refused',
+      mode: 'own-run', canonicalNearCap: 'SpendRefused', memoryMintedBefore: 'throws', memoryMintedAfter: 'throws', otherPath: 'throws', reserveSpend: 'refused',
     });
   });
 
@@ -162,7 +162,7 @@ console.log(JSON.stringify(out));
   it('with the marker set and the adapter never imported, a grant over an ad-hoc store cannot meter a call', async () => {
     const root = tempDir('bind-noimport');
     const canon = join(root, 'canon', 'spend.jsonl');
-    seed(canon, [settleRow(499.99, 'seed')]);
+    seed(canon, [settleRow(ACTUAL_CAP_USD - 0.01, 'seed')]);
     const r = await child(`
 const rows = [];
 const store = { transact: async (fn) => { const r = fn(rows); rows.push(...r.append); return r.result; }, read: async () => rows };
@@ -215,7 +215,7 @@ describe('ledger identity is the real path', () => {
     const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 1_000_000 });
     // Room for 1: with one lock per name, the first process under each name sees room and
     // appends, so 2 reservations land.
-    seed(real, Array.from({ length: 10_000 }, (_, i) => settleRow((500 - 1.5 * w) / 10_000, `seed-${i}`)));
+    seed(real, Array.from({ length: 10_000 }, (_, i) => settleRow((ACTUAL_CAP_USD - 1.5 * w) / 10_000, `seed-${i}`)));
     mkdirSync(join(root, 'alias'));
     const alias = join(root, 'alias', 'spend.jsonl');
     symlinkSync(real, alias);
@@ -233,7 +233,7 @@ catch (e) { if (e.name !== 'SpendRefused') throw e; console.log('refused'); }
     expect(results.filter((r) => r.out.trim() === 'ok')).toHaveLength(1);
     const t = totals(readRows(real));
     expect(readRows(real).filter((x) => x.kind === 'reserve')).toHaveLength(1);
-    expect(t.settled + t.reserved).toBeLessThanOrEqual(500 + 1e-9);
+    expect(t.settled + t.reserved).toBeLessThanOrEqual(ACTUAL_CAP_USD + 1e-9);
   });
 });
 
@@ -290,7 +290,7 @@ await L.openNodeLedger({ transport: 'live' }).ledger.batchStart(1);
 });
 
 describe('a refusal at the actual cap', () => {
-  it('for one call whose own worst case crosses $500 throws for that call only; the grant and its in-flight call go on', async () => {
+  it('for one call whose own worst case crosses the actual cap throws for that call only; the grant and its in-flight call go on', async () => {
     const root = tempDir('per-call-refusal');
     const path = join(root, 'spend.jsonl');
     const { ledger } = openNodeLedger({ transport: 'live', env: envFor(join(root, 'home'), { SPEND_LEDGER: path }) });
@@ -303,8 +303,8 @@ describe('a refusal at the actual cap', () => {
       return new Promise<Done>((resolve) => (finish = resolve));
     });
     await new Promise((r) => setTimeout(r, 50));
-    // 30M max tokens is a $600 worst case on its own.
-    await expect(grant.reserve({ bodyBytes: 0, maxTokens: 30_000_000 })).rejects.toThrow(SpendRefused);
+    // A worst case $100 over the actual cap on its own, at $20/MTok out.
+    await expect(grant.reserve({ bodyBytes: 0, maxTokens: ((ACTUAL_CAP_USD + 100) / 20) * 1e6 })).rejects.toThrow(SpendRefused);
     expect(grant.signal.aborted).toBe(false);
     expect(inFlightSignal?.aborted).toBe(false);
     finish({ usage: { input_tokens: 100, output_tokens: 10 } });

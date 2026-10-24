@@ -7,7 +7,7 @@ import { main as liveNode, projection as liveNodeProjection } from '../../../scr
 import * as anthropic from '../anthropic.ts';
 import { installEgressGuard } from '../egress.ts';
 import { ApiError, MessagesClient, type MessageParam, type Transport } from '../anthropic.ts';
-import { admitStore, createLedger, SpendRefused, type BatchGrant, type Ledger, type LedgerRow, type LedgerStore } from '../ledger.ts';
+import { ACTUAL_CAP_USD, admitStore, createLedger, PROJECTED_CAP_USD, SpendRefused, type BatchGrant, type Ledger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
@@ -262,12 +262,13 @@ describe('request rules', () => {
 });
 
 describe('spend caps', () => {
-  it('with the ledger at $499.90, a reservation that would cross $500 makes 0 fetch calls', async () => {
+  it('with the ledger $0.10 under the actual cap, a reservation that would cross it makes 0 fetch calls', async () => {
     const s = setup();
     const t = await client([ok()], { setupLedger: s });
     // Spend another process settled after this batch started.
-    s.store.rows.push({ ts: 't', call_id: 'other', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: 499.9 });
-    // max_tokens 8192 reserves about $0.20 (8192 x $20/MTok plus the input bound), which crosses $500.
+    s.store.rows.push({ ts: 't', call_id: 'other', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: ACTUAL_CAP_USD - 0.1 });
+    // max_tokens 8192 reserves about $0.20 (8192 x $20/MTok plus the input bound), which crosses
+    // ACTUAL_CAP_USD.
     await expect(t.c.send(user(), { ...PARAMS, max_tokens: 8192 })).rejects.toBeInstanceOf(SpendRefused);
     expect(t.calls).toHaveLength(0);
     expect(rows(t.store, 'reserve')).toHaveLength(0);
@@ -320,14 +321,15 @@ describe('pnpm live:node refuses before any call', () => {
     expect(r.calls).toHaveLength(0);
   });
 
-  it('ledger + projection = $450.01 makes 0 calls', async () => {
+  it('ledger + projection one cent over the projected cap makes 0 calls', async () => {
     const dir = tempDir('p2-cap');
-    const settled = 450.01 - liveNodeProjection();
+    const settled = PROJECTED_CAP_USD + 0.01 - liveNodeProjection();
     const row: LedgerRow = { ts: 't', call_id: 'prior', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: settled };
     write(dir, 'spend.jsonl', JSON.stringify(row) + '\n');
     const r = await run({ SPEND_LEDGER: `${dir}/spend.jsonl` });
     expect(r.code).not.toBe(0);
-    expect(r.out).toMatch(/projected cap.*\$450\.01 > \$450/);
+    expect(r.out).toMatch(/projected cap/);
+    expect(r.out).toContain(`= $${(PROJECTED_CAP_USD + 0.01).toFixed(2)} > $${PROJECTED_CAP_USD}`);
     expect(r.calls).toHaveLength(0);
   });
 
