@@ -103,16 +103,24 @@ describe('runBatch', { timeout: 240_000 }, () => {
     expect(store.rows.filter((r) => r.kind === 'open')).toHaveLength(1);
   });
 
-  it('aborting its signal mid-batch cancels the trials in flight, writes the close row and leaves 0 unsettled reservations', async () => {
+  // A toy trial's requests 1-3 are loop turns and 4-5 judge items; the judge's client gets no
+  // signal from run(), so the batch's own signal must reach a judge call in flight.
+  it.each([
+    ['a loop call', 2],
+    ['a judge call', 4],
+  ])('aborting its signal with %s in flight cancels the trials in flight, writes the close row and leaves 0 unsettled reservations', async (_what, ordinal) => {
     const store = new MemoryStore();
     const sink = memorySink();
     const calls = newCalls();
     const controller = new AbortController();
-    // The 40th request stalls until the abort, which comes as it is sent.
-    const stall = (): Transport => {
+    let stalled: string | null = null;
+    // From the 40th request on, the first request with this ordinal in its trial stalls until the
+    // abort, which comes as it is sent.
+    const stall = (trial: string): Transport => {
       const toy = scenarioTransport('toy').transport;
       return async (request) => {
-        if (calls.n !== 40) return toy(request);
+        if (stalled !== null || calls.n < 40 || calls.byTrial.get(trial) !== ordinal) return toy(request);
+        stalled = trial;
         await request.text();
         queueMicrotask(() => controller.abort(new Error('operator cancel')));
         return new Promise<Response>((_, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true }));
@@ -120,9 +128,12 @@ describe('runBatch', { timeout: 240_000 }, () => {
     };
     const result = await runBatch(spec({ signal: controller.signal }), deps(store, sink, calls, { transport: stall }));
     expect(result.cancelled).toBe(true);
+    expect(result.stopped).toBeNull();
     expect(result.settled).toBeLessThan(60);
-    const cancelled = (await sink.requeued()).filter((r) => r.status === 'CANCELLED');
-    expect(cancelled.length).toBeGreaterThanOrEqual(1);
+    const requeued = await sink.requeued();
+    expect(requeued.some((r) => r.trial_id === stalled)).toBe(true);
+    expect((await sink.settled()).some((r) => r.trial_id === stalled)).toBe(false);
+    if (ordinal === 2) expect(requeued.find((r) => r.trial_id === stalled)?.status).toBe('CANCELLED');
     expect(store.rows.filter((r) => r.kind === 'close' && r.batch_id === result.batch_id)).toHaveLength(1);
     expect(unsettled(store.rows)).toEqual([]);
     const sent = calls.n;

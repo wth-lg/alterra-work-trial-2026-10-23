@@ -251,10 +251,12 @@ export async function runBatch(spec: BatchSpec, deps: BatchDeps): Promise<BatchR
     const id = `${grant.batch_id.slice(0, 8)}-${++attempts}`;
     const label = `${spec.mode === 'live' ? '' : 'mock:'}run:${spec.runId}:${key.task_id}/${key.index}`;
     const inner = deps.client(grant, label);
+    // Every send carries the batch's signal: run() gives the judge this client with no signal of
+    // its own, and a judge call in flight must cancel with the batch too.
     const client: TrialClient = {
       async send(history, params, opts) {
         try {
-          return await inner.send(history, params, opts);
+          return await inner.send(history, params, { ...opts, signal: opts?.signal ? AbortSignal.any([opts.signal, signal]) : signal });
         } catch (e) {
           capReached();
           if (!signal.aborted) {
@@ -278,7 +280,8 @@ export async function runBatch(spec: BatchSpec, deps: BatchDeps): Promise<BatchR
       return null;
     }
     capReached();
-    if (record.error?.stops_batch) halt(record.outcome, `${label}: ${record.error.message}`);
+    // A judge call cancelled with the batch is not a failure that stops it.
+    if (record.error?.stops_batch && !signal.aborted) halt(record.outcome, `${label}: ${record.error.message}`);
     const o = record.outcome;
     let settled = true;
     let again = false;
