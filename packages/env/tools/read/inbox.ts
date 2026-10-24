@@ -1,6 +1,7 @@
 // list_inbox (design section 3): the work queues, backed by Tasks whose code is
-// INBOX_QUEUE_SYSTEM|<queue>. Rows are summaries: the Task, its focus and patient are
-// referenced, not exposed.
+// INBOX_QUEUE_SYSTEM|<queue>. Rows are pointers: a one-line summary and status, with the
+// result or message to act on left in the focus, so the Task, its focus and patient are
+// referenced, not exposed (the exposure rule, registry.ts).
 import type { Task } from '@medplum/fhirtypes';
 import type { Tool } from '../registry.ts';
 import { INBOX_QUEUE_SYSTEM, INBOX_QUEUES, type ReadContext } from './context.ts';

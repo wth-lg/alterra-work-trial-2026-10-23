@@ -1,13 +1,14 @@
 // Contract tests for the read tools (design section 3): strict schemas, error codes, stable
 // order, the 8k-token page cap with next_offset, and exposure tags that match the payload.
 import { readFileSync } from 'node:fs';
-import type { DiagnosticReport, DocumentReference, Observation, Procedure, Resource, Task } from '@medplum/fhirtypes';
+import type { DiagnosticReport, DocumentReference, Observation, Patient, Procedure, Resource, Task } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
 import { clock, NOW } from '../../clock.ts';
 import { parseNdjson } from '../../fixture-source.ts';
 import { Store } from '../../store.ts';
 import { INBOX_QUEUE_SYSTEM, READ_TOOLS, type CatalogEntry, type Policy, type ReadContext } from '../read/index.ts';
-import { approxTokens, callTool, definitions, RESULT_TOKEN_CAP, type ToolResult } from '../registry.ts';
+import { approxTokens, callTool, collapseWhitespace, definitions, exposure, RESULT_TOKEN_CAP, type ToolResult } from '../registry.ts';
+import { ruleViolations } from './exposure-rule.ts';
 
 const root = new URL('../../../../', import.meta.url);
 const base = await parseNdjson(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
@@ -146,17 +147,18 @@ describe('search_patients', () => {
   it('finds by MRN, by name words in any case and by birth date', () => {
     const byMrn = ok(call('search_patients', { mrn: '100001' }));
     expect(byMrn.entries).toEqual([
-      { patient: 'Patient/pt-0001', name: 'Peter Prosacco', birthDate: '1921-06-10', gender: 'male', mrn: '100001', pcp: null },
+      { resourceType: 'Patient', id: 'pt-0001', patient: 'Patient/pt-0001', name: 'Peter Prosacco', birthDate: '1921-06-10', gender: 'male', mrn: '100001', pcp: null },
     ]);
     const byName = ok(call('search_patients', { name: 'prosacco PETER' }));
     expect((byName.entries as Array<{ patient: string }>).map((e) => e.patient)).toEqual(['Patient/pt-0001']);
     const byBirth = ok(call('search_patients', { birthdate: '1921-06-10' }));
     expect((byBirth.entries as Array<{ patient: string }>).map((e) => e.patient)).toContain('Patient/pt-0001');
   });
-  it('tags patients as referenced, not exposed', () => {
+  it('exposes the patients its rows show demographics for (name, birth date, gender, MRN)', () => {
     const r = call('search_patients', { mrn: '100001' });
-    expect(r.exposed_ids).toEqual([]);
-    expect(r.referenced_ids).toEqual(['Patient/pt-0001']);
+    expect(r.exposed_ids).toEqual(['Patient/pt-0001']);
+    expect(r.referenced_ids).toEqual([]);
+    expectTagsMatch(r);
   });
   it('lists every patient in id order across pages', () => {
     const ids: string[] = [];
@@ -301,6 +303,7 @@ describe('note text and exposure', () => {
     }
     expect(r.exposed_ids).not.toEqual(expect.arrayContaining([refs[0]]));
     expect(r.referenced_ids).toEqual(expect.arrayContaining(refs));
+    expect(r.shown).toBeUndefined();
     expectTagsMatch(r);
     // The stored resources keep their data: the tool returned copies.
     expect((attachments as (r: Resource) => Array<{ data?: string }>)(ctx.world.get(type, stored[0]!.id!)!)[0]!.data).toBeDefined();
@@ -314,6 +317,7 @@ describe('note text and exposure', () => {
     expect(body.resource.content[0]!.attachment).not.toHaveProperty('read_with');
     expect(body.resource.content[0]!.attachment.size).toBe(new TextEncoder().encode(body.text).length);
     expect(r.exposed_ids).toEqual(['DocumentReference/doc-00001']);
+    expect(r.shown).toEqual({ 'DocumentReference/doc-00001': collapseWhitespace(body.text) });
     expectTagsMatch(r);
   });
 });
@@ -355,8 +359,15 @@ describe('search_notes', () => {
     expect(rows.map((x) => x.note)).toEqual(['DocumentReference/doc-z-a', 'DocumentReference/doc-z-b', 'DocumentReference/doc-z-c']);
     expect(rows[0]).toMatchObject({ type: 'discharge-summary', author: 'Practitioner/pr-reyes', patient: 'Patient/pt-0060', date: '2019-05-02T10:00:00-04:00' });
     expect(rows[0]!.snippet).toContain('iohexol');
-    expect(r.exposed_ids).toEqual([]);
     expectTagsMatch(r);
+  });
+  it('references each note and records the snippet it shows as shown text, not exposure', () => {
+    const r = call('search_notes', { query: 'iohexol', patient: 'pt-0060' }, small);
+    const rows = ok(r).entries as Array<{ note: string; snippet: string }>;
+    expect(r.exposed_ids).toEqual([]);
+    expect(r.referenced_ids).toEqual(['DocumentReference/doc-z-a', 'DocumentReference/doc-z-b', 'DocumentReference/doc-z-c', 'Patient/pt-0060', 'Practitioner/pr-reyes']);
+    expect(r.shown).toEqual(Object.fromEntries(rows.map((x) => [x.note, x.snippet])));
+    expect(r.shown!['DocumentReference/doc-z-a']).toBe('iohexol reaction hives. iohexol again.');
   });
   it('filters by type and date', () => {
     const rows = ok(call('search_notes', { query: 'contrast', type: 'discharge-summary', date_ge: '2021-01-01' }, small)).entries as Array<{ note: string }>;
@@ -386,6 +397,7 @@ describe('read_policy', () => {
     const r = call('read_policy', { policy_id: 'RBC-TEST-01' });
     expect(ok(r)).toEqual({ resourceType: 'Policy', id: 'RBC-TEST-01', title: 'First test policy', version: '1', effective: '2026-01-01', source: 'environment-local', text: 'First policy text.' });
     expect(r.exposed_ids).toEqual(['Policy/RBC-TEST-01']);
+    expect(r.shown).toEqual({ 'Policy/RBC-TEST-01': 'First policy text.' });
   });
   it('answers an unknown id with NOT_FOUND', () => {
     expect(err(call('read_policy', { policy_id: 'RBC-NOPE-01' }))).toMatchObject({ code: 'NOT_FOUND', field: 'policy_id' });
@@ -432,9 +444,22 @@ describe('lookup_catalog', () => {
 });
 
 describe('list_inbox', () => {
+  // Task overlays add their own inbox items to the shared world, with ids tagged '<prefix>-t<N>-'
+  // (as write-gate.test.ts filters them). Each assertion pages through the whole queue, drops
+  // those rows and compares the rest exactly, so a row list_inbox makes up still fails.
+  const overlay = (row: { task?: unknown }) => /^Task\/[a-z]+-t\d+-/.test(String(row.task));
+  const inbox = (input: Record<string, unknown>) => {
+    const rows: Array<Record<string, unknown>> = [];
+    for (let offset: number | undefined = 0; offset !== undefined; ) {
+      const p = ok(call('list_inbox', { ...input, offset }));
+      rows.push(...(p.entries as Array<Record<string, unknown>>));
+      offset = p.next_offset as number | undefined;
+    }
+    return rows.filter((x) => !overlay(x));
+  };
   it('lists a queue by received time, then id, and filters by status', () => {
     const r = call('list_inbox', { queue: 'results' });
-    const rows = ok(r).entries as Array<Record<string, unknown>>;
+    const rows = inbox({ queue: 'results' });
     expect(rows.map((x) => x.task)).toEqual(['Task/task-x-2', 'Task/task-x-1', 'Task/task-x-3']);
     expect(rows[1]).toEqual({
       task: 'Task/task-x-1',
@@ -446,9 +471,82 @@ describe('list_inbox', () => {
       status: 'requested',
     });
     expectTagsMatch(r);
-    const open = ok(call('list_inbox', { queue: 'results', status: 'requested' })).entries as Array<{ task: string }>;
-    expect(open.map((x) => x.task)).toEqual(['Task/task-x-1', 'Task/task-x-3']);
-    expect((ok(call('list_inbox', { queue: 'messages' })).entries as unknown[]).length).toBe(1);
+    expect(inbox({ queue: 'results', status: 'requested' }).map((x) => x.task)).toEqual(['Task/task-x-1', 'Task/task-x-3']);
+    expect(inbox({ queue: 'messages' }).map((x) => x.task)).toEqual(['Task/task-x-4']);
+  });
+});
+
+// One call per tool, each held to the exposure rule (exposure-rule.ts): exposed exactly when
+// the result shows the fields a clinician acts on, referenced when it shows an id, a title or a
+// pointer. Before P5's fix search_patients showed a birth date while tagging the Patient
+// referenced, which failed T3's birth-date-before-first-write gate on a correct trajectory.
+describe('exposure rule', () => {
+  const stored = (key: string) => ctx.world.get(key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1));
+  it.each([
+    ['get_context', {}, [], []],
+    ['search_patients', { name: 'prosacco' }, ['Patient/pt-0001'], ['Patient']],
+    ['fhir_search', { resource_type: 'Observation', patient: 'pt-0001', count: 5 }, null, ['Observation']],
+    ['fhir_search', { resource_type: 'MedicationRequest', patient: 'pt-0001', count: 5 }, null, ['MedicationRequest']],
+    ['fhir_search', { resource_type: 'DocumentReference', patient: 'pt-0001', count: 5 }, [], []],
+    ['fhir_read', { resource_type: 'Patient', id: 'pt-0001' }, ['Patient/pt-0001'], ['Patient']],
+    ['fhir_read', { resource_type: 'DocumentReference', id: 'doc-00001' }, ['DocumentReference/doc-00001'], ['DocumentReference']],
+    ['search_notes', { query: 'patient', patient: 'pt-0001' }, [], []],
+    ['read_policy', {}, [], []],
+    ['lookup_catalog', { query: 'metformin', kind: 'medication' }, [], []],
+    ['list_inbox', { queue: 'results' }, [], []],
+    ['calculate', { expression: '1 + 2' }, [], []],
+  ] as const)('%s %j', (name, input, exposed, exposedTypes) => {
+    const r = call(name, input);
+    expect(r.is_error).toBe(false);
+    expect(ruleViolations(r, stored)).toEqual([]);
+    if (exposed !== null) expect(r.exposed_ids).toEqual(exposed);
+    expect([...new Set(r.exposed_ids.map((k) => k.slice(0, k.indexOf('/'))))].sort()).toEqual([...exposedTypes]);
+    expectTagsMatch(r);
+  });
+  it('catches a row that shows a birth date but only references the patient', () => {
+    const p = ctx.world.get<Patient>('Patient', 'pt-0001')!;
+    const row: ToolResult = {
+      is_error: false,
+      content: { entries: [{ patient: 'Patient/pt-0001', birthDate: p.birthDate, gender: p.gender }] },
+      exposed_ids: [],
+      referenced_ids: ['Patient/pt-0001'],
+    };
+    expect(ruleViolations(row, stored)).toEqual(['Patient/pt-0001 shows its decisive fields but is not exposed']);
+    expect(ruleViolations({ ...row, content: { entries: [{ patient: 'Patient/pt-0001' }] }, exposed_ids: ['Patient/pt-0001'], referenced_ids: [] }, stored)).toEqual([
+      'Patient/pt-0001 is exposed without its decisive fields',
+    ]);
+  });
+  it('catches a note exposed for a snippet: an excerpt is shown text, not exposure', () => {
+    const r = call('search_notes', { query: 'patient', patient: 'pt-0001' });
+    const notes = Object.keys(r.shown!);
+    expect(notes.length).toBeGreaterThan(0);
+    expect(r.referenced_ids).toEqual(expect.arrayContaining(notes));
+    const overTagged = { ...r, exposed_ids: notes, referenced_ids: r.referenced_ids.filter((k) => !notes.includes(k)) };
+    expect(ruleViolations(overTagged, stored)).toEqual(expect.arrayContaining([`${notes[0]} is exposed without its decisive fields`]));
+  });
+  it('records shown text only for note, report and policy shapes', () => {
+    // reports/pr-review-exposure-1.md S5 probe: a string `text` beside any resourceType and id.
+    expect(exposure({ resourceType: 'Observation', id: 'o1', text: 'free string' })).toEqual({ exposed_ids: ['Observation/o1'], referenced_ids: [] });
+    expect(exposure({ resource: { resourceType: 'Patient', id: 'p1' }, text: 'anything' })).toEqual({ exposed_ids: ['Patient/p1'], referenced_ids: [] });
+    expect(exposure({ resource: { resourceType: 'DocumentReference', id: 'x' }, text: ' hi\n there ' }).shown).toEqual({ 'DocumentReference/x': 'hi there' });
+    expect(exposure({ resourceType: 'Policy', id: 'P-1', text: 'a  b' }).shown).toEqual({ 'Policy/P-1': 'a b' });
+  });
+  it('catches an inbox summary that carries the focus resource\'s clinical value', () => {
+    // list_inbox rows stay referenced on the assumption that a summary is a pointer, not the
+    // result (reports/verifier-phase-exposure-1.md N2).
+    const obs = { resourceType: 'Observation', id: 'obs-ib-1', status: 'final', code: { text: 'Creatinine' }, subject: { reference: 'Patient/pt-0001' }, valueQuantity: { value: 2.4, unit: 'mg/dL' } } as Observation;
+    const item = (description: string): Task => ({
+      resourceType: 'Task', id: 'task-ib-1', status: 'requested', intent: 'order', code: { coding: [{ system: INBOX_QUEUE_SYSTEM, code: 'results' }] },
+      focus: { reference: 'Observation/obs-ib-1' }, for: { reference: 'Patient/pt-0001' }, authoredOn: '2026-10-22T09:00:00-04:00', description,
+    });
+    const run = (description: string) => {
+      const c = context([obs, item(description)]);
+      const r = call('list_inbox', { queue: 'results', count: 50 }, c);
+      return ruleViolations(r, (key) => c.world.get(key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)));
+    };
+    expect(run('New creatinine result')).toEqual([]);
+    expect(run('Creatinine 2.4 mg/dL, up from 1.1')).toEqual(['Task/task-ib-1 summary shows the value of Observation/obs-ib-1']);
+    expect(run('Creatinine 12.4')).toEqual([]);
   });
 });
 

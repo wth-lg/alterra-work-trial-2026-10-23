@@ -1,4 +1,6 @@
 // get_context (design section 3): who the user is and what time it is, from the pinned clock.
+// The user and clinic are named by reference with a display name, nothing clinical, so they are
+// referenced, not exposed (the exposure rule, registry.ts).
 import type { HumanName, Organization, Practitioner } from '@medplum/fhirtypes';
 import { TIME_ZONE } from '../../clock.ts';
 import { CLINIC, STAFF } from '../../world.ts';

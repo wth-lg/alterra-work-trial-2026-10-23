@@ -2,22 +2,25 @@
   "now": "2026-10-23T08:00:00-04:00",
   "world": {
     "file": "fixtures/world.ndjson.gz",
-    "state_hash": "ebe40e004d9e4e9e60c794970d5737cb6132f46fc569e7b7a32ccdf7744fdf8a",
-    "ndjson_sha256": "b27b092d37abc02613f4881d346f6f5b7ac347bbc366a3cb232d54988a46ca1e",
-    "resources": 7486,
+    "state_hash": "cafdf95e89a30a94c1e5898e1dd2c3e9bf936beebce06eb7ee5e1f286c4cb525",
+    "ndjson_sha256": "d77d968677d9593cedb66542e76319232b375aa94f22a38486b149de324ba5c7",
+    "resources": 7435,
     "by_type": {
       "AllergyIntolerance": 40,
       "Condition": 980,
-      "DiagnosticReport": 505,
-      "DocumentReference": 354,
-      "Encounter": 360,
-      "Group": 3,
-      "MedicationRequest": 387,
-      "Observation": 3457,
+      "DiagnosticReport": 493,
+      "DocumentReference": 275,
+      "Encounter": 368,
+      "EpisodeOfCare": 1,
+      "Group": 4,
+      "MedicationRequest": 388,
+      "Observation": 3480,
       "Organization": 2,
       "Patient": 60,
-      "Practitioner": 4,
-      "Procedure": 1334
+      "Practitioner": 8,
+      "Procedure": 1326,
+      "ServiceRequest": 2,
+      "Task": 8
     }
   },
   "base": {
@@ -57,7 +60,9 @@
     }
   },
   "overlays": [
-    "T1"
+    "T1",
+    "T2",
+    "T3"
   ],
   "inputs": {
     "fixtures/synthea/generate.sh": "9c20f04e81cd71443b418aaa2c2782b47d3f20fffccdce06959da03b40c33fed",
@@ -65,7 +70,9 @@
     "packages/env/overlay.ts": "79ddb1445970e7a1a567e2db0cf778e2b9bfa8ede2ae016e39a04ad0cd18454f",
     "packages/env/world.ts": "cc7dd7c88d47251d63bc5290d7b2faa76ac0f0305aa5f1d94d01384570e8b678",
     "scripts/fixtures-synthea.ts": "44162b65dc576e507b526132164eda54cb14000936331d48b575f46d9c49d752",
-    "tasks/renal-dose-review/overlay.ts": "cfa199c93268ab0e956cbdc64959154d2733ce9846b997bf5552c7082ccf6a65"
+    "tasks/crc-care-gap/overlay.ts": "e5afb2b8d7b3924d040f4f895387d49fa84cddc9934dc8d9bc574cf919d48408",
+    "tasks/renal-dose-review/overlay.ts": "cfa199c93268ab0e956cbdc64959154d2733ce9846b997bf5552c7082ccf6a65",
+    "tasks/results-inbox/overlay.ts": "c42296718e46abd60a81ee1b3ad1ba926e7fc2a9e5c4ec8ed97807c276d5e33d"
   },
   "definitions": {
     "file": "fixtures/definitions-pruned.json",

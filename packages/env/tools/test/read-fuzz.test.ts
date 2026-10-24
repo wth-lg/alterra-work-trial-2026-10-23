@@ -1,7 +1,8 @@
 // Property fuzz over the read tools (plan phase P5): mostly schema-valid calls built from ids,
 // codes, names and words that exist in the committed world, plus mutated calls. A read must
 // never throw (INTERNAL), never change the state hash, and every success must carry exposure
-// tags equal to the ids in its payload, within the 8k-token page cap.
+// tags equal to the ids in its payload, tags that follow the exposure rule (exposure-rule.ts),
+// and stay within the 8k-token page cap.
 import { readFileSync } from 'node:fs';
 import type { DocumentReference, Patient, Resource, Task } from '@medplum/fhirtypes';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +14,7 @@ import { RESOURCE_TYPES } from '../../world.ts';
 import { ERROR_CODES, internalError, ToolError } from '../errors.ts';
 import { INBOX_QUEUE_SYSTEM, READ_TOOLS, type CatalogEntry, type Policy, type ReadContext } from '../read/index.ts';
 import { approxTokens, callTool, RESULT_TOKEN_CAP, validateInput, type Tool, type ToolResult } from '../registry.ts';
+import { ruleViolations } from './exposure-rule.ts';
 
 const root = new URL('../../../../', import.meta.url);
 const base = await parseNdjson(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
@@ -274,6 +276,7 @@ async function fuzz(tools: readonly Tool<ReadContext>[], perTool: number, seed: 
       s.referenced += referenced.length;
       if (JSON.stringify(exposed) !== JSON.stringify(result.exposed_ids)) defect(`#${n} ${name}: exposed_ids ${result.exposed_ids} != payload ${exposed}`);
       if (JSON.stringify(referenced) !== JSON.stringify(result.referenced_ids)) defect(`#${n} ${name}: referenced_ids differ from payload`);
+      for (const v of ruleViolations(result, (key) => store.get(key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)))) defect(`#${n} ${name}: ${v}`);
       for (const id of exposed) {
         const [type, rid] = id.split('/') as [string, string];
         if (type === 'Policy' ? !POLICIES.some((p) => p.id === rid) : !store.get(type, rid)) defect(`#${n} ${name}: exposed ${id} is not in the world`);
@@ -311,21 +314,25 @@ describe('read tool fuzz', () => {
     expect(stats.defects).toEqual([]);
   });
 
+  // The planted fhir_read throws on every call that passes its schema, whatever the world holds,
+  // so INTERNAL is exactly the schema-valid fhir_read calls (a world regen cannot zero it).
   it('counts INTERNAL when a tool throws', async () => {
     const broken = READ_TOOLS.map((t) =>
       t.name !== 'fhir_read'
         ? t
         : {
             ...t,
-            run: (input: never, c: ReadContext) => {
-              if ((input as { id: string }).id.endsWith('7')) throw new TypeError('planted');
-              return t.run(input, c);
+            run: () => {
+              throw new TypeError('planted');
             },
           },
     );
     const stats = await fuzz(broken, 60, 7);
-    print(`planted throw in fhir_read: INTERNAL=${stats.internal}`);
-    expect(stats.internal).toBeGreaterThanOrEqual(1);
+    const valid = stats.perTool.fhir_read!.valid;
+    print(`planted throw in fhir_read: INTERNAL=${stats.internal} fhir_read schema_valid=${valid}`);
+    expect(valid).toBeGreaterThanOrEqual(1);
+    expect(stats.internal).toBe(valid);
+    expect(stats.perTool.fhir_read!.errors.INTERNAL).toBe(valid);
   });
 
   it('a ToolError thrown by a tool is a typed error result, not INTERNAL', () => {
