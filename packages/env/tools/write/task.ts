@@ -67,22 +67,34 @@ export const createTask = writeTool({
 });
 
 const OPEN = ['draft', 'requested', 'received', 'accepted', 'ready', 'in-progress', 'on-hold'];
+type InboxAction = 'complete' | 'reassign' | 'cancel' | 'reject';
+// The open statuses each action applies to and the status it leaves (the informative FHIR R4 Task
+// state machine): a draft is not yet requested and an on-hold item must be resumed before it is
+// completed; only an item not yet under way can be rejected.
+const INBOX_TRANSITIONS: Record<InboxAction, { from: readonly string[]; to?: Task['status'] }> = {
+  complete: { from: ['requested', 'received', 'accepted', 'ready', 'in-progress'], to: 'completed' },
+  reassign: { from: OPEN },
+  cancel: { from: OPEN, to: 'cancelled' },
+  reject: { from: ['requested', 'received', 'ready'], to: 'rejected' },
+};
 
-type UpdateInput = { task_id: string; action: 'complete' | 'reassign'; linked?: string[]; new_owner?: string; comment?: string };
+type UpdateInput = { task_id: string; action: InboxAction; linked?: string[]; new_owner?: string; reason?: string; comment?: string };
 
 export const updateInboxItem = writeTool({
   name: 'update_inbox_item',
   description:
-    'Complete or reassign an open inbox item (a Task from list_inbox). complete closes it; linked names the resources of the same patient that close the loop ' +
-    '(the order, task, message or existing result). reassign hands it to new_owner (a Practitioner or Group) and leaves it open. comment is added as a note. ' +
-    'A closed item returns CONFLICT. Returns {task, status}.',
+    'Complete, reassign, cancel or reject an open inbox item (a Task from list_inbox). complete closes it (from requested, received, accepted, ready or in-progress); ' +
+    'linked names the resources of the same patient that close the loop (the order, task, message or existing result). ' +
+    'reassign hands it to new_owner (a Practitioner or Group) and leaves it open. cancel withdraws it (e.g. a duplicate); reject declines it (requested, received or ready); ' +
+    'both need reason. comment is added as a note. A closed item, or an action its status does not allow, returns CONFLICT. Returns {task, status}.',
   inputSchema: {
     type: 'object',
     properties: {
       task_id: idOf('Task', 'task-00001', 'Inbox item'),
-      action: { type: 'string', description: 'complete or reassign', enum: ['complete', 'reassign'] },
+      action: { type: 'string', description: 'complete, reassign, cancel or reject', enum: Object.keys(INBOX_TRANSITIONS) },
       linked: refs('Resources that close the loop (complete only)', 20),
       new_owner: party('New owner (reassign only): Practitioner or Group'),
+      reason: text('Why the item is cancelled or rejected (cancel and reject only)', 500),
       comment: text('A note on the item', 2000),
     },
     required: ['task_id', 'action'],
@@ -94,8 +106,11 @@ export const updateInboxItem = writeTool({
       throw new ToolError('INVALID_INPUT', `'task_id': ${key(item)} is not an inbox item (list_inbox lists them)`, 'task_id');
     }
     if (input.action === 'reassign' && input.new_owner === undefined) throw new ToolError('INVALID_INPUT', "'new_owner' is required for reassign", 'new_owner');
-    if (input.action === 'complete' && input.new_owner !== undefined) throw new ToolError('INVALID_INPUT', "'new_owner' is only for reassign", 'new_owner');
-    if (input.action === 'reassign' && input.linked !== undefined) throw new ToolError('INVALID_INPUT', "'linked' is only for complete", 'linked');
+    if (input.action !== 'reassign' && input.new_owner !== undefined) throw new ToolError('INVALID_INPUT', "'new_owner' is only for reassign", 'new_owner');
+    if (input.action !== 'complete' && input.linked !== undefined) throw new ToolError('INVALID_INPUT', "'linked' is only for complete", 'linked');
+    const needsReason = input.action === 'cancel' || input.action === 'reject';
+    if (needsReason && input.reason === undefined) throw new ToolError('INVALID_INPUT', `'reason' is required for ${input.action}`, 'reason');
+    if (!needsReason && input.reason !== undefined) throw new ToolError('INVALID_INPUT', "'reason' is only for cancel and reject", 'reason');
     const owner = input.new_owner === undefined ? undefined : resolve(ctx, 'new_owner', input.new_owner, OWNERS);
     const patient = item.for?.reference?.startsWith('Patient/') ? item.for.reference.slice(8) : undefined;
     const linked = (input.linked ?? []).map((v, i) => {
@@ -104,18 +119,22 @@ export const updateInboxItem = writeTool({
       return key(r);
     });
     if (!OPEN.includes(item.status)) throw new ToolError('CONFLICT', `'task_id': ${key(item)} is already ${item.status}`, 'task_id');
+    const { from, to } = INBOX_TRANSITIONS[input.action];
+    if (!from.includes(item.status)) throw new ToolError('CONFLICT', `cannot ${input.action} ${key(item)}: it is ${item.status} (${input.action} applies to ${from.join(', ')})`, 'action');
     return commit(ctx, 'update_inbox_item', (a) => {
       const notes = item.note ?? [];
       const updated: Task = {
         ...item,
-        ...(input.action === 'complete' ? { status: 'completed' as const } : { owner: { reference: key(owner!) } }),
+        ...(to ? { status: to } : {}),
+        ...(owner ? { owner: { reference: key(owner) } } : {}),
+        ...(input.reason !== undefined ? { statusReason: { text: input.reason } } : {}),
         lastModified: a.stamp,
         ...(linked.length ? { output: [...(item.output ?? []), ...linked.map((reference) => ({ type: { text: 'linked' }, valueReference: { reference } }))] } : {}),
         ...(input.comment !== undefined ? { note: [...notes, { text: input.comment, time: a.stamp, authorReference: { reference: USER } }] } : {}),
       };
       return {
         content: { task: key(item), status: updated.status },
-        resources: [{ resource: updated, created: false, fields: { comment: [`Task.note[${notes.length}]`] } }],
+        resources: [{ resource: updated, created: false, fields: { comment: [`Task.note[${notes.length}]`], reason: ['Task.statusReason'] } }],
       };
     });
   },
