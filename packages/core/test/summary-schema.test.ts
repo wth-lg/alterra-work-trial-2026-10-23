@@ -137,20 +137,20 @@ describe('every figure reads the current grade: the last regrade, else the recor
 
   it('currentGrade is the one reader: the last entry wins, a missing score or valid falls back to the outcome', async () => {
     const { currentGrade } = await import('../summary.ts');
-    expect(currentGrade({ outcome: 'FAIL', score: 0 })).toEqual({ outcome: 'FAIL', score: 0, valid: true, checks: null, regraded: false });
+    expect(currentGrade({ outcome: 'FAIL', score: 0 })).toEqual({ outcome: 'FAIL', score: 0, valid: true, checks: null, regraded: false, grader_task_version: null });
     expect(currentGrade({ outcome: 'FAIL', score: 0, checks: [{ id: 'G1', met: false }], regrades: [{ outcome: 'GRADER_ERROR' }, { outcome: 'PASS', score: 1, valid: true }] }))
-      .toEqual({ outcome: 'PASS', score: 1, valid: true, checks: null, regraded: true });
+      .toEqual({ outcome: 'PASS', score: 1, valid: true, checks: null, regraded: true, grader_task_version: null });
     expect(currentGrade({ outcome: 'PASS', score: 1, regrades: [{ outcome: 'CANCELLED' }] })).toMatchObject({ outcome: 'CANCELLED', score: null, valid: false });
   });
 });
 
 describe('summary.json schema version', () => {
-  it('is 2; a version 1 file is rejected with a message naming the version', () => {
+  it('is 3; a version 2 file is rejected with a message naming the version', () => {
     const ts = tenOf('t-a', 5);
     const s = summarize({ run_id: 'r', trials: ts, requeued: [], replay: replayAll(ts) });
-    expect(s.schema_version).toBe(2);
-    const v1 = { ...JSON.parse(JSON.stringify(s)), schema_version: 1 };
-    expect(validateSummary(v1)).toContainEqual(expect.stringMatching(/schema_version 1.*version 2/));
-    expect(() => assertSummary(v1)).toThrow(/schema_version 1/);
+    expect(s.schema_version).toBe(3);
+    const v2 = { ...JSON.parse(JSON.stringify(s)), schema_version: 2 };
+    expect(validateSummary(v2)).toContainEqual(expect.stringMatching(/schema_version 2.*version 3/));
+    expect(() => assertSummary(v2)).toThrow(/schema_version 2/);
   });
 });

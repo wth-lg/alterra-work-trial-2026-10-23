@@ -9,13 +9,25 @@
 // points, clipped to [0, 1], over the rubric items that are not unknown (HealthBench style);
 // null when no positive item is known.
 //
-// Grading never throws on the trial's account. A check that throws is the grader's fault: the
-// trial is GRADER_ERROR, invalid, fault grader, with the check and the message in `error`. A
-// judge call the client failed ends the trial as classifyFailure says, as a model call would
+// Grading never throws on the trial's account. A check that throws is the grader's fault: that
+// check's result is met 'unknown' with the message as evidence, and grading goes on with every
+// other check, judge items included, so the record's judge cache holds every answer a fixed
+// grader needs. The trial is then GRADER_ERROR, invalid, fault grader, with no score, and
+// `error` names the first check that threw (the others that threw are in its message). A judge
+// call the client failed ends the trial at once as classifyFailure says, as a model call would
 // (INFRA_API for a 401, 403, 404, billing error or retries exhausted), invalid, with stops_batch
-// as the client says. A
+// as the client says; it outranks an earlier GRADER_ERROR, since the trial is re-queued. A
 // trial whose facts say it reached a final state that is not here is GRADER_ERROR too. Only a
 // judge cache miss on a regrade throws (JudgeCacheMiss): a regrade never calls the judge.
+//
+// The GRADER_ERROR policy (plan phase P12): a GRADER_ERROR is a grader bug, settled and never
+// re-queued as a model trial. The fix is the grader change (bump GRADER_VERSION, or the task's
+// grader-side files, which changes its grader_task_version, packages/core/tasks.ts), then a full
+// offline regrade of the run (cli/regrade.ts) from each record's trajectory and judge cache,
+// which needs no judge call because grading went on past the throw. summary reads each record's
+// current grade, so `--require grader_error=0` holds after the regrade, and prints the records
+// that were GRADER_ERROR in an earlier grade as grader_error_history, for disclosure. replay
+// compares env_version only, so `--require replay=all` still holds after a grader fix.
 import type { TrialEvent } from '../core/events.ts';
 import type { Resource } from '../env/store.ts';
 import { attribute, type Attribution } from './attribution.ts';
@@ -26,8 +38,10 @@ import { gateResource, type GateResource } from './gate-view.ts';
 import { Judge, JudgeCacheMiss, JudgeClientError, judgeCallBudget, type JudgeCacheEntry, type JudgeClient, type JudgeEffort } from './judge.ts';
 import { FAULT, isValid, trialOutcome, type Fault, type Outcome, type TrialFacts } from './outcome.ts';
 
-// Bumped on any change that can change a grade; regrades record both versions.
-export const GRADER_VERSION = '4';
+// Bump on any change that can change what a grade is. It is part of every task's
+// grader_task_version (packages/core/tasks.ts), with the task's grader-side files; regrades
+// record both.
+export const GRADER_VERSION = '5';
 
 export interface CheckResult {
   id: string;
@@ -192,23 +206,36 @@ export async function gradeWith(input: GradeInput, judge: Judge): Promise<Grade>
     id: c.id, kind: c.kind, method: c.method, category: c.category, points: c.kind === 'rubric' ? c.points : null, met: v.met, evidence: v.evidence, ...(v.ids ? { ids: [...v.ids] } : {}),
   });
   const ordered = () => input.checks.flatMap((c) => byCheck.get(c) ?? []);
+  const threw: Array<{ check: string; message: string }> = [];
   for (const c of [...gates, ...rubrics]) {
     try {
       byCheck.set(c, result(c, c.kind === 'gate' ? c.fn(gateCtx) : await c.fn(rubricCtx)));
     } catch (e) {
       if (e instanceof JudgeCacheMiss) throw e;
-      const infra = e instanceof JudgeClientError;
-      const message = infra ? e.message : errorText(e);
-      byCheck.set(c, result(c, { met: 'unknown', evidence: { [infra ? 'judge_error' : 'grader_error']: message } }));
-      const outcome: Outcome = infra ? e.failure.status : 'GRADER_ERROR';
-      const checks = ordered();
-      return {
-        grader_version: GRADER_VERSION, outcome, valid: false, fault: FAULT[outcome], checks, score: null, judge: judgeOf(judge, checks), attribution: null,
-        error: { check: c.id, message, stops_batch: infra && e.failure.stopsBatch },
-      };
+      if (e instanceof JudgeClientError) {
+        byCheck.set(c, result(c, { met: 'unknown', evidence: { judge_error: e.message } }));
+        const outcome: Outcome = e.failure.status;
+        const checks = ordered();
+        return {
+          grader_version: GRADER_VERSION, outcome, valid: false, fault: FAULT[outcome], checks, score: null, judge: judgeOf(judge, checks), attribution: null,
+          error: { check: c.id, message: e.message, stops_batch: e.failure.stopsBatch },
+        };
+      }
+      // A grader bug: recorded on its check, and grading goes on (see the header).
+      const message = errorText(e);
+      byCheck.set(c, result(c, { met: 'unknown', evidence: { grader_error: message } }));
+      threw.push({ check: c.id, message });
     }
   }
   const results = ordered();
+  const [first, ...more] = threw;
+  if (first !== undefined) {
+    const also = more.length === 0 ? '' : `; also threw: ${more.map((t) => `${t.check} (${t.message})`).join(', ')}`;
+    return {
+      grader_version: GRADER_VERSION, outcome: 'GRADER_ERROR', valid: false, fault: FAULT.GRADER_ERROR, checks: results, score: null, judge: judgeOf(judge, results), attribution: null,
+      error: { check: first.check, message: `${first.message}${also}`, stops_batch: false },
+    };
+  }
   const passed = results.every((r) => r.kind !== 'gate' || r.met === true);
   const outcome: Outcome = early ?? (passed ? 'PASS' : 'FAIL');
   return {

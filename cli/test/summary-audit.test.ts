@@ -94,7 +94,7 @@ describe('summary --require', () => {
     expect(r.err).toMatch(/violation: t-alpha: 10\/10 passes, outside the band 2-7/);
     const j = JSON.parse(r.out);
     expect(j.tasks['t-alpha']).toMatchObject({ trials: 10, passes: 10, pass_rate: 1, outcomes: { PASS: 10 }, recorded_outcomes: { PASS: 5, FAIL: 5 }, regraded: 5 });
-    expect(j.schema_version).toBe(2);
+    expect(j.schema_version).toBe(3);
   });
 
   it('exits 2 on an unknown requirement and 1 on a missing run', async () => {

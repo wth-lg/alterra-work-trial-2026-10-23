@@ -13,6 +13,7 @@ import { tempDir } from '../../scripts/test/helpers.ts';
 import { main as regrade } from '../regrade.ts';
 import { main as replay } from '../replay.ts';
 import { main as runOne } from '../run-one.ts';
+import { main as summary } from '../summary.ts';
 
 let dir: string;
 let names: string[];
@@ -48,7 +49,7 @@ const copyOf = (label: string) => {
   cpSync(dir, copy, { recursive: true });
   return copy;
 };
-type Rec = { index?: number; task_version: string; state_hash: { initial: string; final: string; replay_final: string }; regrades?: Array<Record<string, unknown>> };
+type Rec = { index?: number; task_version: string; env_version: string; state_hash: { initial: string; final: string; replay_final: string }; regrades?: Array<Record<string, unknown>> };
 const file = (run: string, name: string) => join(run, 'trials', `${name}.json`);
 const read = (run: string, name: string) => JSON.parse(readFileSync(file(run, name), 'utf8')) as Rec;
 const edit = (run: string, name: string, f: (r: Rec) => void) => {
@@ -74,6 +75,16 @@ describe('replay and regrade on run-one output', () => {
     expect(Object.keys(j.trials).sort()).toEqual(names);
   });
 
+  it('summary names each trial by the same key as replay, so replay=all passes', async () => {
+    const run = copyOf('run-one-summary');
+    expect((await cli(replay, [run])).code).toBe(0);
+    const s = await cli(summary, [run, '--allow-mock', '--require', 'replay=all', '--json']);
+    expect(s.code, s.text).toBe(0);
+    expect(s.text).not.toContain('undefined');
+    const json = JSON.parse(s.text.split('\n').at(-1) as string) as { replay: { matched: number; mismatched: string[]; missing: string[] } };
+    expect(json.replay).toEqual({ ran: true, matched: 3, mismatched: [], missing: [] });
+  });
+
   it('regrade grades all three and records a PASS with its checks on each', async () => {
     const run = copyOf('run-one-regrade');
     const r = await cli(regrade, [run, '--grader-version', GRADER_VERSION]);
@@ -90,11 +101,11 @@ describe('replay and regrade on run-one output', () => {
   it('regrade refuses a trial run in another world, naming both task versions, and writes no record', async () => {
     const run = copyOf('run-one-world');
     const [first] = names as [string];
-    edit(run, first, (r) => Object.assign(r, { task_version: 'v-old-world', state_hash: { ...r.state_hash, initial: 'not-this-world' } }));
+    edit(run, first, (r) => Object.assign(r, { env_version: 'v-old-world', state_hash: { ...r.state_hash, initial: 'not-this-world' } }));
     const before = readFileSync(file(run, first), 'utf8');
     const r = await cli(regrade, [run, '--grader-version', GRADER_VERSION]);
     expect(r.code, r.text).toBe(1);
-    expect(r.text).toContain(`${first}: task changed: run at v-old-world, checkout at ${read(run, names[1]!).task_version}`);
+    expect(r.text).toContain(`${first}: environment changed: run at env_version v-old-world, checkout at ${read(run, names[1]!).env_version}`);
     expect(r.text).toContain('initial state hash');
     expect(r.text).not.toContain('undefined');
     expect(readFileSync(file(run, first), 'utf8')).toBe(before);

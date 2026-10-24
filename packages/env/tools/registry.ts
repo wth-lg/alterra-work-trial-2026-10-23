@@ -18,8 +18,18 @@
 // A write tool (tools/write/) returns a Committed: its payload plus the ids it put into the
 // store. callTool reports those as written_ids, which is how the grader learns what a call
 // changed; no other result has the field.
+//
+// TOOLS_VERSION is part of every task's env_version (packages/core/tasks.ts): bump it on any
+// change that can change what the agent sees. Tool-change checklist: a new or removed tool, a
+// changed name, description, input schema, result payload, error code or error text, or a
+// changed validation rule in this file or under tools/ bumps TOOLS_VERSION; a refactor that
+// changes none of these does not.
 import { RESOURCE_TYPES } from '../world.ts';
 import { ToolError, type ErrorBody } from './errors.ts';
+
+// 2: read-tool exposure tagging as of the search-exposure change (a snippet is shown, not exposed;
+// search_patients exposes the Patient it returns).
+export const TOOLS_VERSION = '2';
 
 export type PropertySchema =
   | { type: 'string'; description: string; enum?: readonly string[]; minLength?: number; maxLength?: number; pattern?: string }
