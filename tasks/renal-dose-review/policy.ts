@@ -11,8 +11,6 @@ const MRN = '4410-22';
 const LOINC = 'http://loinc.org';
 const SCR = '2160-0';
 const WEIGHT = '29463-7';
-// The formulary's apixaban tablets by strength in mg (task.toml [[catalog]]).
-const APIXABAN_PRODUCT: Record<number, string> = { 2.5: '1364435', 5: '1364445' };
 
 type R = Readonly<Record<string, unknown>> & { resourceType: string; id?: string };
 type Obs = R & { status?: string; code?: { coding?: Array<{ system?: string; code?: string }> }; subject?: { reference?: string }; effectiveDateTime?: string; valueQuantity?: { value?: number; unit?: string; code?: string } };
@@ -98,7 +96,7 @@ export function derive(world: WorldView): Json {
     disregarded: scrs.filter((o) => !valid(o)).map((o) => `Observation/${o.id}`),
     egfr: round(egfr, 1),
     crcl: round(crcl, 1),
-    apixaban: { request: `MedicationRequest/${one('apixaban').id}`, criteria, rxnorm: APIXABAN_PRODUCT[apixabanMg]!, dose_mg: apixabanMg, per_day: 2 },
+    apixaban: { request: `MedicationRequest/${one('apixaban').id}`, criteria, dose_mg: apixabanMg, per_day: 2 },
     metformin: { request: `MedicationRequest/${metformin.id}`, ...metforminRule },
     gabapentin: { request: `MedicationRequest/${gabapentin.id}`, action: gabapentinAction, daily_mg: { min: band[0], max: band[1] }, per_day: band[2] },
     untouched: meds.filter((m) => !covered.has(m.id)).map((m) => `MedicationRequest/${m.id}`).sort(),

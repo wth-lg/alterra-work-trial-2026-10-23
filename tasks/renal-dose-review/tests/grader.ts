@@ -1,10 +1,12 @@
 // T1's checks (design section 4, "T1": gates G1-G6; rubric in rubric.ts). The gates read the
 // final state through the gate view and normalise doses and drugs through
-// packages/grader/normalize.ts, so a modify and a stop plus a new order grade the same.
+// packages/grader/normalize.ts, so a modify and a stop plus a new order grade the same, and a
+// dose is the clinical quantity (mg per administration x doses per day), whichever product or
+// unit it is written in: one 5 mg tablet and two 2.5 mg tablets are both 5 mg.
 // traces_to names the RBC-PHARM-07 section each one enforces.
 import { gate, type Check, type GateCtx } from '../../../packages/grader/check.ts';
 import type { GateOf } from '../../../packages/grader/gate-view.ts';
-import { conceptIs, dailyDose, dosesPerDay, isActive, isDrug, quantity } from '../../../packages/grader/normalize.ts';
+import { conceptIs, dailyDose, doseOf, dosesPerDay, isActive, isDrug } from '../../../packages/grader/normalize.ts';
 import { expected } from '../expected.ts';
 import { rubric } from './rubric.ts';
 
@@ -51,13 +53,11 @@ const gates: Check[] = [
       const found = active(ctx, 'apixaban');
       const m = found.length === 1 ? found[0]! : undefined;
       const d = m?.dosageInstruction?.length === 1 ? m.dosageInstruction[0] : undefined;
-      const dose = d?.doseAndRate?.[0]?.doseQuantity;
-      const mg = dose?.value === undefined ? null : (quantity({ value: dose.value, unit: dose.code ?? dose.unit ?? '' }, 'mg')?.value ?? null);
+      const mg = m && d ? (doseOf(m, d)?.value ?? null) : null;
       const perDay = d?.timing?.repeat ? dosesPerDay(d.timing.repeat) : null;
-      const product = m !== undefined && isDrug(m.medicationCodeableConcept, { ingredient: 'apixaban', rxcuis: [A.rxnorm], strength_mg: A.dose_mg });
       const oral = d?.route !== undefined && conceptIs(d.route, { system: SNOMED, code: '26643006', display: 'Oral route' });
       return {
-        met: product && mg === A.dose_mg && perDay === A.per_day && oral,
+        met: mg === A.dose_mg && perDay === A.per_day && oral,
         evidence: { active: found.map(keyOf), product: m?.medicationCodeableConcept?.coding?.[0]?.code ?? null, mg, per_day: perDay, oral },
         ids: found.map(keyOf),
       };

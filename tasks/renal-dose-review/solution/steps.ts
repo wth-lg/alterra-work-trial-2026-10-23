@@ -5,6 +5,7 @@ import type { ScriptCall } from '../../../packages/grader/matrix/types.ts';
 
 export const PT = 'pt-0002';
 export const RX = {
+  apixaban2_5: '1364435',
   apixaban5: '1364445',
   metformin500: '861007',
   gabapentin100: '310430',
