@@ -150,7 +150,7 @@ describe('run() grades', () => {
   it('a sink that throws on the 3rd event (the first response): ENV_ERROR INTERNAL with the real cost, turns and models', async () => {
     let n = 0;
     const { result, rows } = await trial({ onEvent: () => { if (++n === 3) throw new Error('trajectory write failed'); } });
-    expect(result.record).toMatchObject({ status: 'ENV_ERROR', detail: 'INTERNAL', outcome: 'ENV_ERROR', valid: false, turns: 1, models_returned: ['claude-opus-5-5'] });
+    expect(result.record).toMatchObject({ status: 'ENV_ERROR', detail: 'INTERNAL', outcome: 'ENV_ERROR', valid: false, turns: 1, models_returned: ['claude-opus-5-5'], sink_error: 'Error: trajectory write failed' });
     const settled = rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0);
     expect(settled).toBeGreaterThan(0);
     expect(result.record.cost_usd).toBeCloseTo(settled, 12);
@@ -168,6 +168,34 @@ describe('run() grades', () => {
     expect(result.record.turns).toBe(rows.filter((r) => r.kind === 'reserve').length);
     expect(result.record.tool_calls).toBe(result.events.filter((e) => e.type === 'tool_result' && e.executed).length);
     expect(result.record.models_returned).toEqual(result.events.some((e) => e.type === 'response') ? ['claude-opus-5-5'] : []);
+  });
+
+  // A sink that fails stops being called, and run() still returns the record with sink_error.
+  it('a sink that throws once on the last event (graded): the record is returned, graded, with sink_error and the ledger cost', async () => {
+    let calls = 0;
+    const { result, rows } = await trial({ onEvent: (e) => { calls++; if (e.type === 'graded') throw new Error('trajectory write failed'); } });
+    expect(result.record).toMatchObject({ status: 'COMPLETED', outcome: 'PASS', valid: true, sink_error: 'Error: trajectory write failed' });
+    expect(calls).toBe(result.events.length);
+    const settled = rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0);
+    expect(result.record.cost_usd + result.record.judge_cost_usd).toBeCloseTo(settled, 12);
+  });
+
+  it('a sink that throws on every event from event 3: ENV_ERROR INTERNAL with sink_error and the ledger cost, the sink called 3 times', async () => {
+    let calls = 0;
+    const { result, rows } = await trial({ onEvent: () => { if (++calls >= 3) throw new Error('ENOSPC: no space left on device'); } });
+    expect(result.record).toMatchObject({ status: 'ENV_ERROR', detail: 'INTERNAL', outcome: 'ENV_ERROR', valid: false, sink_error: 'Error: ENOSPC: no space left on device' });
+    expect(calls).toBe(3);
+    const settled = rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0);
+    expect(settled).toBeGreaterThan(0);
+    expect(result.record.cost_usd + result.record.judge_cost_usd).toBeCloseTo(settled, 12);
+    expect(result.events.at(-1)).toMatchObject({ type: 'graded' });
+  });
+
+  it('a sink that throws on the terminal event: the record keeps its status, with sink_error', async () => {
+    const { result, rows } = await trial({ maxTurns: 1, onEvent: (e) => { if (e.type === 'limit') throw new Error('trajectory write failed'); } });
+    expect(result.record).toMatchObject({ status: 'LIMIT', detail: 'turns', sink_error: 'Error: trajectory write failed' });
+    const settled = rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0);
+    expect(result.record.cost_usd + result.record.judge_cost_usd).toBeCloseTo(settled, 12);
   });
 
   it.each([
@@ -285,5 +313,26 @@ describe('cli run-one grades', () => {
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
     expect(existsSync(join(dir, `trials/${KEY}.json`))).toBe(false);
     expect(h.lines.join('\n')).toMatch(/run\(\) threw after spend: 1 settled call for mock:run-one:_toy\/claude-opus-5-5\/high\/mock-toy\/0; no record written/);
+  });
+
+  // run-one's sink appends to the trajectory file; a write that fails (a full disk) must not lose
+  // the record. The wrapper stands in for appendFileSync throwing.
+  const failingSink = (fails: (e: TrialEvent, n: number) => boolean): typeof run => (task, model, opts) => {
+    let n = 0;
+    return run(task, model, { ...opts, onEvent: (e) => { if (fails(e, ++n)) throw new Error('ENOSPC: no space left on device, write'); opts.onEvent!(e); } });
+  };
+
+  it.each([
+    ['once on the graded event', (e: TrialEvent) => e.type === 'graded', 'PASS'],
+    ['on every event from event 3', (_e: TrialEvent, n: number) => n >= 3, 'ENV_ERROR'],
+  ] as const)('a trajectory append that fails %s: the record is written with its ledger cost, exit 1 with the reason', async (_name, fails, outcome) => {
+    const dir = tempDir('run-one-graded');
+    const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') }, { run: failingSink(fails) });
+    expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
+    const record = JSON.parse(readFileSync(join(dir, `trials/${KEY}.json`), 'utf8')) as TrialRecord;
+    expect(record).toMatchObject({ outcome, sink_error: 'Error: ENOSPC: no space left on device, write' });
+    const rows = readFileSync(join(dir, 'spend.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as LedgerRow);
+    expect(record.cost_usd + record.judge_cost_usd).toBeCloseTo(rows.filter((r) => r.kind === 'settle').reduce((s, r) => s + r.cost_usd, 0), 12);
+    expect(h.lines.join('\n')).toMatch(/trajectory write failed: Error: ENOSPC: no space left on device, write; the trajectory is incomplete, the record is written/);
   });
 });

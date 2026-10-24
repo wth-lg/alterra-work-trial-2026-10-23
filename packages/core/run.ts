@@ -18,6 +18,12 @@
 // call the client failed grades it as classifyFailure says (INFRA_API for a 401 or retries
 // exhausted), both invalid, both graded last with the cost, turns, tool calls, models and
 // hashes the trial really had.
+//
+// The onEvent sink: run() catches its errors at the emit boundary and never calls it again
+// after one, and the record still comes back, with sink_error. A sink that fails while the
+// trial runs (before the terminal event) ends it as ENV_ERROR INTERNAL, keeping what was spent:
+// its trajectory is incomplete. A failure on the terminal or graded event leaves the outcome as
+// it was. Every event stays in the returned events either way.
 import { ANTHROPIC_VERSION, MODEL, type MessageParam, type MessageParams } from './anthropic.ts';
 import { PER_TRIAL_CAP_USD } from './cost.ts';
 import { createEmitter, type TrialEvent, type TrialStatus } from './events.ts';
@@ -80,6 +86,11 @@ export interface RunOptions {
   judge?: TrialClient | null;
 }
 
+// What a failed onEvent sink throws into the trial: the trial ends, its trajectory incomplete.
+class SinkError extends Error {
+  override readonly name = 'SinkError';
+}
+
 export interface TrialRun {
   trial_id: string;
   task_id: string;
@@ -112,8 +123,9 @@ export interface TrialRun {
   judge_cost_usd: number;
 }
 
-// The record run() returns and emits last: the trial and its grade.
-export type TrialRecord = TrialRun & Grade;
+// The record run() returns and emits last: the trial and its grade. sink_error: the error of
+// an onEvent sink that threw (on the graded event, it is only in the returned record).
+export type TrialRecord = TrialRun & Grade & { sink_error?: string };
 
 export interface TrialResult {
   record: TrialRecord;
@@ -156,7 +168,22 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
     indexDefinitions(opts.definitions);
     indexedBundle = opts.definitions;
   }
-  const { emit, events } = createEmitter(opts.now, opts.onEvent);
+  const sink: { error: string | null } = { error: null };
+  const onEvent = opts.onEvent;
+  const { emit: emitAll, events } = createEmitter(opts.now, onEvent && ((e) => {
+    if (sink.error !== null) return;
+    try {
+      onEvent(e);
+    } catch (err) {
+      sink.error = errorText(err);
+    }
+  }));
+  // Inside the trial, a sink that has failed ends it.
+  const emit: typeof emitAll = (body) => {
+    const e = emitAll(body);
+    if (sink.error !== null) throw new SinkError(`trajectory sink failed: ${sink.error}`);
+    return e;
+  };
   const params = trialParams(task, effort);
   const tools = taskTools(task);
   let outcome = newOutcome();
@@ -210,7 +237,7 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
     outcome.stop = null;
     outcome.terminal = { type: 'error', status: 'ENV_ERROR', code: 'INTERNAL', message: errorText(e) };
   }
-  if (outcome.terminal) emit({ turn: outcome.turns, ...outcome.terminal });
+  if (outcome.terminal) emitAll({ turn: outcome.turns, ...outcome.terminal });
 
   const t = outcome.terminal;
   const facts: Omit<TrialRun, 'ended' | 'judge_cost_usd'> = {
@@ -241,8 +268,9 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
   const checks = opts.checks ?? [];
   const judge = judgeFor(checks, { judge: opts.judge === undefined ? opts.client : opts.judge });
   const graded = await gradeWith({ checks, initial: initialState, final: finalState, events, trial: facts }, judge);
-  const record: TrialRecord = { ...facts, ended: iso(opts.now()), judge_cost_usd: judge.costUsd, ...graded };
-  emit({ type: 'graded', turn: outcome.turns, record });
+  const emitted: TrialRecord = { ...facts, ended: iso(opts.now()), judge_cost_usd: judge.costUsd, ...graded, ...(sink.error !== null ? { sink_error: sink.error } : {}) };
+  emitAll({ type: 'graded', turn: outcome.turns, record: emitted });
+  const record = sink.error !== null && emitted.sink_error === undefined ? { ...emitted, sink_error: sink.error } : emitted;
   return { record, events };
 }
 

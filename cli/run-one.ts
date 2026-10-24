@@ -23,7 +23,9 @@
 // record; the record (outcome, gate checks, rubric scores included) is written at the end. A
 // check that throws or a judge call that fails does not make run() throw: the trial is graded
 // GRADER_ERROR, or as classifyFailure says for the judge (INFRA_API for a 401), with its real
-// cost and turns. If run() throws (the task cannot be
+// cost and turns. A trajectory append that fails (a full disk) does not lose the record either:
+// run() stops writing the trajectory and returns the record with sink_error, run-one writes it,
+// says the trajectory is incomplete and exits 1. If run() throws (the task cannot be
 // resolved again, before any spend), the record says ENV_ERROR INTERNAL: never a valid trial,
 // never the model's failure. That record is written only while the ledger shows no call for the
 // trial: after a call, run-one writes no record and says so, so no record claims $0 for spend.
@@ -192,6 +194,10 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       if (record.error) deps.out(`not graded (${record.fault}): ${record.error.check ?? 'trial'}: ${redactText(record.error.message, [key])}${record.error.stops_batch ? '; the batch stops' : ''}`);
       deps.out(`record ${recordFile}`);
       deps.out(`trajectory ${trajectory}`);
+      if (record.sink_error !== undefined) {
+        deps.out(`run-one: trajectory write failed: ${redactText(record.sink_error, [key])}; the trajectory is incomplete, the record is written`);
+        return 1;
+      }
       return succeeded(record) ? 0 : 1;
     } finally {
       await grant.close();
