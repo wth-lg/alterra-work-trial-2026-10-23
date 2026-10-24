@@ -20,9 +20,9 @@
 // reruns, and each judge item makes at most two calls, each priced at the judge's body cap,
 // because the text the judge grades does not exist yet. It is the upper bound `spend --check`
 // takes. A live run holds less: the loop's grant is the per-trial cap, which batchStart refuses,
-// before any call, when the ledger's exposure plus $6 would cross $450; each judge call then
+// before any call, when the ledger's exposure plus $6 would cross PROJECTED_CAP_USD; each judge call then
 // opens its own grant at that call's worst case from its real request (perCallGrantClient),
-// checked against $450 at that moment, under the same trial label. run-one prints both, and
+// checked against PROJECTED_CAP_USD at that moment, under the same trial label. run-one prints both, and
 // exits 1 if the ledger's settled sum for the trial is not the record's cost_usd plus
 // judge_cost_usd. Each event is appended to the
 // trajectory as it arrives, so a crash leaves a valid prefix, and the last line is the graded

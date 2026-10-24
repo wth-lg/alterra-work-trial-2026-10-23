@@ -3,7 +3,7 @@
 // core ledger, admitted so its grants can build a MessagesClient. A reload keeps the spend: rows
 // are read back on load, and a call or batch an earlier page left open is closed as spent at its
 // worst case, since that page can no longer settle it and the API may still bill it.
-// Browser-direct calls meter through it; its caps are the core's $450 / $500, and the tighter
+// Browser-direct calls meter through it; its caps are the core's PROJECTED_CAP_USD and ACTUAL_CAP_USD, and the tighter
 // session cap is checked in spend/ before each batchStart. P15 extends this adapter for trials
 // in a Worker.
 import { admitStore, createLedger, parseRow, type Ledger, type LedgerRow, type LedgerStore } from '../../../../packages/core/ledger.ts';

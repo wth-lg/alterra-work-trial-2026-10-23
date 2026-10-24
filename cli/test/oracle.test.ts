@@ -4,8 +4,8 @@
 // --dry-run prints a projection sized from the real judge requests and opens nothing. Every live
 // path here is mocked: the transport is a spy, and HOME a temp dir. The dry run grades a reduced
 // toy (the oracle, one alternative that shares its summary, and the null agent) so the file
-// stays fast; the CI matrix step covers the whole toy. The live judge's own tests, the $450.01
-// refusal included, are in packages/grader/matrix/test/oracle-live-*.test.ts, one per file for
+// stays fast; the CI matrix step covers the whole toy. The live judge's own tests, the refusal
+// one cent over the projected cap included, are in packages/grader/matrix/test/oracle-live-*.test.ts, one per file for
 // the same reason.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';

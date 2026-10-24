@@ -9,11 +9,12 @@
 //   an open batch (open row, no close row) counts at max(projection, its own settled +
 //   reserved), so it adds max(0, projection - own) on top of the two sums
 //   exposure = settled + reserved + that open-batch excess
-// batchStart refuses when exposure + projection > $450. A reservation is refused when
-// settled + reserved + its worst case > $500, and every call is blocked once settled
-// reaches $500. A process that dies leaves its reservations and its open batch counting,
-// until `pnpm cli spend --close <batch_id>` closes the batch. Every row is validated when it
-// is read and before it is appended, so a NaN or negative amount never reaches a cap check.
+// batchStart refuses when exposure + projection > PROJECTED_CAP_USD. A reservation is refused
+// when settled + reserved + its worst case > ACTUAL_CAP_USD, and every call is blocked once
+// settled reaches ACTUAL_CAP_USD. A process that dies leaves its reservations and its open
+// batch counting, until `pnpm cli spend --close <batch_id>` closes the batch. Every row is
+// validated when it is read and before it is appended, so a NaN or negative amount never
+// reaches a cap check.
 import { usageCostUsd, worstCaseUsd, type Usage } from './cost.ts';
 
 export const PROJECTED_CAP_USD = 450;
@@ -94,7 +95,7 @@ export interface Totals {
   open: OpenBatch[];
   openExcess: number; // what open batches add beyond their own settled + reserved
   exposure: number; // settled + reserved + openExcess
-  blocked: boolean; // settled >= $500
+  blocked: boolean; // settled >= ACTUAL_CAP_USD
 }
 
 interface Tally {
@@ -227,7 +228,7 @@ export interface Reservation {
 export interface BatchGrant {
   readonly batch_id: string;
   readonly projection: number;
-  // Aborted when this process sees settled spend reach $500.
+  // Aborted when this process sees settled spend reach ACTUAL_CAP_USD.
   readonly signal: AbortSignal;
   reserve(req: ReserveRequest): Promise<Reservation>;
   // usage null means unknown (dropped stream, error after a partial stream): worst case.
@@ -465,7 +466,7 @@ export function createLedger(deps: LedgerDeps): Ledger {
       projection,
       signal: controller.signal,
       // A refusal for this call's own worst case throws for this call only; once settled
-      // spend reaches $500, `guarded` aborts every live grant, this one included.
+      // spend reaches ACTUAL_CAP_USD, `guarded` aborts every live grant, this one included.
       async reserve(req) {
         assertGrant(grant);
         if (controller.signal.aborted) throw controller.signal.reason;
