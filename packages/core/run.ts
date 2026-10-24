@@ -17,7 +17,8 @@
 // call. Grading does not throw: a check that throws grades the trial GRADER_ERROR and a judge
 // call the client failed grades it as classifyFailure says (INFRA_API for a 401 or retries
 // exhausted), both invalid, both graded last with the cost, turns, tool calls, models and
-// hashes the trial really had.
+// hashes the trial really had. The judge's calls carry opts.signal, so an abort cancels a judge
+// call in flight as it cancels a loop call, and the trial ends CANCELLED the same way.
 //
 // The onEvent sink: run() catches its errors at the emit boundary and never calls it again
 // after one, and the record still comes back, with sink_error. A sink that fails while the
@@ -32,7 +33,7 @@ import { taskVersion, type Task, type TaskSource } from './tasks.ts';
 import { toolLog } from './trajectory.ts';
 import type { Check } from '../grader/check.ts';
 import { grade, gradeWith, judgeFor, ungraded, type Grade } from '../grader/grade.ts';
-import { isValid, trialOutcome, type TrialFacts } from '../grader/outcome.ts';
+import { FAULT, isValid, trialOutcome, type TrialFacts } from '../grader/outcome.ts';
 import { clock, NOW_PROMPT } from '../env/clock.ts';
 import { loadStore, type FixtureSource } from '../env/fixture-source.ts';
 import { stateHash } from '../env/hash.ts';
@@ -266,12 +267,24 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
     resumed: false,
   };
   const checks = opts.checks ?? [];
-  const judge = judgeFor(checks, { judge: opts.judge === undefined ? opts.client : opts.judge, effort: task.judgeEffort });
-  const graded = await gradeWith({ checks, initial: initialState, final: finalState, events, trial: facts }, judge);
+  const judge = judgeFor(checks, { judge: withSignal(opts.judge === undefined ? opts.client : opts.judge, opts.signal), effort: task.judgeEffort });
+  let graded = await gradeWith({ checks, initial: initialState, final: finalState, events, trial: facts }, judge);
+  // A judge call the abort cut off is a cancel from outside, not an infrastructure failure.
+  if (opts.signal?.aborted && graded.error !== null && FAULT[graded.outcome] === 'infra') {
+    facts.status = 'CANCELLED';
+    facts.detail = errorText(opts.signal.reason);
+    graded = { ...graded, outcome: 'CANCELLED', valid: false, fault: FAULT.CANCELLED, error: { ...graded.error, stops_batch: false } };
+  }
   const emitted: TrialRecord = { ...facts, ended: iso(opts.now()), judge_cost_usd: judge.costUsd, ...graded, ...(sink.error !== null ? { sink_error: sink.error } : {}) };
   emitAll({ type: 'graded', turn: outcome.turns, record: emitted });
   const record = sink.error !== null && emitted.sink_error === undefined ? { ...emitted, sink_error: sink.error } : emitted;
   return { record, events };
+}
+
+// The judge client with every send carrying `signal` as well as its own.
+function withSignal(client: TrialClient | null, signal: AbortSignal | undefined): TrialClient | null {
+  if (client === null || signal === undefined) return client;
+  return { send: (history, params, opts) => client.send(history, params, { ...opts, signal: opts?.signal ? AbortSignal.any([opts.signal, signal]) : signal }) };
 }
 
 // The record of a trial run() threw on before it started (the task could not be resolved):

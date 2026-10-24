@@ -133,6 +133,34 @@ describe('run() grades', () => {
     expect(judgeCalls()).toBe(0);
   });
 
+  // A single trial, no batch around it: run() itself must hand the judge its signal.
+  it('a signal that aborts with a judge call in flight cancels the call: CANCELLED, not INFRA, and no reservation left open', { timeout: 20_000 }, async () => {
+    const store = new MemoryStore();
+    admitStore(store);
+    let id = 0;
+    const ledger = createLedger({ store, clock: { now: () => 't' }, newId: () => `id-${++id}`, source: 'node', runId: null, pid: 1, host: 'h', isAlive: () => true });
+    const grant = await ledger.batchStart(6);
+    const controller = new AbortController();
+    const toy = scriptedTransport(SCENARIOS.toy).transport;
+    let judgeSent = 0;
+    const fetch: Transport = async (request) => {
+      const body = JSON.parse(await request.clone().text()) as { tools?: unknown };
+      if (body.tools !== undefined) return toy(request);
+      judgeSent++;
+      queueMicrotask(() => controller.abort(new Error('operator cancel')));
+      return new Promise<Response>((_, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true }));
+    };
+    const client = new MessagesClient({ grant, ledger, apiKey: 'test-key-not-real', fetch, sleep: async () => {} });
+    const { record } = await run('_toy', 'claude-opus-5-5', {
+      tasks: nodeTaskSource({ testMode: true }), client, world: { read: async () => WORLD }, worldHash: MANIFEST.world.state_hash, definitions: DEFINITIONS,
+      now: () => Date.UTC(2026, 9, 23, 12), checks: CHECKS, signal: controller.signal,
+    });
+    expect(judgeSent).toBe(1);
+    expect(record).toMatchObject({ status: 'CANCELLED', outcome: 'CANCELLED', valid: false, fault: 'infra', error: { stops_batch: false } });
+    const settled = new Set(store.rows.filter((r) => r.kind === 'settle').map((r) => r.call_id));
+    expect(store.rows.filter((r) => r.kind === 'reserve' && !settled.has(r.call_id))).toEqual([]);
+  });
+
   it('a check that throws: GRADER_ERROR, graded last, with the real cost, turns, tool calls, models and hashes', async () => {
     const { result, events, rows } = await trial({ checks: [CHECKS[0]!, THROWS, ...CHECKS.slice(1)] });
     const last = events.at(-1) as GradedEvent;
