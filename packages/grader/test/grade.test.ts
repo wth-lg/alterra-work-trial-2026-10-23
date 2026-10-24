@@ -4,9 +4,11 @@
 // and attribution.
 import type { Resource } from '../../env/store.ts';
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '../../core/anthropic.ts';
 import { gate, hybrid, judged, rubric, type Check, type GateCtx } from '../check.ts';
 import { grade, type GradeInput } from '../grade.ts';
 import { JudgeCacheMiss } from '../judge.ts';
+import { isValid } from '../outcome.ts';
 import { dailyDose, isActive, isDrug, sameQuantity, type MedicationRequest } from '../normalize.ts';
 import { facts, INITIAL, medication, note, scriptedJudge, trajectory, type Call } from './helpers.ts';
 
@@ -256,5 +258,165 @@ describe('GateCtx', () => {
     const doc = seen!.final.get('DocumentReference', 'doc-t2') as unknown as { content: Array<{ attachment: Record<string, unknown> }> };
     expect(doc.content[0]!.attachment).not.toHaveProperty('data');
     expect(seen!.final.get('DocumentReference', 'doc-t2')).toMatchObject({ context: { related: [{ reference: 'Observation/obs-scr-1020' }, { reference: 'Observation/obs-wt-1020' }] } });
+  });
+});
+
+describe('a check that throws', () => {
+  // A gate written with a non-null assertion on a resource the model never created.
+  const careless = gate({ id: 'G9', category: 'action', traces_to: 'prompt L2', decisive_ids: [], fn: (ctx) => ({ met: ctx.final.get('MedicationRequest', 'mr-never')!.status === 'active', evidence: {} }) });
+
+  it('is the grader\'s fault: GRADER_ERROR, invalid, fault grader, with the check named', async () => {
+    const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [CHECKS[0]!, careless] }, { judge: scriptedJudge([MET, NOT_MET]).client });
+    expect(g).toMatchObject({ outcome: 'GRADER_ERROR', valid: false, fault: 'grader', score: null, attribution: null, error: { check: 'G9', stops_batch: false } });
+    expect(g.error!.message).toMatch(/Cannot read properties of undefined/);
+    expect(g.checks.map((c) => [c.id, c.met])).toEqual([['G1', true], ['G9', 'unknown']]);
+  });
+
+  it('a rubric item that throws is a grader error too, and never changes into ENV_ERROR', async () => {
+    const bad = rubric({ id: 'R9', points: 1, method: 'code', category: 'documentation', traces_to: 'prompt L1', decisive_ids: [], fn: () => { throw new TypeError('bug in R9'); } });
+    const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [CHECKS[0]!, bad] });
+    expect(g).toMatchObject({ outcome: 'GRADER_ERROR', valid: false, fault: 'grader', error: { check: 'R9', message: 'TypeError: bug in R9' } });
+  });
+
+  it('the null-safe helpers read a resource the model never created as absent, so the gate fails', async () => {
+    const safe = gate({ id: 'G9', category: 'action', traces_to: 'prompt L2', decisive_ids: [], fn: (ctx) => ({ met: ctx.final.status('MedicationRequest', 'mr-never') === 'active', evidence: { has: ctx.final.has('MedicationRequest', 'mr-never') } }) });
+    const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [safe] });
+    expect(g).toMatchObject({ outcome: 'FAIL', valid: true, fault: 'model', error: null });
+    expect(g.checks[0]).toMatchObject({ met: false, evidence: { has: false } });
+    const present = gate({ id: 'G1', category: 'action', traces_to: 'prompt L2', decisive_ids: [], fn: (ctx) => ({ met: ctx.final.status('MedicationRequest', 'mr-t1') === 'active' && ctx.final.has('MedicationRequest', 'mr-t1'), evidence: {} }) });
+    expect((await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [present] })).outcome).toBe('PASS');
+  });
+
+  it('a trial whose facts say it reached a final state but that has none is a grader error, and valid agrees with isValid', async () => {
+    for (const status of ['REFUSAL', 'LIMIT', 'COMPLETED'] as const) {
+      const g = await grade(input([...READS, ...WRITES], GOOD_FINAL, { final: null, trial: facts({ status }) }));
+      expect(g).toMatchObject({ outcome: 'GRADER_ERROR', valid: false, fault: 'grader' });
+      expect(g.valid).toBe(isValid(g.outcome));
+    }
+  });
+});
+
+describe('gates first', () => {
+  it('every gate runs before any rubric item, whatever the declared order', async () => {
+    const order: string[] = [];
+    let leaked: string | null | undefined;
+    const r0 = rubric({ id: 'R0', points: 1, method: 'code', category: 'documentation', traces_to: 'p', decisive_ids: [], fn: (ctx) => { order.push('R0'); leaked = ctx.final_text; return { met: true, evidence: {} }; } });
+    const g1 = gate({ id: 'G1', category: 'action', traces_to: 'p', decisive_ids: [], fn: () => { order.push('G1'); return { met: leaked === undefined, evidence: {} }; } });
+    const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [r0, g1] });
+    expect(order).toEqual(['G1', 'R0']);
+    expect(g.outcome).toBe('PASS');
+    // Results keep the declared order.
+    expect(g.checks.map((c) => c.id)).toEqual(['R0', 'G1']);
+  });
+});
+
+describe('GateCtx projection', () => {
+  const S = 'SECRET-AGENT-TEXT';
+  const agentWritten: Resource[] = [
+    { resourceType: 'Task', id: 'task-t1', status: 'requested', intent: 'order', priority: 'routine', description: `${S} description`, statusReason: { text: `${S} status reason` }, code: { text: `${S} code` }, for: { reference: 'Patient/pt-1', display: `${S} ref display` }, owner: { reference: 'Group/pool-rn' }, note: [{ text: `${S} note` }], output: [{ type: { text: `${S} output` }, valueReference: { reference: 'ServiceRequest/sr-t1' } }], restriction: { period: { end: '2026-10-30' } } },
+    { resourceType: 'Communication', id: 'comm-t1', status: 'completed', priority: 'urgent', subject: { reference: 'Patient/pt-1' }, topic: { text: `${S} subject` }, sent: '2026-10-23T12:00:00Z', recipient: [{ reference: 'Practitioner/pr-1' }], about: [{ reference: 'Observation/obs-scr-1020' }], payload: [{ contentString: `${S} body` }] },
+    { resourceType: 'DocumentReference', id: 'doc-t9', status: 'current', docStatus: 'final', type: { coding: [{ system: 'http://loinc.org', code: '11506-3', display: 'Progress note' }], text: `${S} type` }, subject: { reference: 'Patient/pt-1' }, description: `${S} title`, content: [{ attachment: { contentType: 'text/plain', data: btoa(`${S} body`), title: `${S} attachment title`, creation: '2026-10-23T12:00:00Z' } }], context: { related: [{ reference: 'Observation/obs-scr-1020' }, { identifier: { system: 'urn:riverbend:policy', value: 'RBC-PHARM-07' }, display: `${S} policy display` }] } },
+    { resourceType: 'ServiceRequest', id: 'sr-t1', status: 'active', intent: 'order', priority: 'routine', category: [{ coding: [{ system: 'http://snomed.info/sct', code: '108252007' }], text: `${S} category` }], code: { coding: [{ system: 'http://loinc.org', code: '2160-0', display: 'Creatinine' }], text: `${S} code text` }, subject: { reference: 'Patient/pt-1' }, occurrenceDateTime: '2026-10-30', reasonCode: [{ text: `${S} reason` }], note: [{ text: `${S} note` }] },
+    { ...medication('mr-t5', 'apixaban 5 MG Oral Tablet', 5, 'mg', 2), reasonCode: [{ text: `${S} reason` }], statusReason: { text: `${S} status reason` }, note: [{ text: `${S} note` }], dosageInstruction: [{ text: `${S} sig`, asNeededCodeableConcept: { text: `${S} as needed` }, patientInstruction: `${S} patient instruction`, timing: { repeat: { frequency: 2, period: 1, periodUnit: 'd' }, code: { text: `${S} timing` } }, doseAndRate: [{ doseQuantity: { value: 5, unit: 'mg', system: 'http://unitsofmeasure.org', code: 'mg' } }] }] } as Resource,
+    { resourceType: 'AllergyIntolerance', id: 'al-t1', patient: { reference: 'Patient/pt-1' }, criticality: 'high', clinicalStatus: { coding: [{ code: 'active' }] }, code: { coding: [{ system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: '7980', display: 'penicillin G' }], text: `${S} substance` }, reaction: [{ manifestation: [{ coding: [{ system: 'http://snomed.info/sct', code: '271807003' }], text: `${S} manifestation` }], description: `${S} reaction`, severity: 'severe' }], note: [{ text: `${S} note` }] },
+    { resourceType: 'Observation', id: 'obs-t1', status: 'final', code: { coding: [{ system: 'http://loinc.org', code: '8867-4' }], text: `${S} code` }, subject: { reference: 'Patient/pt-1' }, valueString: `${S} value`, note: [{ text: `${S} note` }] },
+    { resourceType: 'Provenance', id: 'prov-t9', target: [{ reference: 'Task/task-t1' }], recorded: '2026-10-23T12:00:00Z', activity: { coding: [{ code: 'CREATE' }], text: `${S} tool` }, agent: [{ who: { reference: 'Practitioner/pr-1' } }], entity: [{ role: 'source', what: { reference: 'Observation/obs-scr-1020', display: `${S} what` } }] },
+    { resourceType: 'Basic', id: 'b-1', code: { text: `${S} basic` } } as Resource,
+  ];
+
+  it('no agent-written string exists on any resource a gate can read, initial or final', async () => {
+    let seen: GateCtx | undefined;
+    const probe = gate({ id: 'G0', category: 'process', traces_to: 'p', decisive_ids: [], fn: (ctx) => ((seen = ctx), { met: true, evidence: {} }) });
+    await grade({ ...input([...READS, ...WRITES], [...GOOD_FINAL, ...agentWritten], { initial: [...INITIAL, ...agentWritten] }), checks: [probe] });
+    for (const view of [seen!.initial, seen!.final]) {
+      expect(view.all().length).toBe((view === seen!.initial ? INITIAL.length : GOOD_FINAL.length) + agentWritten.length);
+      for (const r of view.all()) expect(JSON.stringify(r)).not.toContain(S);
+      // The note body is gone in every form, base64 included.
+      expect(JSON.stringify(view.all())).not.toContain(btoa(`${S} body`));
+    }
+    const f = seen!.final;
+    const absent: Array<[string, string, string]> = [
+      ['Task', 'task-t1', 'description'], ['Task', 'task-t1', 'note'], ['Communication', 'comm-t1', 'topic'], ['Communication', 'comm-t1', 'payload'],
+      ['DocumentReference', 'doc-t9', 'description'], ['ServiceRequest', 'sr-t1', 'note'], ['MedicationRequest', 'mr-t5', 'note'], ['Observation', 'obs-t1', 'valueString'],
+    ];
+    for (const [type, id, field] of absent) expect(f.get(type as 'Task', id)).not.toHaveProperty(field);
+    expect(f.get('Task', 'task-t1')).not.toHaveProperty('statusReason.text');
+    expect(f.get('DocumentReference', 'doc-t9')!.content![0]!.attachment).toEqual({ contentType: 'text/plain', creation: '2026-10-23T12:00:00Z' });
+    expect(f.get('ServiceRequest', 'sr-t1')!.reasonCode).toEqual([{}]);
+    expect(f.get('MedicationRequest', 'mr-t5')!.dosageInstruction![0]).not.toHaveProperty('asNeededCodeableConcept.text');
+    expect(f.get('MedicationRequest', 'mr-t5')!.dosageInstruction![0]).not.toHaveProperty('text');
+    expect(f.get('AllergyIntolerance', 'al-t1')!.reaction![0]!.manifestation).toEqual([{ coding: [{ system: 'http://snomed.info/sct', code: '271807003' }] }]);
+  });
+
+  it('keeps the structured fields a gate decides on: codes, references, status, quantities, dates and ids', async () => {
+    let seen: GateCtx | undefined;
+    const probe = gate({ id: 'G0', category: 'process', traces_to: 'p', decisive_ids: [], fn: (ctx) => ((seen = ctx), { met: true, evidence: {} }) });
+    await grade({ ...input([...READS, ...WRITES], [...GOOD_FINAL, ...agentWritten]), checks: [probe] });
+    const f = seen!.final;
+    expect(f.get('Task', 'task-t1')).toEqual({ resourceType: 'Task', id: 'task-t1', status: 'requested', statusReason: {}, intent: 'order', priority: 'routine', code: {}, for: { reference: 'Patient/pt-1' }, owner: { reference: 'Group/pool-rn' }, output: [{ type: {}, valueReference: { reference: 'ServiceRequest/sr-t1' } }], restriction: { period: { end: '2026-10-30' } } });
+    expect(f.get('Communication', 'comm-t1')).toEqual({ resourceType: 'Communication', id: 'comm-t1', status: 'completed', priority: 'urgent', subject: { reference: 'Patient/pt-1' }, sent: '2026-10-23T12:00:00Z', recipient: [{ reference: 'Practitioner/pr-1' }], about: [{ reference: 'Observation/obs-scr-1020' }] });
+    expect(f.get('DocumentReference', 'doc-t9')!.context!.related).toEqual([{ reference: 'Observation/obs-scr-1020' }, { identifier: { system: 'urn:riverbend:policy', value: 'RBC-PHARM-07' } }]);
+    const mr = f.get('MedicationRequest', 'mr-t5')!;
+    expect(mr.medicationCodeableConcept).toEqual({ coding: [{ system: 'http://www.nlm.nih.gov/research/umls/rxnorm', code: 'rx-mr-t5', display: 'apixaban 5 MG Oral Tablet' }] });
+    expect(dailyDose(mr)).toEqual({ value: 10, unit: 'mg' });
+    expect(isDrug(mr.medicationCodeableConcept, { ingredient: 'apixaban', strength_mg: 5 })).toBe(true);
+    expect(f.get('Observation', 'obs-scr-1020')).toMatchObject({ status: 'final', valueQuantity: { value: 1.21, unit: 'mg/dL' }, subject: { reference: 'Patient/pt-1' } });
+    expect(f.get('Provenance', 'prov-t9')).toEqual({ resourceType: 'Provenance', id: 'prov-t9', target: [{ reference: 'Task/task-t1' }], recorded: '2026-10-23T12:00:00Z', activity: { coding: [{ code: 'CREATE' }] }, agent: [{ who: { reference: 'Practitioner/pr-1' } }], entity: [{ role: 'source', what: { reference: 'Observation/obs-scr-1020' } }] });
+    // A type with no allowlist keeps only its type and id.
+    expect(f.get('Basic', 'b-1')).toEqual({ resourceType: 'Basic', id: 'b-1' });
+  });
+});
+
+describe('judge failures are infrastructure', () => {
+  it.each([
+    ['401', new ApiError('401 invalid x-api-key', { status: 401, type: 'authentication_error', retryable: false, stopsBatch: true })],
+    ['billing 400', new ApiError('400 credit balance too low', { status: 400, type: 'invalid_request_error', retryable: false, stopsBatch: true })],
+    ['model_mismatch', new ApiError('response model claude-sonnet-5-5 is not claude-opus-5-5', { status: 200, type: 'model_mismatch', retryable: false, stopsBatch: true })],
+    ['retries exhausted', new ApiError('529 overloaded after 4 attempts', { status: 529, type: 'overloaded_error', retryable: true, stopsBatch: false })],
+  ] as const)('%s: INFRA_API, invalid, never cached, the batch stops where the client says so', async (_name, err) => {
+    let calls = 0;
+    const client = { send: () => (calls++, Promise.reject(err)) };
+    const g = await grade(input([...READS, ...WRITES], GOOD_FINAL), { judge: client });
+    expect(g).toMatchObject({ outcome: 'INFRA_API', valid: false, fault: 'infra', score: null, attribution: null, error: { check: 'R2', message: `ApiError: ${err.message}`, stops_batch: err.stopsBatch } });
+    expect(g.judge.cache).toEqual([]);
+    expect(g.judge.cache_keys).toEqual([]);
+    expect(calls).toBe(1);
+  });
+
+  it('a parsed answer without a usable quote is a cached unknown, not an infrastructure error', async () => {
+    const g = await grade(input([...READS, ...WRITES], GOOD_FINAL), { judge: scriptedJudge(['{"verdict":"met","quote":"not in the note"}', NOT_MET]).client });
+    expect(g).toMatchObject({ outcome: 'PASS', valid: true, error: null });
+    expect(g.judge.cache).toHaveLength(2);
+  });
+});
+
+describe('judge allowance', () => {
+  it('counts calls, not items, and bounds them at run time: past the allowance an item is unknown, marked', async () => {
+    // One judge item (allowance 2 calls) and a code item that asks the judge three more questions.
+    const greedy = rubric({
+      id: 'R8', points: 1, method: 'code', category: 'documentation', traces_to: 'p', decisive_ids: [],
+      fn: async (ctx) => {
+        const vs = [];
+        for (const c of ['a', 'b', 'c']) vs.push(await ctx.judge({ criterion: c, text: NOTE_TEXT }));
+        return { met: vs.every((v) => v.met === true), evidence: { reasons: vs.map((v) => (v.evidence.reason ?? null) as string | null) } };
+      },
+    });
+    const checks = [CHECKS[0]!, judged({ id: 'R2', points: 3, category: 'documentation', traces_to: 'p', decisive_ids: [], criterion: 'c0', text: notesText }), greedy];
+    const j = scriptedJudge([MET]);
+    const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks }, { judge: j.client });
+    expect(j.requests).toHaveLength(2);
+    expect(g.judge.calls).toBe(2);
+    expect(g.checks.find((c) => c.id === 'R8')!.evidence).toEqual({ reasons: [null, 'judge allowance reached', 'judge allowance reached'] });
+    expect(g.judge.over_allowance).toBe(2);
+    // A regrade from the record's cache is identical.
+    const again = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks }, { cache: g.judge.cache });
+    expect(JSON.stringify(again)).toBe(JSON.stringify(g));
+  });
+
+  it('the schema retry is a call', async () => {
+    const j = scriptedJudge(['not json', MET, NOT_MET]);
+    const g = await grade(input([...READS, ...WRITES], GOOD_FINAL), { judge: j.client });
+    expect(j.requests).toHaveLength(3);
+    expect(g.judge.calls).toBe(3);
   });
 });

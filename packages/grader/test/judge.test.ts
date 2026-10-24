@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { MODEL } from '../../core/anthropic.ts';
-import { JUDGE_EFFORT, JUDGE_PROMPT_VERSION, Judge, judgeAllowanceUsd } from '../judge.ts';
+import { JUDGE_EFFORT, JUDGE_PROMPT_VERSION, Judge, JudgeClientError, judgeAllowanceUsd, judgeCallBudget } from '../judge.ts';
 import { judged, hybrid } from '../check.ts';
 import { scriptedJudge } from './helpers.ts';
 
@@ -38,13 +38,34 @@ describe('judge', () => {
     expect(j.requests).toHaveLength(1);
   });
 
-  it('a met verdict needs a quote; a judge error is unknown, not a crash', async () => {
+  it('a met verdict needs a quote; a not_met verdict may have none, since absence cannot be quoted', async () => {
     const empty = new Judge({ client: scriptedJudge(['{"verdict":"met","quote":""}']).client });
     expect(await empty.judge({ criterion: 'c', text: 'text' })).toMatchObject({ met: 'unknown', evidence: { reason: 'quote not in text' } });
+    const absent = new Judge({ client: scriptedJudge(['{"verdict":"not_met","quote":""}']).client });
+    expect(await absent.judge({ criterion: 'c', text: 'text' })).toMatchObject({ met: false });
+    // A not_met verdict that does quote is held to the substring check.
+    const misquoted = new Judge({ client: scriptedJudge(['{"verdict":"not_met","quote":"words not there"}']).client });
+    expect(await misquoted.judge({ criterion: 'c', text: 'text' })).toMatchObject({ met: 'unknown', evidence: { reason: 'quote not in text' } });
+  });
+
+  it('a client error is thrown, not answered: it is never cached', async () => {
     const failing = new Judge({ client: { send: () => Promise.reject(new Error('529 overloaded')) } });
-    expect(await failing.judge({ criterion: 'c', text: 'text' })).toMatchObject({ met: 'unknown', evidence: { reason: 'judge error: 529 overloaded' } });
-    // The error is cached in place of an answer, so a regrade reproduces the unknown.
-    expect(failing.entries()).toMatchObject([{ answer: null, error: 'judge error: 529 overloaded' }]);
+    await expect(failing.judge({ criterion: 'c', text: 'text' })).rejects.toThrow(JudgeClientError);
+    await expect(failing.extract({ field: 'f', text: 'no digits here', pattern: /(\d+)/ })).rejects.toThrow(JudgeClientError);
+    expect(failing.entries()).toEqual([]);
+  });
+
+  it('an extracted value followed by punctuation still matches its quote', async () => {
+    const j = new Judge({ client: scriptedJudge(['{"value":42,"quote":"CrCl is 42, which"}']).client });
+    expect(await j.extract({ field: 'CrCl', text: 'By Cockcroft-Gault the CrCl is 42, which is under 50.', pattern: /CrCl of (\d+)/ })).toMatchObject({ value: 42, source: 'llm' });
+    const k = new Judge({ client: scriptedJudge(['{"value":25,"quote":"weight 25."}']).client });
+    expect(await k.extract({ field: 'w', text: 'Dose by weight 25. Next line.', pattern: /kg (\d+)/ })).toMatchObject({ value: 25 });
+  });
+
+  it('the call budget is two calls per judge and hybrid item', () => {
+    const t = () => 'x';
+    expect(judgeCallBudget([judged({ id: 'J', points: 1, category: 'documentation', traces_to: 'p', decisive_ids: [], criterion: 'c', text: t })])).toBe(2);
+    expect(judgeCallBudget([])).toBe(0);
   });
 
   it('the projection allowance counts each judge and hybrid item, twice for the schema retry', () => {

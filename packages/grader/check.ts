@@ -1,12 +1,19 @@
 // The check DSL (design section 5, "Architecture"). Each task's tests/grader.ts exports
-// `checks: Check[]`, gates first; a check is a pure function of its context.
+// `checks: Check[]`; a check is a pure function of its context. Every gate runs before any
+// rubric item, whatever the declared order, so no rubric item can hand a gate anything.
 //
 // Gate checks are code only and decide PASS. They get a GateCtx, which has no free-text field:
-// no note text, no final text, no tool input, and the states it holds have note bodies and
-// message text removed. So a gate cannot compare free text, and a gate check that tries to read
-// final_text does not compile (packages/grader/test/fixtures/gate-reads-text). Rubric checks
-// get a RubricCtx: the same plus the notes the agent wrote, its final text, the full states,
-// and the judge and extractor for judge and hybrid items. Rubric items never change a pass.
+// no note text, no final text, no tool input, and its states are the gate view of each resource
+// (gate-view.ts), an allowlist of structured fields with no string the agent wrote. So a gate
+// cannot compare free text, and a gate check that tries to read final_text, a Task description
+// or a message subject does not compile (packages/grader/test/fixtures). GateCheck.fn is a
+// property, so its parameter is checked contravariantly: a function over RubricCtx is refused.
+// Rubric checks get a RubricCtx: the full states, the notes the agent wrote, its final text, and
+// the judge and extractor for judge and hybrid items. Rubric items never change a pass.
+//
+// A check that throws is a grader bug (GRADER_ERROR), never the environment's fault or the
+// model's: read resources through get, has and status, which treat a resource the model never
+// created as absent, so a missing write fails the gate instead of throwing.
 //
 // Grading reads the diff, the final state and the steps, never the hash. Steps are the tool
 // calls that ran, numbered from 1; what a call exposed or referenced is read from its result's
@@ -14,6 +21,7 @@
 // committed write has (a rejected write changed nothing).
 import type { Resource } from '../env/store.ts';
 import type { Diff } from './diff.ts';
+import type { GateOf, GateResource } from './gate-view.ts';
 import type { Extraction, ExtractQuestion, JudgeQuestion } from './judge.ts';
 import { within } from './normalize.ts';
 
@@ -44,7 +52,7 @@ interface Common {
 export interface GateCheck extends Common {
   kind: 'gate';
   method: 'code';
-  fn(ctx: GateCtx): Verdict<boolean>;
+  fn: (ctx: GateCtx) => Verdict<boolean>;
   // A rubric item that judges whether the note or final text states the action this gate
   // checks: when it is met and the gate failed, the failure is an action/output gap.
   stated_by?: string;
@@ -55,7 +63,7 @@ export interface RubricCheck extends Common {
   // -10..+10; negative for a harm the item detects.
   points: number;
   method: 'code' | 'hybrid' | 'judge';
-  fn(ctx: RubricCtx): Verdict | Promise<Verdict>;
+  fn: (ctx: RubricCtx) => Verdict | Promise<Verdict>;
 }
 
 export type Check = GateCheck | RubricCheck;
@@ -75,21 +83,41 @@ export interface Step {
   written_ids: readonly string[];
 }
 
-export interface StateView {
+// Null-safe reads: a resource that is not in the state is absent, never an exception.
+interface Lookup {
+  has(type: string, id: string): boolean;
+  // The resource's status, or null when it is absent or has none.
+  status(type: string, id: string): string | null;
+}
+
+// A state as a rubric item reads it: full resources.
+export interface StateView extends Lookup {
   get(type: string, id: string): Readonly<Resource> | undefined;
   // Every resource, or every resource of one type, in store order.
   all(type?: string): readonly Readonly<Resource>[];
 }
 
-export interface GateCtx {
-  readonly initial: StateView;
-  readonly final: StateView;
+// A state as a gate reads it: the gate view of each resource (gate-view.ts), typed by its type.
+export interface GateStateView extends Lookup {
+  get<T extends string>(type: T, id: string): GateOf<T> | undefined;
+  // Every resource, or every resource of one type, in store order.
+  all(): readonly GateResource[];
+  all<T extends string>(type: T): readonly GateOf<T>[];
+}
+
+// What gates and rubric items both read.
+interface CtxBase {
   readonly diff: Diff;
   readonly steps: readonly Step[];
   // The first step whose result exposed the resource (a bare id or <Type>/<id>), or null.
   exposedAt(id: string): number | null;
   // Every resource the trial's committed writes put into the store, as <Type>/<id>, in order.
   writes(): readonly string[];
+}
+
+export interface GateCtx extends CtxBase {
+  readonly initial: GateStateView;
+  readonly final: GateStateView;
 }
 
 // A note the agent wrote: a DocumentReference the trial created, with its text decoded.
@@ -104,7 +132,9 @@ export interface Note {
   step: number | null;
 }
 
-export interface RubricCtx extends GateCtx {
+export interface RubricCtx extends CtxBase {
+  readonly initial: StateView;
+  readonly final: StateView;
   readonly notes: readonly Note[];
   // The summary the agent gave finish; null when it never called finish.
   readonly final_text: string | null;
@@ -143,4 +173,3 @@ export function hybrid(spec: Omit<Spec<RubricCheck>, 'fn'> & { field: string; te
     },
   };
 }
-

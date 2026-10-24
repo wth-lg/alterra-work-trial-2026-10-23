@@ -1,0 +1,13 @@
+// Type-checks check.js, a gate check written as JavaScript with JSDoc types, against GateCtx.
+// The check is JavaScript so the root tsconfig.json (no allowJs) never compiles it: the
+// gate-reads-text fixture must fail to type-check, and pnpm typecheck must still pass.
+{
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true
+  },
+  "files": ["check.js"]
+}

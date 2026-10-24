@@ -4,20 +4,33 @@
 // MessagesClient, so every call is metered by the ledger under the trial's grant. No sampling
 // parameter is sent (the client refuses one), and tool_choice is not forced (a 400 on this
 // model): the answer is JSON text, {verdict: met | not_met | unknown, quote}, retried once when
-// it does not parse. Code then checks the quote: a non-empty quote must be a substring of the
-// graded text, and met needs one; otherwise the item is unknown. An unknown item leaves both the
-// numerator and the denominator of the score and is counted. The judge sees the criterion and
-// the text only, never the gate result or the reference.
+// it does not parse. Code then checks the quote: a met verdict needs a quote, and any non-empty
+// quote must be a substring of the graded text; otherwise the item is unknown. A not_met
+// verdict may carry an empty quote, because absence cannot be quoted (coordinator decision,
+// 2026-10-23): it stays met: false and counts in the denominator. An unknown item leaves both
+// the numerator and the denominator of the score and is counted. The judge sees the criterion
+// and the text only, never the gate result or the reference.
 //
 // Hybrid: a regex extracts the value first; when it finds none, the LLM extractor answers
 // {value, quote} under the same quote check, and the quote must state the value.
 //
-// Cache: every answer (or the error in its place) is kept under sha256 of (model, effort, prompt
-// version, prompt, graded text), and the entries go into the trial record, so a regrade from
+// Failures: a client error (401, 403, a billing 400, retries exhausted, a substituted model, a
+// spend refusal, any error that stops the batch) is not an answer. It is thrown as
+// JudgeClientError, never cached, and the grader ends the trial INFRA_API. Only a response that
+// parsed (or failed to parse twice) is cached as an answer or an unknown.
+//
+// Allowance: a trial's judge calls are bounded by its projection, two calls (the schema retry)
+// per judge and hybrid item, counted per call, whichever item makes them (a code item that asks
+// ctx.judge included). Past the bound a question is not sent: it is unknown, marked 'judge
+// allowance reached' in the record.
+//
+// Cache: every answer is kept under sha256 of (model, effort, prompt version, prompt, graded
+// text), with the calls it took, and the entries go into the trial record, so a regrade from
 // them is byte-identical and free. With a cache and no client (regrade, replay), a miss is an
 // error: JudgeCacheMiss. With neither, judge and hybrid-fallback items are unknown.
-import { MODEL, reserveRequest, type CallResult, type MessageParam, type MessageParams, type SendOptions } from '../core/anthropic.ts';
+import { ApiError, MODEL, reserveRequest, type CallResult, type MessageParam, type MessageParams, type SendOptions } from '../core/anthropic.ts';
 import { worstCaseUsd } from '../core/cost.ts';
+import { SpendRefused } from '../core/ledger.ts';
 import type { Check, Json, Verdict } from './check.ts';
 import { canonicalNumber } from './normalize.ts';
 
@@ -27,6 +40,9 @@ export const JUDGE_MAX_TOKENS = 1024;
 // A request body over this many bytes is not sent: the item is unknown. It bounds the worst
 // case a judge call can cost, which the projection allowance below is built from.
 export const JUDGE_MAX_BODY_BYTES = 64_000;
+// Calls each judge or hybrid item may make: the first and the schema retry.
+export const JUDGE_CALLS_PER_ITEM = 2;
+export const ALLOWANCE_REACHED = 'judge allowance reached';
 
 // The part of MessagesClient the judge uses (the loop's TrialClient).
 export interface JudgeClient {
@@ -60,9 +76,23 @@ export interface JudgeCacheEntry {
   model: string;
   effort: string;
   prompt_version: string;
-  // The parsed answer; null when there is none (invalid twice, or an error).
+  // The parsed answer; null when there is none (invalid twice, over the size cap or the
+  // allowance).
   answer: { [k: string]: Json } | null;
   error: string | null;
+  // The API calls the answer took: 0, 1 or 2.
+  calls: number;
+}
+
+// A judge or extractor call the client failed: infrastructure, not an answer.
+export class JudgeClientError extends Error {
+  override readonly name = 'JudgeClientError';
+  // The client says the batch stops (a 400, a substituted model, a spend refusal).
+  readonly stopsBatch: boolean;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause));
+    this.stopsBatch = (cause instanceof ApiError && cause.stopsBatch) || cause instanceof SpendRefused;
+  }
 }
 
 export class JudgeCacheMiss extends Error {
@@ -144,6 +174,8 @@ const numbersIn = (quote: string): number[] => (quote.match(/\d[\d,]*(?:\.\d+)?|
 export interface JudgeOptions {
   client?: JudgeClient | null;
   cache?: readonly JudgeCacheEntry[];
+  // The most live calls this grading may make (judgeCallBudget); unbounded when absent.
+  maxCalls?: number;
 }
 
 export class Judge {
@@ -152,13 +184,15 @@ export class Judge {
   readonly #regrade: boolean;
   // The entries this grading used, in order of first use.
   readonly #used = new Map<string, JudgeCacheEntry>();
+  readonly #maxCalls: number;
   #cost = 0;
-  #asked = 0;
+  #live = 0;
 
   constructor(opts: JudgeOptions = {}) {
     this.#client = opts.client ?? null;
     this.#cache = new Map((opts.cache ?? []).map((e) => [e.key, e]));
     this.#regrade = this.#client === null && opts.cache !== undefined;
+    this.#maxCalls = opts.maxCalls ?? Infinity;
   }
 
   // What the live calls cost, as the ledger settled them.
@@ -166,9 +200,16 @@ export class Judge {
     return this.#cost;
   }
 
-  // Questions answered by the judge or the extractor, live or from the cache.
-  get asked(): number {
-    return this.#asked;
+  // The API calls behind the answers this grading used, live or from the cache.
+  get calls(): number {
+    let n = 0;
+    for (const e of this.#used.values()) n += e.calls;
+    return n;
+  }
+
+  // Questions not sent because the allowance was reached.
+  get overAllowance(): number {
+    return [...this.#used.values()].filter((e) => e.error === ALLOWANCE_REACHED).length;
   }
 
   entries(): JudgeCacheEntry[] {
@@ -209,43 +250,45 @@ export class Judge {
   }
 
   // The cached entry for this prompt and text, or a live answer cached now; null when there is
-  // neither a client nor a cache. A live answer that fails `valid` is asked once more.
+  // neither a client nor a cache. A live answer that fails `valid` is asked once more, within
+  // the allowance. A client error is thrown as JudgeClientError and nothing is cached.
   async #ask(kind: JudgeCacheEntry['kind'], prompt: string, text: string, valid: (a: { [k: string]: Json }) => boolean): Promise<{ entry: JudgeCacheEntry } | null> {
     const key = await sha256Hex(JSON.stringify([MODEL, JUDGE_EFFORT, JUDGE_PROMPT_VERSION, prompt, text]));
     const cached = this.#used.get(key) ?? this.#cache.get(key);
     if (cached === undefined && this.#regrade) throw new JudgeCacheMiss(key);
     if (cached === undefined && this.#client === null) return null;
-    this.#asked++;
-    let entry = cached;
-    if (entry === undefined) {
-      const base = { key, kind, model: MODEL, effort: JUDGE_EFFORT, prompt_version: JUDGE_PROMPT_VERSION };
-      entry = { ...base, answer: null, error: null };
-      const history: MessageParam[] = [{ role: 'user', content: prompt }];
-      if (reserveRequest(history, PARAMS).bodyBytes > JUDGE_MAX_BODY_BYTES) entry = { ...base, answer: null, error: `text over the judge's ${JUDGE_MAX_BODY_BYTES}-byte cap` };
-      else {
-        try {
-          for (let attempt = 1; attempt <= 2; attempt++) {
-            const result = await this.#client!.send([...history], PARAMS, { onSettle: (usd) => (this.#cost += usd) });
-            const answer = result.refusal === null ? parseAnswer(result) : null;
-            if (answer !== null && valid(answer)) {
-              entry = { ...base, answer, error: null };
-              break;
-            }
-          }
-          if (entry.answer === null) entry = { ...base, answer: null, error: 'invalid judge output' };
-        } catch (e) {
-          entry = { ...base, answer: null, error: `judge error: ${(e as Error).message}` };
-        }
-      }
-    }
+    const entry = cached ?? (await this.#send(key, kind, prompt, valid));
     this.#used.set(key, entry);
     return { entry };
   }
+
+  async #send(key: string, kind: JudgeCacheEntry['kind'], prompt: string, valid: (a: { [k: string]: Json }) => boolean): Promise<JudgeCacheEntry> {
+    const base = { key, kind, model: MODEL, effort: JUDGE_EFFORT, prompt_version: JUDGE_PROMPT_VERSION };
+    const history: MessageParam[] = [{ role: 'user', content: prompt }];
+    if (reserveRequest(history, PARAMS).bodyBytes > JUDGE_MAX_BODY_BYTES) return { ...base, answer: null, error: `text over the judge's ${JUDGE_MAX_BODY_BYTES}-byte cap`, calls: 0 };
+    let calls = 0;
+    while (calls < JUDGE_CALLS_PER_ITEM && this.#live < this.#maxCalls) {
+      this.#live++;
+      calls++;
+      let result: CallResult;
+      try {
+        result = await this.#client!.send([...history], PARAMS, { onSettle: (usd) => (this.#cost += usd) });
+      } catch (e) {
+        throw new JudgeClientError(e);
+      }
+      const answer = result.refusal === null ? parseAnswer(result) : null;
+      if (answer !== null && valid(answer)) return { ...base, answer, error: null, calls };
+    }
+    return { ...base, answer: null, error: calls === 0 ? ALLOWANCE_REACHED : 'invalid judge output', calls };
+  }
 }
 
-// The projection allowance for a trial's judge and hybrid items: each may make two calls (the
-// schema retry), each at most a JUDGE_MAX_BODY_BYTES request with JUDGE_MAX_TOKENS of output.
+// The judge calls a trial may make: two (the schema retry) per judge and hybrid item. The
+// Judge enforces it at run time, whichever item makes the calls.
+export const judgeCallBudget = (checks: readonly Check[]): number => JUDGE_CALLS_PER_ITEM * checks.filter((c) => c.kind === 'rubric' && c.method !== 'code').length;
+
+// The projection allowance for a trial's judge calls, each at most a JUDGE_MAX_BODY_BYTES
+// request with JUDGE_MAX_TOKENS of output.
 export function judgeAllowanceUsd(checks: readonly Check[]): number {
-  const items = checks.filter((c) => c.kind === 'rubric' && c.method !== 'code').length;
-  return items * 2 * worstCaseUsd({ bodyBytes: JUDGE_MAX_BODY_BYTES, maxTokens: JUDGE_MAX_TOKENS });
+  return judgeCallBudget(checks) * worstCaseUsd({ bodyBytes: JUDGE_MAX_BODY_BYTES, maxTokens: JUDGE_MAX_TOKENS });
 }
