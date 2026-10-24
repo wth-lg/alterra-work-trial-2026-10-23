@@ -15,7 +15,8 @@
 //                            settled at the worst case: usage is unknown, and the partial
 //                            answer is discarded, never appended to the conversation
 // Retried: 408, 409, 429, 5xx (529 included), an error event mid-stream, a dropped stream, a
-// network error; up to maxAttempts, waiting retry-after or an exponential backoff. An abort is
+// network error; up to maxAttempts (8), waiting retry-after (at most 60 s) or an exponential
+// backoff with jitter from 2 s to 60 s (design section 1, "Failure modes"). An abort is
 // never retried: send takes a per-request signal, combined with the grant's, and once either
 // has aborted the call throws the abort reason. Aborted before the reserve, nothing is
 // reserved or sent; aborted in flight, the attempt is settled at the worst case. A 400, 401,
@@ -54,10 +55,18 @@ import { redactText } from './redact.ts';
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2026-10-21';
 export const MODEL = 'claude-opus-5-5';
-export const MAX_ATTEMPTS = 4;
-const BACKOFF_BASE_MS = 1000;
-const BACKOFF_MAX_MS = 30_000;
+// Design section 1, "Failure modes": a 429 honours retry-after, else exponential backoff with
+// jitter, 2 s to 60 s, 8 attempts; a 529, other 5xx, network error or dropped stream gets the
+// same backoff.
+export const MAX_ATTEMPTS = 8;
+const BACKOFF_BASE_MS = 2000;
+const BACKOFF_MAX_MS = 60_000;
 const RETRY_AFTER_MAX_MS = 60_000;
+
+// The wait before retry `attempt` + 1: the exponential step (2 s, 4 s, ... up to 60 s) times a
+// jitter factor from 0.5 to 1, never under 2 s.
+const backoffMs = (attempt: number, random: number): number =>
+  Math.max(BACKOFF_BASE_MS, Math.round(Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS) * (0.5 + random / 2)));
 
 const API_HOST = new URL(MESSAGES_URL).hostname;
 const API_DOMAIN = API_HOST.slice(API_HOST.indexOf('.') + 1);
@@ -456,6 +465,8 @@ export interface ClientOptions {
   trial?: string;
   // Attempts per send, retries included; default MAX_ATTEMPTS.
   maxAttempts?: number;
+  // A number in [0, 1) for the backoff jitter; default Math.random.
+  random?: () => number;
 }
 
 export interface SendOptions {
@@ -503,6 +514,7 @@ export class MessagesClient {
   readonly #log: (line: string) => void;
   readonly #trial: string | undefined;
   readonly #maxAttempts: number;
+  readonly #random: () => number;
 
   constructor(opts: ClientOptions) {
     assertClientGrant(opts.grant, opts.ledger);
@@ -519,6 +531,7 @@ export class MessagesClient {
     this.#log = (line) => opts.log?.(redactText(line, [opts.apiKey]));
     this.#trial = opts.trial;
     this.#maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
+    this.#random = opts.random ?? Math.random;
   }
 
   // Sends history + params and, on a complete answer that is not a refusal, appends it to
@@ -556,7 +569,7 @@ export class MessagesClient {
           throw err;
         }
         if (!(err instanceof ApiError) || !err.retryable || attempt >= this.#maxAttempts) throw err;
-        await sleepUnlessAborted(this.#sleep, err.retryAfter !== null ? Math.min(err.retryAfter * 1000, RETRY_AFTER_MAX_MS) : Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS), signal);
+        await sleepUnlessAborted(this.#sleep, err.retryAfter !== null ? Math.min(err.retryAfter * 1000, RETRY_AFTER_MAX_MS) : backoffMs(attempt, this.#random()), signal);
         continue;
       }
       await settle(res, out.message.usage);

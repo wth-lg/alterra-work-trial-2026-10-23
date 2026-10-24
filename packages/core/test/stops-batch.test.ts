@@ -2,14 +2,14 @@
 // send: the trial loop and the judge. 401, 403, a 404 (the model: /v1/messages is the only
 // endpoint) and a billing 400 are INFRA_API and stop the batch; any other 400 is a request we
 // built wrong, INFRA_HARNESS, and stops it too. Each closes the grant. Retries exhausted (a 529
-// on every attempt) is INFRA_API, rerun, and does not stop the batch (design section 5,
+// on all 8 attempts) is INFRA_API, rerun, and does not stop the batch (design section 5,
 // "Outcomes"). The loop and the judge read one classification, classifyFailure.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { okResponse, scriptedTransport, SCENARIOS } from '../../../apps/web/src/harness/scenarios.ts';
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { judged, type Check } from '../../grader/check.ts';
-import { ApiError, classifyFailure, MessagesClient, type Transport } from '../anthropic.ts';
+import { ApiError, classifyFailure, MAX_ATTEMPTS, MessagesClient, type Transport } from '../anthropic.ts';
 import { admitStore, createLedger, SpendRefused, type LedgerRow, type LedgerStore } from '../ledger.ts';
 import { run } from '../run.ts';
 
@@ -116,7 +116,9 @@ describe('through the trial loop', () => {
   it('retries exhausted (529 on every attempt): INFRA_API, rerun, the batch goes on', async () => {
     let sends = 0;
     const r = await trial({ trial: async () => (sends++, error(529, 'overloaded_error', 'Overloaded')()) });
-    expect(sends).toBe(4);
+    // Design section 1: the same backoff as a 429, 8 attempts.
+    expect(MAX_ATTEMPTS).toBe(8);
+    expect(sends).toBe(8);
     expect(r.record).toMatchObject({ status: 'INFRA_API', outcome: 'INFRA_API', valid: false, fault: 'infra', detail: 'overloaded_error' });
     expect(r.closes).toBe(0);
     expect(r.after).not.toMatch(/closed/);
@@ -136,7 +138,7 @@ describe('through the judge', () => {
 
   it('retries exhausted on the judge: INFRA_API, stops_batch false, the batch goes on', async () => {
     const r = await trial({ judge: error(529, 'overloaded_error', 'Overloaded') });
-    expect(r.judgeSends).toBe(4);
+    expect(r.judgeSends).toBe(8);
     expect(r.record).toMatchObject({ status: 'COMPLETED', outcome: 'INFRA_API', valid: false, fault: 'infra', error: { check: 'J1', stops_batch: false } });
     expect(r.closes).toBe(0);
     expect(r.after).not.toMatch(/closed/);
