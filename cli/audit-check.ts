@@ -20,8 +20,9 @@
 //   - confirmation criteria M1 and M4 (outcomes.ts CONFIRMATION_CRITERIA) are met on every failure:
 //     pending is a violation too, because an audited trial must show met or not met;
 //   - no failure is the environment's or the grader's fault (explain.ts excludedFromHeadline): such
-//     a trial is excluded from the headline denominator and blocks the run (DENOMINATOR_RULE). This
-//     is where that block is enforced; summary.ts reads no audit rows, matrix or world;
+//     a trial is not allowed in a committed run, so a run with one has no headline pass rate
+//     (DENOMINATOR_RULE). This is where that block is enforced; summary.ts reads no audit rows,
+//     matrix or world;
 //   - no run-level block (outcomes.ts RUN_BLOCKS, B1: the oracle or an alternative fails the matrix)
 //     holds on any task_version of the run, named once per task_version;
 //   - no attempt, re-queued ones included, had an INTERNAL tool error;
@@ -39,7 +40,10 @@
 // oracle or an alternative fails; a value that is not a list of strings reads as not given); and, on a regraded trial whose first failed check is not the one
 // its recorded attribution names, that check's decisive ids (from the task's gate checks) with the
 // step each was first exposed at in the trajectory (packages/grader/exposure.ts firstExposed).
-// --json prints {failures, labelled, environment, grader, violations}. Exit 2 on a usage error.
+// --json prints {failures, labelled, environment, grader, valid, excluded, denominator, violations}:
+// valid counts the settled trials whose current grade is valid, excluded names (sorted) the
+// failures excludedFromHeadline names, and denominator is valid without them, for the UI and the
+// writeup; a run with an excluded trial fails, so it has no headline pass rate. Exit 2 on a usage error.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -177,7 +181,9 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   };
   const stepsFor = async (r: BatchRecord) => stepsOf((await ctxOf(r)).events);
 
-  const failures = [...records.values()].filter((r) => currentGrade(r).valid && currentGrade(r).outcome !== 'PASS');
+  const valid = [...records.values()].filter((r) => currentGrade(r).valid);
+  const failures = valid.filter((r) => currentGrade(r).outcome !== 'PASS');
+  const excludedTrials: string[] = [];
   let environment = 0;
   let grader = 0;
   for (const l of labels) {
@@ -231,7 +237,10 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       if ((c.id === 'M1' || c.id === 'M4') && (c.met === false || c.met === 'pending')) v.push(`${name}: ${formatCriterion(c).replace(': ', ' ')}: ${c.evidence}`);
     }
     const excluded = excludedFromHeadline(e);
-    if (excluded !== null) v.push(`${name}: ${excluded}`);
+    if (excluded !== null) {
+      v.push(`${name}: ${excluded}`);
+      excludedTrials.push(name);
+    }
   }
   // A run-level block holds for its whole task_version: named once, from the first record that shows it.
   const blocked = new Map<string, string>();
@@ -276,7 +285,8 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const say = json ? deps.err : deps.out;
   for (const line of v) say(`violation: ${line}`);
   say(`audit-check: ${labelled}/${failures.length} failures labelled, environment ${environment}, grader ${grader}; ${v.length === 0 ? 'every check holds' : `${v.length} violation(s)`}`);
-  if (json) deps.out(JSON.stringify({ failures: failures.length, labelled, environment, grader, violations: v }));
+  const excluded = excludedTrials.sort();
+  if (json) deps.out(JSON.stringify({ failures: failures.length, labelled, environment, grader, valid: valid.length, excluded, denominator: valid.length - excluded.length, violations: v }));
   return v.length === 0 ? 0 : 1;
 }
 

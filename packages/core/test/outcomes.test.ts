@@ -124,14 +124,27 @@ describe('PASS_DEFINITION and DENOMINATOR_RULE', () => {
     expect(DENOMINATOR_RULE).toMatch(/refusal counts as a model failure inside the denominator/);
     expect(DENOMINATOR_RULE).toMatch(/refusal_excluded_rate/);
     // 115: round 3 added the environment- and grader-labelled exclusion and how each is resolved.
-    expect(DENOMINATOR_RULE.split(/\s+/).length).toBeLessThanOrEqual(115);
+    // 135 (+20): round 4 says what is enforced instead (audit-check fails the run, no headline pass rate).
+    expect(DENOMINATOR_RULE.split(/\s+/).length).toBeLessThanOrEqual(135);
   });
 });
 
 describe('round 3 (pr-review P14a-2): denominator, precedence and confirmation text', () => {
-  it('DENOMINATOR_RULE excludes an environment- or grader-labelled valid failure and says how each is resolved (review F3)', () => {
-    expect(DENOMINATOR_RULE).toMatch(/valid failure labelled environment or grader is excluded from the denominator and blocks the run/);
-    expect(DENOMINATOR_RULE).toMatch(/environment fix and a rerun of only the affected trials, disclosed in results\/CHANGELOG\.md, or that grader fix and regrade/);
+  it('DENOMINATOR_RULE says what is enforced on an environment- or grader-labelled valid failure, and how each is resolved (review F3, P14a-3 F2)', () => {
+    const [, second] = DENOMINATOR_RULE.split(/(?<=\.)\s+(?=[A-Z`])/);
+    expect(second).toMatch(/valid failure labelled environment or grader is not allowed in a committed run: cli audit-check fails the run until/);
+    expect(second).toMatch(/a grader label is resolved by that fix and regrade, or an environment label by an environment fix and a rerun of only the affected trials, disclosed in results\/CHANGELOG\.md/);
+    expect(second).toMatch(/so a run with one has no headline pass rate\.$/);
+    // It no longer claims a denominator that nothing reports.
+    expect(DENOMINATOR_RULE).not.toMatch(/labelled environment or grader is excluded from the denominator/);
+  });
+
+  it('M4 judges only a FAIL: a REFUSAL or LIMIT comes from the record status, which a grader fix cannot change (P14a-3 F1)', () => {
+    const m4 = CONFIRMATION_CRITERIA.find((c) => c.id === 'M4')!;
+    expect(m4.text).toMatch(/outcome is not FAIL/);
+    expect(m4.reads).toContain('record.outcome');
+    const gr4 = FAULT_DEFINITIONS.grader.criteria.find((c) => c.id === 'GR4')!;
+    expect(gr4.text).toMatch(/FAIL/);
   });
 
   it('FAULT_PRECEDENCE_RULE no longer says an environment fault only reruns the trial, and gives the reason for each step', () => {

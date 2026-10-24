@@ -21,7 +21,7 @@ async function check(dir: string, checks?: (task: string) => Promise<ReadonlyArr
   const out: string[] = [];
   const err: string[] = [];
   const code = await auditCheck([dir, '--json'], { out: (l) => out.push(l), err: (l) => err.push(l), ...(checks ? { checks } : {}) });
-  return { code, json: JSON.parse(out.join('\n')) as { violations: string[]; environment: number; grader: number }, text: err.join('\n') };
+  return { code, json: JSON.parse(out.join('\n')) as { violations: string[]; environment: number; grader: number; valid: number; excluded: string[]; denominator: number }, text: err.join('\n') };
 }
 
 const readJson = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
@@ -244,14 +244,31 @@ describe('audit-check: review round 3 (pr-review P14a-2)', () => {
     expect(r.json.environment).toBe(0);
   });
 
-  it('D3: a valid failure correctly labelled environment still blocks the run, excluded from the headline denominator', async () => {
+  it('D3: a valid failure correctly labelled environment still blocks the run; --json names it as excluded from the denominator', async () => {
     const dir = run('never-exposable');
     writeLabels(dir, labels(dir).map((l) => (l.trial === 't-beta/9' ? { ...l, taxonomy: 'environment', label: 'environment', model_fault: 'no', criteria: undefined } : l)));
     const r = await check(dir, fixtureChecks);
     expect(r.code).toBe(1);
     const v = r.json.violations.join('\n');
     expect(v).not.toMatch(/t-beta\/9: labelled/);
-    expect(v).toMatch(/t-beta\/9: FAIL is the environment's fault \(E5\): excluded from the headline denominator, and it blocks the run/);
+    expect(v).toMatch(/t-beta\/9: FAIL is the environment's fault \(E5\): not allowed in a committed run, so the run fails and has no headline pass rate until an environment fix/);
     expect(r.json.environment).toBe(1);
+    expect(r.json.excluded).toEqual(['t-beta/9']);
+    expect(r.json.denominator).toBe(r.json.valid - 1);
+  });
+
+  it('--json reports the valid trials, the excluded trial ids and the denominator without them (P14a-3 denominator)', async () => {
+    const clean = run('clean');
+    const ok = await check(clean);
+    expect(ok.code).toBe(0);
+    expect(ok.json).toMatchObject({ valid: 20, excluded: [], denominator: 20 });
+    // The matrix fails G1 on t-alpha's task_version: every t-alpha FAIL is the grader's (GR4).
+    writeJson(join(clean, 'matrix.json'), { task_versions: { 'v-t-alpha': { oracle_pass: false, alternatives_pass: true, failed_checks: ['G1'] }, 'v-t-beta': { oracle_pass: true, alternatives_pass: true } } });
+    const gr4 = await check(clean);
+    expect(gr4.code).toBe(1);
+    const named = gr4.json.violations.flatMap((l) => /^(\S+): FAIL is the grader's fault \(GR4\)/.exec(l)?.[1] ?? []);
+    expect(named.length).toBe(5);
+    expect(gr4.json.excluded).toEqual([...named].sort());
+    expect(gr4.json).toMatchObject({ valid: 20, denominator: 15 });
   });
 });

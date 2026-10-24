@@ -4,10 +4,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { auditLabelOf, blocksRun, explainTrial, formatCriterion, NOT_AUDITED_MARKER, type AuditRow, type ExplainContext, type ExplainRecord } from '../explain.ts';
+import { auditLabelOf, blocksRun, excludedFromHeadline, explainTrial, formatCriterion, NOT_AUDITED_MARKER, type AuditRow, type ExplainContext, type ExplainRecord } from '../explain.ts';
 import { CONFIRMATION_CRITERIA, FAULT_DEFINITIONS, FAULT_PRECEDENCE, OUTCOMES, type Fault, type Outcome } from '../outcomes.ts';
 import { TAXONOMY, type Taxonomy } from '../../grader/attribution.ts';
 import { repoRoot } from '../../../scripts/test/helpers.ts';
+import { grade } from '../../grader/grade.ts';
+import { loadStore } from '../../env/fixture-source.ts';
+import { checks as renalChecks } from '../../../tasks/renal-dose-review/tests/grader.ts';
+import { MODEL } from '../anthropic.ts';
 
 const MANIFEST = 'h-manifest';
 const V = 'v-1';
@@ -450,11 +454,11 @@ describe('explainTrial: review round 3 (pr-review P14a-2)', () => {
     expect(crit(explainTrial(record('FAIL'), { ...agreeing, llm_auditor_agrees: null }, ctx), 'M5').met).toBe(true);
   });
 
-  it('D3: an environment- or grader-labelled valid failure is excluded from the headline and blocks the run', () => {
+  it('D3: an environment- or grader-labelled valid failure is not allowed in a committed run and blocks it', () => {
     const e5 = explainTrial(record('FAIL', { checks: [gate('G1', false, { expected: '500', found: '1000' })], attribution: { auto: 'retrieval', first_failed: 'G1', decisive_step: 9, exposure: [{ id: NOT_IN_WORLD, first_exposed_step: null }] } }), undefined, ctx);
     expect(e5).toMatchObject({ fault: 'env', label: 'environment', valid: true, outcome: 'FAIL' });
-    expect(blocksRun(e5)).toMatch(/excluded from the headline denominator/);
-    expect(blocksRun(explainTrial(record('FAIL'), undefined, { ...ctx, matrix: failsG1 }))).toMatch(/excluded from the headline denominator/);
+    expect(blocksRun(e5)).toMatch(/not allowed in a committed run/);
+    expect(blocksRun(explainTrial(record('FAIL'), undefined, { ...ctx, matrix: failsG1 }))).toMatch(/not allowed in a committed run/);
     expect(blocksRun(explainTrial(record('FAIL'), undefined, ctx))).toBeNull();
     expect(blocksRun(explainTrial(record('PASS'), undefined, ctx))).toBeNull();
     // An excluded outcome is handled by its own rule (rerun, or summary's grader_error), not here.
@@ -490,5 +494,53 @@ describe('explainTrial: review round 3 (pr-review P14a-2)', () => {
   it('verify m3: I1 holds when the requested model is not MODEL, even if the API returned what was asked', () => {
     const x = explainTrial(record('FAIL', { model_requested: 'claude-other', models_returned: ['claude-other'] }), undefined, ctx);
     expect(x).toMatchObject({ fault: 'infra', deciding: { id: 'I1', evidence: expect.stringMatching(/claude-other/) } });
+  });
+});
+
+describe('explainTrial: review round 4 (pr-review P14a-3)', () => {
+  // A REFUSAL or LIMIT as the real grader grades it: grade() still runs the gate checks, so a
+  // turn-1 refusal carries failed gates. Gates only, so no judge is asked.
+  const H = 'h-real';
+  const realGrade = async (status: 'REFUSAL' | 'LIMIT') => {
+    const bytes = new Uint8Array(readFileSync(join(repoRoot, 'fixtures/world.ndjson.gz')));
+    const world = [...(await loadStore({ read: async () => bytes })).resources()];
+    const events = status === 'REFUSAL' ? refusalEvents : limitEvent('turns', 80, 80);
+    const state_hash = { initial: H, final: H, replay_final: H };
+    const trial = { status, models_returned: [MODEL], tool_errors: { INTERNAL: 0 }, state_hash, summary: status === 'REFUSAL' ? 'I cannot change medication orders without a prescriber.' : null } as never;
+    const g = await grade({ checks: renalChecks.filter((c) => c.kind === 'gate'), initial: world, final: world, events, trial });
+    const rec = record(status, {
+      outcome: g.outcome, valid: g.valid, detail: status === 'LIMIT' ? 'turns' : null, stop_reason: status === 'REFUSAL' ? 'refusal' : 'tool_use', turns: status === 'LIMIT' ? 80 : 1,
+      model_requested: MODEL, models_returned: [MODEL], summary: status === 'REFUSAL' ? 'I cannot change medication orders without a prescriber.' : null, state_hash,
+      checks: g.checks as NonNullable<ExplainRecord['checks']>, attribution: g.attribution as NonNullable<ExplainRecord['attribution']>,
+    });
+    const failed = g.checks.find((c) => c.kind === 'gate' && c.met === false)!.id;
+    return { g, rec, failed, c: { ...ctx, events, world_state_hash: H, exposable: () => true } };
+  };
+
+  it.each(['REFUSAL', 'LIMIT'] as const)('F1: a real %s whose failed gate the matrix also fails is the model\'s, not the grader\'s; the matrix stays note B1', async (status) => {
+    const { g, rec, failed, c } = await realGrade(status);
+    expect(g.outcome).toBe(status);
+    const matrix = { task_version: V, oracle_pass: false, alternatives_pass: true, failed_checks: [failed] };
+    const x = explainTrial(rec, undefined, { ...c, matrix });
+    expect(x).toMatchObject(status === 'REFUSAL' ? { fault: 'refusal', label: 'model', label_subtype: 'refusal' } : { fault: 'model', label: 'model', label_subtype: null });
+    expect(x.deciding?.id).not.toBe('GR4');
+    expect(x.criteria.find((k) => k.id === 'M4')).toMatchObject({ met: true });
+    expect(x.criteria.find((k) => k.id === 'M4')!.evidence).toMatch(new RegExp(`${status}`));
+    expect(x.notes.map((n) => n.id)).toEqual(['B1']);
+    expect(x.reason).not.toMatch(/grader/);
+    expect(excludedFromHeadline(x)).toBeNull();
+    expect(blocksRun(x)).toMatch(/^B1 holds/);
+    // The same matrix on a FAIL of that check is still the grader's (GR4).
+    const fail = explainTrial({ ...rec, outcome: 'FAIL', status: 'COMPLETED' }, undefined, { ...c, matrix });
+    expect(fail).toMatchObject({ fault: 'grader', deciding: { id: 'GR4' } });
+  });
+
+  it('F2: excludedFromHeadline says the trial is not allowed in a committed run and leaves the run without a headline pass rate', () => {
+    const gr4 = explainTrial(record('FAIL'), undefined, { ...ctx, matrix: { task_version: V, oracle_pass: false, alternatives_pass: true, failed_checks: ['G1'] } });
+    const msg = excludedFromHeadline(gr4)!;
+    expect(msg).toMatch(/^FAIL is the grader's fault \(GR4\): not allowed in a committed run/);
+    expect(msg).toMatch(/no headline pass rate/);
+    expect(msg).toMatch(/a grader fix and a full offline regrade/);
+    expect(msg).not.toMatch(/excluded from the headline denominator/);
   });
 });

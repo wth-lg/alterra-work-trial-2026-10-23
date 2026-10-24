@@ -166,14 +166,15 @@ const M3: Criterion = {
 };
 const M4: Criterion = {
   id: 'M4',
-  text: "The task's oracle and every declared alternative pass the grader validation matrix on the trial's task_version, or none of them fails the gate check the trial failed.",
-  reads: ['record.task_version', 'record.checks (the first failed gate check)', 'matrix oracle_pass, alternatives_pass and failed_checks for that task_version'],
-  check: ({ matrix, task_version, decisive }) => {
+  text: "The task's oracle and every declared alternative pass the grader validation matrix on the trial's task_version, or none of them fails the gate check the trial failed, or the trial's outcome is not FAIL (a REFUSAL or LIMIT comes from the record status, which no grader fix changes).",
+  reads: ['record.outcome', 'record.task_version', 'record.checks (the first failed gate check)', 'matrix oracle_pass, alternatives_pass and failed_checks for that task_version'],
+  check: ({ outcome, matrix, task_version, decisive }) => {
     if (matrix === null) return result('pending', `no grader validation matrix result for ${task_version}`);
     if (matrix.task_version !== task_version) return result('pending', `the matrix result is for task_version ${matrix.task_version}, the trial ran ${task_version}`);
     const verdict = `oracle ${matrix.oracle_pass ? 'passes' : 'fails'}, alternatives ${matrix.alternatives_pass ? 'all pass' : 'do not all pass'} on ${task_version}`;
     if (matrix.oracle_pass && matrix.alternatives_pass) return result(true, verdict);
     if (decisive === null) return result(true, `${verdict}; the trial failed no gate check`);
+    if (outcome !== 'FAIL') return result(true, `${verdict}; the outcome ${outcome} comes from the record status, not from ${decisive.id}`);
     if (matrix.failed_checks === undefined) return result('pending', `${verdict}; the matrix does not say which checks fail, so it cannot say whether ${decisive.id} does`);
     const fails = matrix.failed_checks.includes(decisive.id);
     return result(!fails, `${verdict}, failing ${matrix.failed_checks.length === 0 ? 'no named check' : list(matrix.failed_checks)}; the trial failed ${decisive.id}`);
@@ -302,7 +303,7 @@ export const FAULT_DEFINITIONS: Readonly<Record<Fault, FaultDefinition>> = {
       },
       {
         id: 'GR4',
-        text: "The task's oracle or a declared alternative fails, on the trial's task_version, the same gate check the trial failed, as the matrix's failed_checks names it (M4 not met).",
+        text: "The trial is a FAIL, and the task's oracle or a declared alternative fails, on the trial's task_version, the same gate check the trial failed, as the matrix's failed_checks names it (M4 not met).",
         reads: M4.reads,
         check: negation(M4.check),
       },
@@ -362,7 +363,7 @@ export const PASS_DEFINITION = 'A trial is a PASS when every gate check of its c
 
 export const DENOMINATOR_RULE = [
   `Only ${list(VALID_OUTCOMES)} count in the denominator, and every other outcome is excluded: ${list(RERUN_OUTCOMES)} are excluded and rerun, and ${list(NEVER_RERUN)} ${NEVER_RERUN.length === 1 ? 'is' : 'are'} excluded and never rerun as a model trial.`,
-  'A GRADER_ERROR in a committed run blocks the run until a grader fix and a full offline regrade, and a valid failure labelled environment or grader is excluded from the denominator and blocks the run until an environment fix and a rerun of only the affected trials, disclosed in results/CHANGELOG.md, or that grader fix and regrade.',
+  'A GRADER_ERROR in a committed run blocks the run until a grader fix and a full offline regrade, and a valid failure labelled environment or grader is not allowed in a committed run: cli audit-check fails the run until a grader label is resolved by that fix and regrade, or an environment label by an environment fix and a rerun of only the affected trials, disclosed in results/CHANGELOG.md, so a run with one has no headline pass rate.',
   'A refusal counts as a model failure inside the denominator, and refusal_excluded_rate gives the pass rate with refusals left out.',
 ].join(' ');
 

@@ -366,15 +366,17 @@ export function explainTrial(record: ExplainRecord, audit: AuditRow | null | und
   };
 }
 
-// Why a trial blocks the run, or null. A valid failure labelled environment or grader is excluded
-// from the headline denominator and blocks the run (DENOMINATOR_RULE); a run-level block (B1) on
-// its task_version blocks it too. Excluded outcomes are not covered here: INFRA and ENV_ERROR are
-// rerun, and summary --require grader_error=0 blocks a GRADER_ERROR. cli/audit-check.ts enforces
-// both: summary.ts sees no audit rows, matrix or world, so it cannot compute these labels.
+// Why a trial blocks the run, or null. A valid failure labelled environment or grader is not
+// allowed in a committed run, so a run with one has no headline pass rate (DENOMINATOR_RULE); a
+// run-level block (B1) on its task_version blocks it too. Excluded outcomes are not covered here:
+// INFRA and ENV_ERROR are rerun, and summary --require grader_error=0 blocks a GRADER_ERROR.
+// cli/audit-check.ts enforces both, and its --json names these trials as excluded with the
+// denominator without them: summary.ts sees no audit rows, matrix or world, so it cannot compute
+// these labels.
 export function excludedFromHeadline(e: Explanation): string | null {
   if (!e.valid || e.outcome === 'PASS' || (e.fault !== 'env' && e.fault !== 'grader')) return null;
-  const fix = e.fault === 'env' ? 'an environment fix and a rerun of the affected trials' : 'a grader fix and a full offline regrade';
-  return `${e.outcome} is the ${e.fault === 'env' ? "environment's" : "grader's"} fault (${e.deciding!.id}): excluded from the headline denominator, and it blocks the run until ${fix}`;
+  const fix = e.fault === 'env' ? 'an environment fix and a rerun of the affected trials, disclosed in results/CHANGELOG.md' : 'a grader fix and a full offline regrade';
+  return `${e.outcome} is the ${e.fault === 'env' ? "environment's" : "grader's"} fault (${e.deciding!.id}): not allowed in a committed run, so the run fails and has no headline pass rate until ${fix}`;
 }
 
 export function blocksRun(e: Explanation): string | null {
