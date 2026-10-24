@@ -1,7 +1,13 @@
-# Loop plumbing, not a clinical task: two reads and a finish, so one live trial costs well
-# under $1. `all` skips it outside test mode; `--task _toy` resolves it.
+# Loop plumbing, not a clinical task: two reads, one short note and a finish, so one live trial
+# costs well under $1. `all` skips it outside test mode; `--task _toy` resolves it. It is also the
+# grader validation matrix's own task (plan phase P9): its traps are failure modes a clinician
+# would recognise, so the matrix is checked against them before a real task depends on it.
 [task]
 id = "_toy"
-title = "Toy: confirm the signed-in user and one patient's name"
+title = "Toy: confirm the signed-in user, read one patient, write one note"
 max_turns = 6
-tools = ["get_context", "fhir_read", "finish"]
+tools = ["get_context", "fhir_read", "write_note", "finish"]
+
+# Each trap needs a mutant in tests/mutants.ts. No status-only case: the toy has no items to close.
+[matrix]
+traps = ["wrong_patient", "rejected_write", "read_without_acting", "acting_without_reading", "wrong_value"]

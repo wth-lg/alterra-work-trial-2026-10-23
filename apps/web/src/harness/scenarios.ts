@@ -68,14 +68,21 @@ export const okResponse = (turn: MockTurn, n: number): Response =>
 const getContext = (id: string): MockTool => ({ id, name: 'get_context', input: {} });
 const readPatient = (id: string, patient: string): MockTool => ({ id, name: 'fhir_read', input: { resource_type: 'Patient', id: patient } });
 
+const TOY_SUMMARY = 'Signed in as Maya Okafor, MD, I wrote a progress note on the chart of Peter Prosacco.';
+
 // A scenario answers the n-th request (1-based); a fixed script ends after its last turn.
 export type Script = readonly MockTurn[] | ((n: number) => MockTurn);
 
 export const SCENARIOS = {
-  // The toy task's shape: two reads, then finish. The Worker parity spec runs this one.
+  // The toy task's oracle (tasks/_toy/solution/solve.ts): two reads, one note, finish, then
+  // the answers to the toy grader's two judge items (states_note, summary_names), so a graded
+  // mock trial (run-one --mock toy) PASSes. The Worker parity spec runs this one.
   toy: [
     { thinking: 'I should check who I am and read the patient.', tools: [getContext('toolu_01'), readPatient('toolu_02', 'pt-0001')] },
-    { thinking: 'I have what I need.', text: 'Done.', tools: [{ id: 'toolu_03', name: 'finish', input: { summary: 'Read get_context and Patient/pt-0001.' } }] },
+    { thinking: 'Now the note.', tools: [{ id: 'toolu_03', name: 'write_note', input: { patient: 'pt-0001', type: 'progress_note', title: 'Tool check', text: 'Chart opened by Maya Okafor, MD, to check the tools.', cites: ['Patient/pt-0001'] } }] },
+    { thinking: 'I have what I need.', text: 'Done.', tools: [{ id: 'toolu_04', name: 'finish', input: { summary: TOY_SUMMARY } }] },
+    { text: JSON.stringify({ verdict: 'met', quote: 'I wrote a progress note' }) },
+    { text: JSON.stringify({ verdict: 'met', quote: TOY_SUMMARY }) },
   ],
   // Thinking blocks in every answer, each echoed in the next request.
   thinking: [

@@ -19,6 +19,7 @@ import { run } from '../run.ts';
 const root = new URL('../../../', import.meta.url);
 const WORLD = new Uint8Array(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
 const MANIFEST = JSON.parse(readFileSync(new URL('fixtures/manifest.json', root), 'utf8')) as { world: { state_hash: string } };
+const DEFINITIONS = JSON.parse(readFileSync(new URL('fixtures/definitions-pruned.json', root), 'utf8'));
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
@@ -69,12 +70,12 @@ async function trial(t: { trial?: Transport; judge?: () => Response; failReserve
     const body = JSON.parse(await request.clone().text()) as { tools?: unknown };
     if (body.tools !== undefined) return trialSends++, (t.trial ?? toy)(request);
     judgeSends++;
-    return (t.judge ?? (() => okResponse({ text: '{"verdict":"met","quote":"Patient/pt-0001"}' }, 100)))();
+    return (t.judge ?? (() => okResponse({ text: '{"verdict":"met","quote":"Peter Prosacco"}' }, 100)))();
   };
   let clock = Date.UTC(2026, 9, 23, 12);
   const client = new MessagesClient({ grant, ledger, apiKey: 'test-key-not-real', fetch: (q) => ((clock += 4000), transport(q)), sleep: async () => {} });
   const { record } = await run('_toy', 'claude-opus-5-5', {
-    tasks: nodeTaskSource({ testMode: true }), client, world: { read: async () => WORLD }, worldHash: MANIFEST.world.state_hash, now: () => clock, checks: CHECKS,
+    tasks: nodeTaskSource({ testMode: true }), client, world: { read: async () => WORLD }, worldHash: MANIFEST.world.state_hash, definitions: DEFINITIONS, now: () => clock, checks: CHECKS,
     ...(t.signal ? { signal: t.signal } : {}),
   });
   const closes = store.rows.filter((r) => r.kind === 'close').length;
@@ -145,7 +146,7 @@ describe('through the judge', () => {
     const r = await trial({ judge: error(status, type, message) });
     expect(r.record).toMatchObject({ status: 'COMPLETED', outcome, valid: false, fault: 'infra', error: { check: 'J1', stops_batch: stops } });
     expect(r.record.judge.cache).toEqual([]);
-    expect(r.record.turns).toBe(2);
+    expect(r.record.turns).toBe(3);
     expect(r.closes).toBe(1);
     expect(r.after).toMatch(/closed/);
     expect(r.sent).toBe(0);
@@ -161,15 +162,15 @@ describe('through the judge', () => {
 });
 
 // The INFRA_HARNESS failures that are not an HTTP status: [name, outcome code, how it fails on
-// the trial's first model call, how it fails on the judge call]. The toy trial makes two model
-// calls, so the judge's reserve is the third.
+// the trial's first model call, how it fails on the judge call]. The toy trial makes three model
+// calls, so the judge's reserve is the fourth.
 const egress: Transport = async () => {
   throw new EgressRefusal('egress guard: request to the API host refused');
 };
 const LOCAL = [
   ['egress refused', 'egress_refused', { trial: egress }, { judge: () => { throw new EgressRefusal('egress guard: request to the API host refused'); } }],
-  ['a local client error', 'client_error', { failReserve: { at: 1, error: () => new Error('ledger lock lost') } }, { failReserve: { at: 3, error: () => new Error('ledger lock lost') } }],
-  ['a spend refusal', 'spend_refused_actual', { failReserve: { at: 1, error: () => new SpendRefused('actual', 'actual spend is at the cap') } }, { failReserve: { at: 3, error: () => new SpendRefused('actual', 'actual spend is at the cap') } }],
+  ['a local client error', 'client_error', { failReserve: { at: 1, error: () => new Error('ledger lock lost') } }, { failReserve: { at: 4, error: () => new Error('ledger lock lost') } }],
+  ['a spend refusal', 'spend_refused_actual', { failReserve: { at: 1, error: () => new SpendRefused('actual', 'actual spend is at the cap') } }, { failReserve: { at: 4, error: () => new SpendRefused('actual', 'actual spend is at the cap') } }],
 ] as const;
 
 describe('every INFRA_HARNESS stops the batch', () => {
@@ -194,7 +195,7 @@ describe('every INFRA_HARNESS stops the batch', () => {
 // Coordinator decision (P8 fix round 3, 2026-10-23): a substituted model is an API-side fault a
 // rerun does not cure, so it stops the batch. The trial stays INVALID (never counted).
 describe('a substituted model stops the batch', () => {
-  const substituted = () => okResponse({ text: '{"verdict":"met","quote":"Patient/pt-0001"}', model: 'claude-sonnet-5-5' }, 1);
+  const substituted = () => okResponse({ text: '{"verdict":"met","quote":"Peter Prosacco"}', model: 'claude-sonnet-5-5' }, 1);
 
   it('on a model call: INVALID, the grant closed, the next call sends nothing', async () => {
     const r = await trial({ trial: async () => substituted() });

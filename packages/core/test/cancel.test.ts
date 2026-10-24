@@ -15,6 +15,7 @@ import { toJsonl } from '../trajectory.ts';
 const root = new URL('../../../', import.meta.url);
 const WORLD = new Uint8Array(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
 const MANIFEST = JSON.parse(readFileSync(new URL('fixtures/manifest.json', root), 'utf8')) as { world: { state_hash: string } };
+const DEFINITIONS = JSON.parse(readFileSync(new URL('fixtures/definitions-pruned.json', root), 'utf8'));
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
@@ -46,6 +47,7 @@ async function cancelledTrial(mock: ScriptedTransport, controller: AbortControll
     client,
     world: { read: async () => WORLD },
     worldHash: MANIFEST.world.state_hash,
+    definitions: DEFINITIONS,
     now: () => 0,
     signal: controller.signal,
     onEvent: (e) => {
