@@ -1,11 +1,15 @@
 // The local runner's HTTP contract, shared by the runner (P12b extends it) and the web app:
 // types, validators and the samples the UI specs route-mock with. Both sides are same-origin:
-// the runner serves the built UI and answers these paths relative to the UI's base (the Vite
-// base, /alterra-work-trial-2026-10-23/), routing api/* before its static files.
-//   GET    api/health   200 Health. The UI calls it once at load: a 200 whose body passes
-//                       parseHealth means the local runner; anything else means browser-direct.
-//                       The static build ships its own api/health (STATIC_HEALTH), so the
-//                       hosted page gets a 200 that is not chartr-runner instead of a 404.
+// the UI resolves these paths against its own base URL, so they reach the runner wherever it
+// serves the UI (served at its root, api/health is /api/health), and the runner routes api/*
+// before its static files.
+//   GET    api/health   200 Health, the body plan.md P12b names. The UI calls it at load: a 200
+//                       whose body passes parseHealth means the local runner; on a page without
+//                       the runner's token meta anything else means browser-direct, and on the
+//                       runner's own page it means the runner is not responding (never
+//                       browser-direct). The static build ships its own api/health
+//                       (STATIC_HEALTH), so the hosted page gets a 200 that is not chartr-runner
+//                       instead of a 404.
 //   POST   api/key      KeyRequest in the body, the X-Chartr-Token header from the token meta
 //                       the runner injects into index.html. 200 KeyState { key_set: true } once
 //                       the runner's one validation call succeeded; else RunnerError with the
@@ -15,7 +19,6 @@
 // No Node or DOM imports: this file is checked by the isomorphism lint.
 
 export const RUNNER_APP = 'chartr-runner';
-export const RUNNER_API_VERSION = 1;
 // Relative to the UI's base: resolve them against document.baseURI.
 export const HEALTH_PATH = 'api/health';
 export const KEY_PATH = 'api/key';
@@ -24,11 +27,18 @@ export const TOKEN_META = 'chartr-runner-token';
 // A key longer than this is not an API key; the runner refuses it before any call.
 export const MAX_KEY_LENGTH = 512;
 
+export type LedgerMode = 'own-run' | 'default';
+const LEDGER_MODES: readonly LedgerMode[] = ['own-run', 'default'];
+
 export interface Health {
   app: typeof RUNNER_APP;
-  api_version: typeof RUNNER_API_VERSION;
+  version: string;
+  // Which spend ledger the runner meters through (cli/adapters/ledger-node.ts resolves it).
+  ledger: { mode: LedgerMode; path: string };
   // The runner holds a validated key in memory.
-  key_set: boolean;
+  key_loaded: boolean;
+  // The runner was started with --mock: no call reaches the API.
+  mock: boolean;
 }
 
 export interface KeyRequest {
@@ -64,13 +74,20 @@ const isString = (v: unknown): v is string => typeof v === 'string';
 const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
 const is = <T>(want: T) => (v: unknown): v is T => v === want;
 const present = (_v: unknown): _v is unknown => true;
+const isMode = (v: unknown): v is LedgerMode => LEDGER_MODES.includes(v as LedgerMode);
 
 export function parseHealth(x: unknown): Health {
   const o = object(x, 'health');
+  const ledger = object(field(o, 'health', 'ledger', present, 'an object'), 'health.ledger');
   return {
     app: field(o, 'health', 'app', is(RUNNER_APP), JSON.stringify(RUNNER_APP)),
-    api_version: field(o, 'health', 'api_version', is(RUNNER_API_VERSION), String(RUNNER_API_VERSION)),
-    key_set: field(o, 'health', 'key_set', isBoolean, 'a boolean'),
+    version: field(o, 'health', 'version', isString, 'a string'),
+    ledger: {
+      mode: field(ledger, 'health.ledger', 'mode', isMode, LEDGER_MODES.map((m) => JSON.stringify(m)).join(' or ')),
+      path: field(ledger, 'health.ledger', 'path', isString, 'a string'),
+    },
+    key_loaded: field(o, 'health', 'key_loaded', isBoolean, 'a boolean'),
+    mock: field(o, 'health', 'mock', isBoolean, 'a boolean'),
   };
 }
 
@@ -102,8 +119,9 @@ export const STATIC_HEALTH = { app: 'static', surface: 'browser-direct' } as con
 
 export const SAMPLES = {
   staticHealth: STATIC_HEALTH,
-  health: { app: RUNNER_APP, api_version: RUNNER_API_VERSION, key_set: false },
-  healthWithKey: { app: RUNNER_APP, api_version: RUNNER_API_VERSION, key_set: true },
+  health: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'default', path: '/home/user/.chartr/spend.jsonl' }, key_loaded: false, mock: false },
+  healthWithKey: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'default', path: '/home/user/.chartr/spend.jsonl' }, key_loaded: true, mock: false },
+  healthOwnRun: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'own-run', path: '/tmp/chartr/spend.jsonl' }, key_loaded: false, mock: true },
   keyRequest: { key: 'sample-not-a-key' },
   keyAccepted: { key_set: true },
   keyCleared: { key_set: false },
@@ -112,6 +130,7 @@ export const SAMPLES = {
   staticHealth: unknown;
   health: Health;
   healthWithKey: Health;
+  healthOwnRun: Health;
   keyRequest: KeyRequest;
   keyAccepted: KeyState;
   keyCleared: KeyState;

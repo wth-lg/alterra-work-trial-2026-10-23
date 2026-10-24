@@ -1,7 +1,11 @@
 // The key gate on the local runner: Validate posts the key to the same-origin runner, which
 // makes the validation call from Node and keeps the key in its memory; Forget deletes it there.
 // Both send the X-Chartr-Token the runner injected into index.html, so another page on this
-// machine cannot set or clear the runner's key. The tab keeps no copy after a 200.
+// machine cannot set or clear the runner's key. The tab keeps no copy after a 200. Every
+// message is redacted against the key the tab holds at that moment, as MessagesClient redacts
+// browser-direct errors: the runner contract says it never echoes the key, and this keeps a
+// runner that breaks it from showing the key on screen.
+import { redactText } from '../../../../packages/core/redact.ts';
 import { KEY_PATH, parseKeyState, parseRunnerError, TOKEN_HEADER, TOKEN_META } from '../../../../packages/core/runner-api.ts';
 
 export type RunnerResult = { ok: true } | { ok: false; message: string };
@@ -12,8 +16,14 @@ export function runnerToken(doc: Document = document): string | null {
 
 const NO_TOKEN = "This page has no runner token. Open the UI at the address the runner printed and try again.";
 
-async function call(method: 'POST' | 'DELETE', token: string | null, body?: string): Promise<RunnerResult> {
+async function call(method: 'POST' | 'DELETE', token: string | null, key?: string): Promise<RunnerResult> {
+  const r = await send(method, token, key);
+  return r.ok ? r : { ok: false, message: redactText(r.message, key === undefined ? [] : [key]) };
+}
+
+async function send(method: 'POST' | 'DELETE', token: string | null, key?: string): Promise<RunnerResult> {
   if (token === null) return { ok: false, message: NO_TOKEN };
+  const body = key === undefined ? undefined : JSON.stringify({ key });
   let res: Response;
   try {
     res = await fetch(new URL(KEY_PATH, document.baseURI), {
@@ -21,6 +31,8 @@ async function call(method: 'POST' | 'DELETE', token: string | null, body?: stri
       headers: { [TOKEN_HEADER]: token, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       credentials: 'same-origin',
       cache: 'no-store',
+      // A redirect would re-send the key body to wherever it points.
+      redirect: 'error',
       ...(body === undefined ? {} : { body }),
     });
   } catch (e) {
@@ -48,5 +60,5 @@ async function call(method: 'POST' | 'DELETE', token: string | null, body?: stri
   }
 }
 
-export const postKey = (key: string, token = runnerToken()) => call('POST', token, JSON.stringify({ key }));
+export const postKey = (key: string, token = runnerToken()) => call('POST', token, key);
 export const deleteKey = (token = runnerToken()) => call('DELETE', token);

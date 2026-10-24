@@ -11,7 +11,8 @@ const without = (o: object, k: string) => Object.fromEntries(Object.entries(o).f
 describe('runner-api samples', () => {
   it('accepts every sample', () => {
     expect(parseHealth(SAMPLES.health)).toEqual(SAMPLES.health);
-    expect(parseHealth(SAMPLES.healthWithKey).key_set).toBe(true);
+    expect(parseHealth(SAMPLES.healthWithKey).key_loaded).toBe(true);
+    expect(parseHealth(SAMPLES.healthOwnRun).ledger.mode).toBe('own-run');
     expect(parseKeyRequest(SAMPLES.keyRequest)).toEqual(SAMPLES.keyRequest);
     expect(parseKeyState(SAMPLES.keyAccepted)).toEqual({ key_set: true });
     expect(parseKeyState(SAMPLES.keyCleared)).toEqual({ key_set: false });
@@ -32,14 +33,26 @@ describe('runner-api validators', () => {
     expect(() => parseHealth(SAMPLES.staticHealth)).toThrow(ContractError);
   });
 
-  it('rejects a health body missing any field', () => {
-    for (const k of Object.keys(SAMPLES.health)) expect(() => parseHealth(without(SAMPLES.health, k)), k).toThrow(ContractError);
+  it('has the P12b plan health shape: app, version, ledger {mode, path}, key_loaded, mock', () => {
+    expect(Object.keys(SAMPLES.health).sort()).toEqual(['app', 'key_loaded', 'ledger', 'mock', 'version']);
+    expect(Object.keys(SAMPLES.health.ledger).sort()).toEqual(['mode', 'path']);
   });
 
-  it('rejects a health body from another app, another API version or with a mistyped field', () => {
+  it('rejects a health body missing any field, or a ledger missing mode or path', () => {
+    for (const k of Object.keys(SAMPLES.health)) expect(() => parseHealth(without(SAMPLES.health, k)), k).toThrow(ContractError);
+    for (const k of Object.keys(SAMPLES.health.ledger)) {
+      expect(() => parseHealth({ ...SAMPLES.health, ledger: without(SAMPLES.health.ledger, k) }), `ledger.${k}`).toThrow(ContractError);
+    }
+  });
+
+  it('rejects a health body from another app or with a mistyped field', () => {
     expect(() => parseHealth({ ...SAMPLES.health, app: 'vite' })).toThrow(ContractError);
-    expect(() => parseHealth({ ...SAMPLES.health, api_version: 2 })).toThrow(ContractError);
-    expect(() => parseHealth({ ...SAMPLES.health, key_set: 'no' })).toThrow(ContractError);
+    expect(() => parseHealth({ ...SAMPLES.health, version: 1 })).toThrow(ContractError);
+    expect(() => parseHealth({ ...SAMPLES.health, key_loaded: 'no' })).toThrow(ContractError);
+    expect(() => parseHealth({ ...SAMPLES.health, mock: 'no' })).toThrow(ContractError);
+    expect(() => parseHealth({ ...SAMPLES.health, ledger: null })).toThrow(ContractError);
+    expect(() => parseHealth({ ...SAMPLES.health, ledger: { ...SAMPLES.health.ledger, mode: 'other' } })).toThrow(ContractError);
+    expect(() => parseHealth({ ...SAMPLES.health, ledger: { ...SAMPLES.health.ledger, path: 7 } })).toThrow(ContractError);
     for (const x of [null, [], 'chartr-runner', 200, '<!doctype html>']) expect(() => parseHealth(x)).toThrow(ContractError);
   });
 
