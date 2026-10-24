@@ -39,6 +39,7 @@ import type { JudgeCacheEntry } from '../packages/grader/judge.ts';
 import { declaresOf, gradeRun, runMatrix, type CaseRun, type FreshGrade, type MatrixEnv, type MatrixOptions, type ReplayDiff } from '../packages/grader/matrix/matrix.ts';
 import type { Agents, Alternative, MatrixTask, Mutant, Script, WorldView } from '../packages/grader/matrix/types.ts';
 import { nodeNow } from './adapters/clock-node.ts';
+import type { TaskSource } from '../packages/core/tasks.ts';
 import { nodeTaskSource, TASKS_DIR } from './adapters/tasks-node.ts';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
@@ -70,11 +71,12 @@ export function matrixTaskIds(root: string = TASKS_DIR): string[] {
     .sort();
 }
 
-// The world, manifest hash, definitions and task files (under `root`) every matrix trial starts from.
-export function matrixEnv(root: string = TASKS_DIR): MatrixEnv {
+// The world, manifest hash, definitions and task files (under `root`, or `tasks`) every matrix
+// trial starts from.
+export function matrixEnv(root: string = TASKS_DIR, tasks: TaskSource = nodeTaskSource({ root, testMode: false })): MatrixEnv {
   const world = new Uint8Array(readFileSync(join(REPO, 'fixtures/world.ndjson.gz')));
   return {
-    tasks: nodeTaskSource({ root, testMode: false }),
+    tasks,
     world: { read: async () => world },
     worldHash: (JSON.parse(readFileSync(join(REPO, 'fixtures/manifest.json'), 'utf8')) as { world: { state_hash: string } }).world.state_hash,
     definitions: JSON.parse(readFileSync(join(REPO, 'fixtures/definitions-pruned.json'), 'utf8')),
@@ -91,9 +93,10 @@ async function exported<T>(dir: string, rel: string, name: string, fallback: T):
   return mod[name] as T;
 }
 
-// Reads a task's matrix inputs from tasks/<id> (layout: packages/grader/matrix/types.ts).
-export async function loadMatrixTask(id: string, root: string = TASKS_DIR): Promise<MatrixTask> {
-  const task = await nodeTaskSource({ root, testMode: true }).get(id);
+// Reads a task's matrix inputs from tasks/<id> (layout: packages/grader/matrix/types.ts); the
+// instruction and policies through `tasks`.
+export async function loadMatrixTask(id: string, root: string = TASKS_DIR, tasks: TaskSource = nodeTaskSource({ root, testMode: true })): Promise<MatrixTask> {
+  const task = await tasks.get(id);
   const dir = join(root, id);
   const cacheFile = join(dir, 'tests/judge-cache.json');
   const checksModule = join(dir, 'tests/grader.ts');
@@ -154,9 +157,12 @@ async function all(deps: Deps): Promise<number> {
 // loaded) is returned for the caller to print.
 async function one(id: string, deps: Deps): Promise<{ code: number; usage?: string }> {
   if (!TASK_ID.test(id)) return { code: 2, usage: `--task ${JSON.stringify(id)} is not a task id (letters, digits, _ and - only)` };
+  // One read of tasks/ for the whole run: the instruction and policies the cases are built from
+  // and the task every trial resolves are the same files.
+  const tasks = nodeTaskSource({ root: TASKS_DIR, testMode: true });
   let task: MatrixTask;
   try {
-    task = await (deps.load ?? loadMatrixTask)(id);
+    task = await (deps.load ?? ((t) => loadMatrixTask(t, TASKS_DIR, tasks)))(id);
   } catch (e) {
     return { code: 2, usage: `--task: ${(e as Error).message}` };
   }
@@ -171,7 +177,7 @@ async function one(id: string, deps: Deps): Promise<{ code: number; usage?: stri
   };
   let result;
   try {
-    result = await runMatrix(matrixEnv(), task, options);
+    result = await runMatrix(matrixEnv(TASKS_DIR, tasks), task, options);
   } catch (e) {
     deps.out(`matrix ${id}: FAIL\n  - ${(e as Error).message}`);
     return { code: 1 };

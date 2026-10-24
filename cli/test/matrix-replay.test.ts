@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runCases, selectCases, type ReplayDiff } from '../../packages/grader/matrix/matrix.ts';
 import { tempDir } from '../../scripts/test/helpers.ts';
+import { taskSource } from '../../packages/core/tasks.ts';
+import { nodeTaskDirs, TASKS_DIR } from '../adapters/tasks-node.ts';
 import { loadMatrixTask, matrixEnv } from '../matrix.ts';
 
 const TOY = fileURLToPath(new URL('../../tasks/_toy', import.meta.url));
@@ -36,5 +38,16 @@ describe('matrix replay determinism', () => {
     const [r] = await runCases({ ...env, tasks }, task, selectCases(task, ['oracle']), { trials: 2, regrades: 1, isolation: false, onReplayMismatch: (_c, _a, _b, d) => mismatches.push(d) });
     expect(mismatches.map((d) => d.summary)).toEqual([]);
     expect(r!.replay_same).toBe(true);
+  });
+
+  it('reads tasks/ once when the task and the env share a source', async () => {
+    let reads = 0;
+    const tasks = taskSource(async () => (reads++, nodeTaskDirs(TASKS_DIR)), { testMode: true });
+    const task = await loadMatrixTask('_toy', TASKS_DIR, tasks);
+    const env = matrixEnv(TASKS_DIR, tasks);
+    const [r] = await runCases(env, task, selectCases(task, ['oracle']), { trials: 2, regrades: 1, isolation: false });
+    expect(r!.replay_same).toBe(true);
+    expect((await env.tasks.get('_toy')).instruction).toBe(task.instruction);
+    expect(reads).toBe(1);
   });
 });

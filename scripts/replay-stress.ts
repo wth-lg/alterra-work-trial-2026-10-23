@@ -7,14 +7,17 @@
 // Run it beside CPU load and parallel vitest workers to hunt a replay flake; it exits 1 when any
 // run differed, 0 when none did.
 import { parseArgs } from 'node:util';
+import { nodeTaskSource, TASKS_DIR } from '../cli/adapters/tasks-node.ts';
 import { loadMatrixTask, matrixEnv, matrixTaskIds, writeReplayMismatch } from '../cli/matrix.ts';
 import { cases, replayDiff, trial } from '../packages/grader/matrix/matrix.ts';
 
 const { values } = parseArgs({ options: { rounds: { type: 'string', default: '20' }, task: { type: 'string', multiple: true }, out: { type: 'string', default: 'results/replay-mismatch' } } });
 const rounds = Number(values.rounds);
-const env = matrixEnv();
+// One read of tasks/ for every task and every trial, as in a matrix run.
+const source = nodeTaskSource({ root: TASKS_DIR, testMode: true });
+const env = matrixEnv(TASKS_DIR, source);
 const ids = values.task ?? matrixTaskIds();
-const tasks = await Promise.all(ids.map((id) => loadMatrixTask(id)));
+const tasks = await Promise.all(ids.map((id) => loadMatrixTask(id, TASKS_DIR, source)));
 const baselines = new Map<string, Awaited<ReturnType<typeof trial>>>();
 for (const task of tasks) for (const c of cases(task)) baselines.set(`${task.id}/${c.id}`, await trial(env, task, c));
 console.log(`replay-stress: ${baselines.size} cases in ${ids.join(', ')}; ${rounds} rounds`);
