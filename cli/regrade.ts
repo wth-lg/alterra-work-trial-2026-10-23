@@ -1,13 +1,16 @@
 // pnpm cli regrade <run> --grader-version <v> [--json]
 // Grades every settled trial of a run again with this checkout's grader, from its trajectory and
 // its record's judge cache, with no model call and no client, and appends {grader_version,
-// outcome, score, valid, checks, changed, at} to the record's regrades[]; the original grade is
+// outcome, score, valid, checks, error, changed, at} to the record's regrades[]; the original grade is
 // never changed (design section 6). The last entry is the record's current grade, which summary,
 // audit-check and replay read (packages/core/summary.ts currentGrade); checks are its check
 // results, so replay can compare them; changed says the outcome differs from the grade before. --grader-version must name this checkout's GRADER_VERSION, so a
 // regrade records the version that really ran. A record that already has an entry for the version
 // is skipped, so a rerun changes nothing. A judge cache miss is an error: regrade names each
-// trial and the missing cache key, exits 1 and writes no record. Exit 0 when every record is
+// trial and the missing cache key, exits 1 and writes no record. So is a trial whose trajectory does
+// not reach its record's state in this checkout when its task_version is not the checkout's (it
+// ran against a task or world this checkout does not have): regrade names both versions and the
+// step that failed. Any other GRADER_ERROR is recorded with its error. Exit 0 when every record is
 // regraded or skipped; 1 on a miss or an unreadable trial; 2 on a usage error.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,10 +18,10 @@ import { pathToFileURL } from 'node:url';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import { currentGrade } from '../packages/core/summary.ts';
 import type { TaskSource } from '../packages/core/tasks.ts';
-import { GRADER_VERSION, type CheckResult } from '../packages/grader/grade.ts';
+import { GRADER_VERSION, type CheckResult, type GradeError } from '../packages/grader/grade.ts';
 import { settledRecords, writeJson } from './adapters/result-sink-node.ts';
 import { nodeTaskSource } from './adapters/tasks-node.ts';
-import { regradeRun, trialName } from './replay.ts';
+import { checkoutVersions, regradeRun, taskChanged, trialName, type Regraded } from './replay.ts';
 
 export interface Deps {
   out: (line: string) => void;
@@ -32,12 +35,34 @@ export interface RegradeEntry {
   score: number | null;
   valid: boolean;
   checks: CheckResult[];
+  error: GradeError | null;
   changed: boolean;
   at: string;
 }
 
 const defaults: Deps = { out: (l) => process.stdout.write(`${l}\n`), err: (l) => process.stderr.write(`${l}\n`) };
 const USAGE = 'usage: pnpm cli regrade <run> --grader-version <v> [--json]';
+
+// A GRADER_ERROR from no check (the trajectory replayed against this checkout does not reach the
+// record's state) of a record whose task_version is not the checkout's is not a grade: the
+// trial ran against another task or world, which this checkout does not have. It is refused,
+// naming both versions and the failed step, like a judge cache miss.
+async function refuseOtherWorlds(results: Regraded[], current: (id: string) => Promise<string>): Promise<Regraded[]> {
+  const out: Regraded[] = [];
+  for (const r of results) {
+    const rec = r.stored.record;
+    const g = 'grade' in r ? r.grade : null;
+    if (g?.outcome === 'GRADER_ERROR' && g.error?.check === null) {
+      const now = await current(rec.task_id);
+      if (rec.task_version !== now) {
+        out.push({ stored: r.stored, error: `${taskChanged(rec.task_version, now)}; not regraded: ${g.error.message}` });
+        continue;
+      }
+    }
+    out.push(r);
+  }
+  return out;
+}
 
 export async function main(args: string[], deps: Deps = defaults): Promise<number> {
   let dir: string | undefined;
@@ -67,7 +92,8 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   }
   const all = settledRecords(dir);
   const todo = all.filter((s) => !((s.record as { regrades?: RegradeEntry[] }).regrades ?? []).some((e) => e.grader_version === version));
-  const results = await regradeRun(dir, deps.tasks ?? nodeTaskSource({ testMode: false }), todo);
+  const tasks = deps.tasks ?? nodeTaskSource({ testMode: false });
+  const results = await refuseOtherWorlds(await regradeRun(dir, tasks, todo), checkoutVersions(tasks));
   const say = json ? deps.err : deps.out;
   const failed = results.filter((r) => !('grade' in r));
   if (failed.length > 0) {
@@ -82,7 +108,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     if (!('grade' in r)) continue;
     const rec = r.stored.record as typeof r.stored.record & { regrades?: RegradeEntry[] };
     const before = currentGrade(rec).outcome;
-    const entry: RegradeEntry = { grader_version: version, outcome: r.grade.outcome, score: r.grade.score, valid: r.grade.valid, checks: r.grade.checks, changed: r.grade.outcome !== before, at };
+    const entry: RegradeEntry = { grader_version: version, outcome: r.grade.outcome, score: r.grade.score, valid: r.grade.valid, checks: r.grade.checks, error: r.grade.error, changed: r.grade.outcome !== before, at };
     if (entry.changed) changed.push(`${trialName(rec)} ${before} -> ${entry.outcome}`);
     writeJson(r.stored.file, { ...rec, regrades: [...(rec.regrades ?? []), entry] });
   }

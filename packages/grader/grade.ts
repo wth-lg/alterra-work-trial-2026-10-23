@@ -135,9 +135,11 @@ function notesOf(final: StateView, created: readonly string[], steps: readonly S
 
 const noJudge = (): Grade['judge'] => ({ calls: 0, unknown: 0, over_allowance: 0, cache_keys: [], cache: [] });
 
-// The grade of a trial that is not graded: an invalid outcome, no checks, no score.
+// The grade of a trial that is not graded: an invalid outcome, no checks, no score. A
+// GRADER_ERROR always says which step failed and why, in `error`.
 export const ungraded = (outcome: Outcome, error: GradeError | null = null): Grade => {
   if (isValid(outcome)) throw new TypeError(`ungraded: ${outcome} is a valid outcome, and a valid trial is graded`);
+  if (outcome === 'GRADER_ERROR' && error === null) throw new TypeError('ungraded: a GRADER_ERROR needs an error naming the step that failed');
   return { grader_version: GRADER_VERSION, outcome, valid: false, fault: FAULT[outcome], checks: [], score: null, judge: noJudge(), attribution: null, error };
 };
 

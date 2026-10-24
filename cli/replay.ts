@@ -7,7 +7,7 @@
 // regrade, else its recorded grade). A last regrade entry written before regrade stored check
 // results is compared on outcome and score only, and replay says so. A trial whose record's task_version is not the checkout's (the task or the world
 // changed since it ran) is not replayed: it does not match, with the reason 'task changed: run at
-// <record's>, checkout at <checkout's>' (regrade still grades it, against the newer version).
+// <record's>, checkout at <checkout's>' (regrade still grades it against the newer version, and refuses it when its trajectory does not reach the record's state there).
 // Writes <run>/replay.json, {trials: {"<task>/<index>": {match, outcome,
 // recorded_outcome, current_outcome, error?}}}, which `summary --require replay=all` reads. Exit 0 when every trial
 // matches; 1 otherwise; 2 on a usage error.
@@ -34,7 +34,14 @@ export interface Deps {
 
 const defaults: Deps = { out: (l) => process.stdout.write(`${l}\n`), err: (l) => process.stderr.write(`${l}\n`) };
 
-export const trialName = (r: Pick<BatchRecord, 'task_id' | 'index'>): string => `${r.task_id}/${r.index}`;
+// A trial's name in messages and replay.json: <task>/<index> for a batch record; a run-one record
+// has no index, and is named by its key, <task>/<model>/<effort>/<mode>/<index>, the path its
+// trajectory is at (trajectories/<key>.jsonl), else its trial_id.
+export const trialName = (r: Pick<BatchRecord, 'task_id' | 'index'> & { trajectory?: string; trial_id?: string }): string => {
+  if (typeof r.index === 'number') return `${r.task_id}/${r.index}`;
+  const key = r.trajectory?.match(/^trajectories\/(.+)\.jsonl$/)?.[1];
+  return key ?? r.trial_id ?? r.task_id;
+};
 
 export type Regraded = { stored: StoredRecord; grade: Grade } | { stored: StoredRecord; miss: string } | { stored: StoredRecord; error: string };
 
@@ -55,6 +62,18 @@ export async function regradeRun(dir: string, tasks: TaskSource, records = settl
   return out;
 }
 
+// The checkout's task_version of each task, looked up once.
+export function checkoutVersions(tasks: TaskSource): (id: string) => Promise<string> {
+  const { worldHash } = repoWorld();
+  const versions = new Map<string, Promise<string>>();
+  return (id) => {
+    if (!versions.has(id)) versions.set(id, tasks.get(id).then((t) => taskVersion(t, worldHash)));
+    return versions.get(id) as Promise<string>;
+  };
+}
+
+export const taskChanged = (run: string | null, now: string): string => `task changed: run at ${run}, checkout at ${now}`;
+
 const metOf = (checks: ReadonlyArray<{ id: string; met: unknown }> | undefined) => JSON.stringify((checks ?? []).map((c) => [c.id, c.met]));
 
 export async function main(args: string[], deps: Deps = defaults): Promise<number> {
@@ -72,12 +91,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const tasks = deps.tasks ?? nodeTaskSource({ testMode: false });
   const trials: Record<string, { match: boolean; outcome: string | null; recorded_outcome: string; current_outcome: string; error?: string }> = {};
   const notes: string[] = [];
-  const { worldHash } = repoWorld();
-  const versions = new Map<string, Promise<string>>();
-  const current = (id: string) => {
-    if (!versions.has(id)) versions.set(id, tasks.get(id).then((t) => taskVersion(t, worldHash)));
-    return versions.get(id) as Promise<string>;
-  };
+  const current = checkoutVersions(tasks);
   const same: StoredRecord[] = [];
   for (const stored of settledRecords(dir)) {
     const r = stored.record;
@@ -89,7 +103,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       continue;
     }
     if (r.task_version === now) same.push(stored);
-    else trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, current_outcome: currentGrade(r).outcome, error: `task changed: run at ${r.task_version}, checkout at ${now}` };
+    else trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, current_outcome: currentGrade(r).outcome, error: taskChanged(r.task_version, now) };
   }
   const results = await regradeRun(dir, tasks, same);
   for (const res of results) {
