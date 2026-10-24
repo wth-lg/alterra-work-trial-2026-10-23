@@ -100,6 +100,24 @@ export function spyTransport(calls: Call[], answer?: Answer): (label: string) =>
   };
 }
 
+// An Answer that holds every trial call until its signal aborts (the Validate call answers).
+// The held calls stay in `held`, strongly referenced: a request's signal follows the client's
+// only weakly, so a stalled call nothing else holds can be collected with its abort listener
+// and never end (verifier P12b-2 O1).
+export function stallAnswer(held: Set<object> = new Set()): Answer {
+  return (label, _n, call) => {
+    if (label.includes('validate')) return undefined;
+    const entry: { signal: AbortSignal; response?: Promise<Response> } = { signal: call.signal };
+    held.add(entry);
+    entry.response = new Promise<Response>((_, reject) =>
+      call.signal.addEventListener('abort', () => {
+        held.delete(entry);
+        reject(call.signal.reason);
+      }, { once: true }));
+    return entry.response;
+  };
+}
+
 export interface Launched {
   runner: Runner;
   port: number;

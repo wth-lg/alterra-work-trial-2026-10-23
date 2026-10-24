@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { LedgerRow } from '../../../packages/core/ledger.ts';
 import { parseTrialView } from '../../../packages/core/runner-api.ts';
-import { fakeDist, http, launch, portOf, readSse, spawnRunner, tempDir, tokenMeta, toyTrial, until } from './helpers.ts';
+import { fakeDist, http, launch, portOf, readSse, spawnRunner, stallAnswer, tempDir, tokenMeta, toyTrial, until } from './helpers.ts';
 
 const rows = (f: string) => (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as LedgerRow) : []);
 
@@ -28,10 +28,7 @@ function expectCancelledLedger(all: LedgerRow[], runId: string): void {
 
 describe('cancel (gate case 6)', () => {
   it('DELETE mid-call aborts it with no retry, settles it at worst case and records CANCELLED', async () => {
-    const l = await launch({
-      answer: (label, _n, call) =>
-        label.includes('validate') ? undefined : new Promise<Response>((_, reject) => call.signal.addEventListener('abort', () => reject(call.signal.reason), { once: true })),
-    });
+    const l = await launch({ answer: stallAnswer() });
     const ledger = join(l.home, '.clinenv', 'spend.jsonl');
     try {
       await l.http('POST', '/api/key', { body: { key: 'cancel-test-key-0123456789' } });

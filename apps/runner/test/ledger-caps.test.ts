@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ACTUAL_CAP_USD, PROJECTED_CAP_USD, type LedgerRow } from '../../../packages/core/ledger.ts';
 import { parseDryRun, parseRunsList, parseTrialsRefused } from '../../../packages/core/runner-api.ts';
-import { launch, readSse, tempDir, toyTrial, until } from './helpers.ts';
+import { launch, readSse, stallAnswer, tempDir, toyTrial, until } from './helpers.ts';
 
 const row = (kind: 'reserve' | 'settle', call_id: string, cost_usd: number): LedgerRow => ({
   ts: new Date().toISOString(), call_id, kind, source: 'node', run_id: null, batch_id: null, trial: 'elsewhere', usage: null, cost_usd,
@@ -58,10 +58,7 @@ describe('ledger caps and default mode (gate case 5)', () => {
 
   it('counts a running batch against the session cap: a second batch that would cross it gets 409 with 0 calls', async () => {
     // Each trial call stalls until it is aborted, so batch A is still running when B is posted.
-    const l = await launch({
-      answer: (label, _n, call) =>
-        label.includes('validate') ? undefined : new Promise<Response>((_, reject) => call.signal.addEventListener('abort', () => reject(call.signal.reason), { once: true })),
-    });
+    const l = await launch({ answer: stallAnswer() });
     const ledger = join(l.home, '.clinenv', 'spend.jsonl');
     try {
       await l.http('POST', '/api/key', { body: { key: KEY } });

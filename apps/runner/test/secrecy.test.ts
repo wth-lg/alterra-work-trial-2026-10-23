@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isApiHost } from '../../../packages/core/anthropic.ts';
 import {
-  fakeDist, http, jsonError, launch, readSse, sentinels, spawnRunner, tempDir, tokenMeta, toyTrial, until, type HttpResult, type Launched, type SseResult,
+  fakeDist, http, jsonError, launch, readSse, sentinels, spawnRunner, stallAnswer, tempDir, tokenMeta, toyTrial, until, type HttpResult, type Launched, type SseResult,
 } from './helpers.ts';
 
 const filesUnder = (dir: string): string[] =>
@@ -40,13 +40,12 @@ describe('key secrecy (gate case 2)', () => {
     it(`keeps a ${kind} sentinel key out of every log, file, ledger row and response`, async () => {
       const key = sentinels()[kind];
       let mode: 'ok' | '401' | '500' | 'stall' = 'ok';
+      const stall = stallAnswer();
       const l: Launched = await launch({
-        answer: (label, _n, call) => {
+        answer: (label, n, call) => {
           if (label.includes('validate') && mode === '401') return jsonError(401, 'authentication_error', `invalid x-api-key: ${key}`);
           if (label.includes('validate') && mode === '500') return jsonError(500, 'api_error', `internal error for ${key}`);
-          if (!label.includes('validate') && mode === 'stall') {
-            return new Promise<Response>((_, reject) => call.signal.addEventListener('abort', () => reject(call.signal.reason), { once: true }));
-          }
+          if (mode === 'stall') return stall(label, n, call);
           return undefined;
         },
       });

@@ -44,6 +44,53 @@ describe('runner hardening', () => {
     }
   });
 
+  it('refuses a query name shaped like an sk-ant key, and / does not echo it in Location', async () => {
+    const key = sentinels().skAnt;
+    const l = await launch();
+    try {
+      for (const path of [`/?${key}`, `/?${key}=1`, `${BASE}?${key}=1`, `${BASE}?${encodeURIComponent(key).replace('s', '%73')}=1`]) {
+        const r = await l.http('GET', path);
+        expect(r.status, path).toBe(400);
+        expect(JSON.stringify(r.headers) + r.text, path).not.toContain(key);
+      }
+    } finally {
+      await l.runner.shutdown();
+    }
+  });
+
+  it('decodes a percent-encoded path before redacting it from the log and the 404 body', async () => {
+    const { skAnt: key } = sentinels();
+    const l = await launch();
+    try {
+      // The key is held, so its exact text is redacted too; the tail is what must not leak.
+      expect((await l.http('POST', '/api/key', { body: { key } })).status).toBe(200);
+      const tail = key.slice(20);
+      const enc = (i: number) => `${key.slice(0, i)}%${key.charCodeAt(i).toString(16).toUpperCase()}${key.slice(i + 1)}`;
+      const paths = [`/api/trials/${enc(0)}`, `/api/trials/${enc(2)}`, `/api/trials/${enc(16)}`, `/api/trials/${encodeURIComponent(enc(16))}`, `${BASE}assets/${enc(16)}.js`];
+      for (const path of paths) {
+        const r = await l.http('GET', path);
+        expect(r.status, path).toBe(404);
+        expect(r.text, path).not.toContain(tail);
+      }
+      await until('the log lines', () => l.logs.filter((x) => / 404 /.test(x)).length >= paths.length);
+      const log = l.logs.join('\n');
+      expect(log).not.toContain(tail);
+      expect(log).toContain('[redacted]');
+    } finally {
+      await l.runner.shutdown();
+    }
+  });
+
+  it('checks the header timeout often enough that it is real', async () => {
+    const l = await launch();
+    try {
+      // Node reads the option into this field; @types/node does not declare it.
+      expect((l.runner.server as unknown as { connectionsCheckingInterval: number }).connectionsCheckingInterval).toBeLessThanOrEqual(1_000);
+    } finally {
+      await l.runner.shutdown();
+    }
+  });
+
   it('sets short header and request timeouts and a connection cap', async () => {
     const l = await launch();
     try {

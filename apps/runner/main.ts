@@ -29,9 +29,20 @@ const EXIT_WAIT_MS = 9_000;
 function testTransport(kind: string | undefined): ((label: string) => Transport) | undefined {
   if (kind === 'toy') return (label) => (label.includes('validate') ? async () => okResponse({ text: 'OK' }, 1) : scenarioTransport('toy').transport);
   if (kind === 'stall') {
+    // Each held call stays here until it aborts: a request's signal follows the client's only
+    // weakly, so a call nothing holds could be collected with its abort listener and never end.
+    const held = new Set<object>();
     return (label) => (label.includes('validate')
       ? async () => okResponse({ text: 'OK' }, 1)
-      : (request) => new Promise<Response>((_, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })));
+      : (request) => {
+        const entry: { request: Request; response?: Promise<Response> } = { request };
+        held.add(entry);
+        entry.response = new Promise<Response>((_, reject) => request.signal.addEventListener('abort', () => {
+          held.delete(entry);
+          reject(request.signal.reason);
+        }, { once: true }));
+        return entry.response;
+      });
   }
   return undefined;
 }
