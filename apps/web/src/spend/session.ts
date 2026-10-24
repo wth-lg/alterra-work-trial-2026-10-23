@@ -10,7 +10,7 @@ export interface SessionSpend {
   spent: number;
 }
 
-export const CAP_KEY = 'chartr.cap';
+export const CAP_KEY = 'clinenv.cap';
 
 const session = (): Storage | null => {
   try {

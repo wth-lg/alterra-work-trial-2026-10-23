@@ -18,7 +18,7 @@ const CORE = JSON.stringify(pathToFileURL(join(repoRoot, 'packages/core/ledger.t
 type Env = Record<string, string | undefined>;
 
 function envFor(home: string, extra: Env = {}): Env {
-  return { HOME: home, SPEND_LEDGER: undefined, CHARTR_CANONICAL_LEDGER: undefined, ...extra };
+  return { HOME: home, SPEND_LEDGER: undefined, CLINENV_CANONICAL_LEDGER: undefined, ...extra };
 }
 
 // Runs `code` as an ES module in a child process with C bound to the core ledger module; the
@@ -76,7 +76,7 @@ const shadowEnv = { HOME: ${JSON.stringify(home)}, SPEND_LEDGER: ${JSON.stringif
 const shadowLedger = L.openNodeLedger({ transport: 'live', env: shadowEnv }).ledger;
 const before = await shadowLedger.batchStart(1);
 out.defaultBeforeOwnRun = check(before);
-const { ledger } = L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, CHARTR_CANONICAL_LEDGER: ${JSON.stringify(canon)} } });
+const { ledger } = L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, CLINENV_CANONICAL_LEDGER: ${JSON.stringify(canon)} } });
 try { await ledger.batchStart(10); out.canonicalAt449 = 'granted'; } catch (e) { out.canonicalAt449 = e.name; }
 const g = await ledger.batchStart(0.5);
 out.canonical = check(g);
@@ -122,7 +122,7 @@ const L = await import(${ADAPTER});
 ${HELPERS}
 const mem = memLedger();
 const early = await mem.batchStart(1);
-process.env.CHARTR_CANONICAL_LEDGER = ${JSON.stringify(canon)};
+process.env.CLINENV_CANONICAL_LEDGER = ${JSON.stringify(canon)};
 const { ledger, mode } = L.openNodeLedger({ transport: 'live' });
 out.mode = mode;
 try { await ledger.batchStart(10); out.canonicalAt449 = 'granted'; } catch (e) { out.canonicalAt449 = e.name; }
@@ -150,10 +150,10 @@ console.log(JSON.stringify(out));
 const L = await import(${ADAPTER});
 ${HELPERS}
 out.defaultViaOptsEnv = check(await L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, SPEND_LEDGER: ${JSON.stringify(shadow)} } }).ledger.batchStart(1));
-try { L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, CHARTR_CANONICAL_LEDGER: ${JSON.stringify(other)} } }); out.secondCanonical = 'opened'; } catch (e) { out.secondCanonical = /CHARTR_CANONICAL_LEDGER|canonical/.test(e.message) ? 'refused' : e.message; }
+try { L.openNodeLedger({ transport: 'live', env: { HOME: ${JSON.stringify(home)}, CLINENV_CANONICAL_LEDGER: ${JSON.stringify(other)} } }); out.secondCanonical = 'opened'; } catch (e) { out.secondCanonical = /CLINENV_CANONICAL_LEDGER|canonical/.test(e.message) ? 'refused' : e.message; }
 out.canonical = check(await L.openNodeLedger({ transport: 'live' }).ledger.batchStart(1));
 console.log(JSON.stringify(out));
-`, envFor(home, { CHARTR_CANONICAL_LEDGER: canon }), root);
+`, envFor(home, { CLINENV_CANONICAL_LEDGER: canon }), root);
     expect(r.err).toBe('');
     expect(JSON.parse(r.out)).toEqual({ defaultViaOptsEnv: 'throws', secondCanonical: 'refused', canonical: 'passes' });
     expect(readRows(other)).toEqual([]);
@@ -175,7 +175,7 @@ try { await grant.metered({ bodyBytes: 10, maxTokens: 10 }, async () => { sends+
 out.sends = sends;
 out.reserveRows = rows.filter((x) => x.kind === 'reserve').length;
 console.log(JSON.stringify(out));
-`, envFor(join(root, 'home'), { CHARTR_CANONICAL_LEDGER: canon }), root);
+`, envFor(join(root, 'home'), { CLINENV_CANONICAL_LEDGER: canon }), root);
     expect(r.err).toBe('');
     expect(JSON.parse(r.out)).toEqual({ client: 'refused', metered: 'refused', sends: 0, reserveRows: 0 });
   });
@@ -243,7 +243,7 @@ describe('own-run mode needs the canonical file to exist', () => {
     const home = join(root, 'home');
     mkdirSync(join(root, 'canon'));
     const marker = join(root, 'canon', 'spend.jsonl');
-    const env = envFor(home, { CHARTR_CANONICAL_LEDGER: marker });
+    const env = envFor(home, { CLINENV_CANONICAL_LEDGER: marker });
 
     for (const transport of ['live', 'offline'] as const) {
       expect(() => openNodeLedger({ transport, env }), transport).toThrow(/does not exist.*spend --init/);
@@ -274,18 +274,18 @@ await L.openNodeLedger({ transport: 'live' }).ledger.batchStart(1);
     expect(readFileSync(marker).equals(before)).toBe(true);
 
     // --init never creates the directory, and a marker naming a directory is refused.
-    const gone = envFor(home, { CHARTR_CANONICAL_LEDGER: join(root, 'gone', 'spend.jsonl') });
+    const gone = envFor(home, { CLINENV_CANONICAL_LEDGER: join(root, 'gone', 'spend.jsonl') });
     expect(spendCli(['--init'], gone, root).status).toBe(1);
     expect(existsSync(join(root, 'gone'))).toBe(false);
-    const dir = envFor(home, { CHARTR_CANONICAL_LEDGER: join(root, 'canon') });
+    const dir = envFor(home, { CLINENV_CANONICAL_LEDGER: join(root, 'canon') });
     expect(() => openNodeLedger({ transport: 'live', env: dir })).toThrow(/not a file/);
-    expect(existsSync(join(home, '.chartr'))).toBe(false);
+    expect(existsSync(join(home, '.clinenv'))).toBe(false);
   });
 
-  it('default mode still creates ~/.chartr/spend.jsonl on a live open', () => {
+  it('default mode still creates ~/.clinenv/spend.jsonl on a live open', () => {
     const home = tempDir('default-create');
     openNodeLedger({ transport: 'live', env: envFor(home) });
-    expect(existsSync(join(home, '.chartr', 'spend.jsonl'))).toBe(true);
+    expect(existsSync(join(home, '.clinenv', 'spend.jsonl'))).toBe(true);
   });
 });
 

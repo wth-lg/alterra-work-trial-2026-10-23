@@ -26,7 +26,7 @@ test('the shell loads', async ({ page }) => {
 });
 
 // The egress guard runs in the browser too: a page fetch to the API host is refused before it
-// leaves the page. The probe relay (window.chartrFetch) is the one path out, for requests the
+// leaves the page. The probe relay (window.clinenvFetch) is the one path out, for requests the
 // Node-side MessagesClient registered and the relay claimed (apps/web/src/probe/transport.ts).
 test('the egress guard refuses a page fetch to the API host; the probe relay still sends', async ({ page }) => {
   let reached = 0;
@@ -37,7 +37,7 @@ test('the egress guard refuses a page fetch to the API host; the probe relay sti
   const refused = await page.evaluate(async (u) => fetch(`${u}/v1/messages`, { method: 'POST', body: '{}' }).then(() => 'sent', (e: Error) => e.message), spelled);
   expect(refused).toMatch(/egress guard/);
   expect(reached).toBe(0);
-  const relayed = await page.evaluate(async (u) => (window.chartrFetch as (u: string, r: unknown) => Promise<{ status?: number }>)(u, { method: 'POST', headers: {}, body: '{}' }), `${API_ORIGIN}/v1/messages`);
+  const relayed = await page.evaluate(async (u) => (window.clinenvFetch as (u: string, r: unknown) => Promise<{ status?: number }>)(u, { method: 'POST', headers: {}, body: '{}' }), `${API_ORIGIN}/v1/messages`);
   expect(relayed.status).toBe(200);
   expect(reached).toBe(1);
 });

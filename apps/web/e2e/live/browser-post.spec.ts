@@ -79,7 +79,7 @@ test('browser POST to the Messages API returns 200 with a parsed tool_use', asyn
   await expect(page.locator('body[data-page="probe"]')).toBeAttached();
   const viaPage = relayFetch(async (url, r) => {
     sent.url = url;
-    const reply = await page.evaluate(([u, x]) => (window.chartrFetch as (u: string, x: unknown) => Promise<PageReply>)(u, x), [url, r] as const);
+    const reply = await page.evaluate(([u, x]) => (window.clinenvFetch as (u: string, x: unknown) => Promise<PageReply>)(u, x), [url, r] as const);
     if ('error' in reply) sent.browserError = redactText(`${reply.error.name}: ${reply.error.message}`, [KEY]);
     return reply;
   });

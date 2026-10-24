@@ -1,7 +1,7 @@
 // pnpm live:node [--dry-run]: one live Messages call from Node, the probe request that the
 // browser check sends (apps/web/src/probe/request.ts), metered through the spend ledger.
 //   --dry-run   prints the projection (the call's worst case) and makes no call
-// Live: opens the ledger (own-run mode when CHARTR_CANONICAL_LEDGER is set), starts a batch at
+// Live: opens the ledger (own-run mode when CLINENV_CANONICAL_LEDGER is set), starts a batch at
 // the projection, which refuses past the $450 projected cap, and prints the status, the
 // stop reason and the parsed tool_use. Exit 0 only on status 200 with that tool_use.
 import { pathToFileURL } from 'node:url';

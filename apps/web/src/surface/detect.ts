@@ -2,7 +2,7 @@
 // answers a same-origin GET api/health with a body parseHealth accepts. The path is resolved
 // against the page's base URL, so it reaches the runner wherever it serves the UI: served at its
 // root, that is /api/health. The static build answers with its own api/health file, which is
-// not chartr-runner; any other answer, an error or no answer within the timeout also means
+// not clinenv-runner; any other answer, an error or no answer within the timeout also means
 // browser-direct, except on the runner's own page (below). Only the local runner is ever sent
 // the key (keygate/runner.ts). The body is parsed from its text: a static host may serve the
 // extensionless file under any content type.

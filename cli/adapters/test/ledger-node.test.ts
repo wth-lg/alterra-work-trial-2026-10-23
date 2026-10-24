@@ -14,7 +14,7 @@ const CORE = pathToFileURL(join(repoRoot, 'packages/core/ledger.ts')).href;
 
 // Every test names its ledger, so none reads the shell's settings or this machine's ledger.
 function envFor(home: string, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
-  return { HOME: home, SPEND_LEDGER: undefined, CHARTR_CANONICAL_LEDGER: undefined, ...extra };
+  return { HOME: home, SPEND_LEDGER: undefined, CLINENV_CANONICAL_LEDGER: undefined, ...extra };
 }
 
 function spendCli(args: string[], env: Record<string, string | undefined>, cwd: string) {
@@ -73,16 +73,16 @@ describe('ledger modes', () => {
     const rows = readRows(path);
     expect(rows.map((x) => x.kind)).toEqual(['open', 'reserve', 'settle', 'close']);
     expect(existsSync(join(work, 'results'))).toBe(false);
-    expect(existsSync(join(root, 'home', '.chartr'))).toBe(false);
+    expect(existsSync(join(root, 'home', '.clinenv'))).toBe(false);
   });
 
-  it('default mode uses ~/.chartr/spend.jsonl, creates it on a live open and keeps the caps (case 2)', async () => {
+  it('default mode uses ~/.clinenv/spend.jsonl, creates it on a live open and keeps the caps (case 2)', async () => {
     const home = tempDir('ledger-c2');
     const where = spendCli(['--where'], envFor(home), home);
-    expect(where.stdout).toBe(`default ${join(home, '.chartr', 'spend.jsonl')}\n`);
+    expect(where.stdout).toBe(`default ${join(home, '.clinenv', 'spend.jsonl')}\n`);
     expect(where.status).toBe(0);
 
-    const path = join(home, '.chartr', 'spend.jsonl');
+    const path = join(home, '.clinenv', 'spend.jsonl');
     expect(existsSync(path)).toBe(false);
     const { ledger, mode } = openNodeLedger({ transport: 'live', env: envFor(home) });
     expect(mode).toBe('default');
@@ -100,30 +100,30 @@ describe('ledger modes', () => {
     writeFileSync(marker, '');
     const home = join(root, 'home');
 
-    const r = await child(ONE_CALL, envFor(home, { CHARTR_CANONICAL_LEDGER: marker }), root);
+    const r = await child(ONE_CALL, envFor(home, { CLINENV_CANONICAL_LEDGER: marker }), root);
     expect(r.code).toBe(0);
     expect(readRows(marker)).toHaveLength(4);
-    expect(spendCli(['--where'], envFor(home, { CHARTR_CANONICAL_LEDGER: marker }), root).stdout).toBe(`own-run ${marker}\n`);
+    expect(spendCli(['--where'], envFor(home, { CLINENV_CANONICAL_LEDGER: marker }), root).stdout).toBe(`own-run ${marker}\n`);
     // SPEND_LEDGER naming the same file is consistent.
-    expect(resolveLedgerPath(envFor(home, { CHARTR_CANONICAL_LEDGER: marker, SPEND_LEDGER: marker })).problems).toEqual([]);
+    expect(resolveLedgerPath(envFor(home, { CLINENV_CANONICAL_LEDGER: marker, SPEND_LEDGER: marker })).problems).toEqual([]);
 
     const bad: Array<[string, Record<string, string>]> = [
-      ['SPEND_LEDGER names another path', { CHARTR_CANONICAL_LEDGER: marker, SPEND_LEDGER: '/tmp/x' }],
-      ['marker directory is missing', { CHARTR_CANONICAL_LEDGER: join(root, 'gone', 'spend.jsonl') }],
-      ['marker is not absolute', { CHARTR_CANONICAL_LEDGER: 'canon/spend.jsonl' }],
+      ['SPEND_LEDGER names another path', { CLINENV_CANONICAL_LEDGER: marker, SPEND_LEDGER: '/tmp/x' }],
+      ['marker directory is missing', { CLINENV_CANONICAL_LEDGER: join(root, 'gone', 'spend.jsonl') }],
+      ['marker is not absolute', { CLINENV_CANONICAL_LEDGER: 'canon/spend.jsonl' }],
     ];
     for (const [why, extra] of bad) {
       let calls = 0;
       expect(() => {
         openNodeLedger({ transport: 'live', env: envFor(home, extra) });
         calls++;
-      }, why).toThrow(/CHARTR_CANONICAL_LEDGER/);
+      }, why).toThrow(/CLINENV_CANONICAL_LEDGER/);
       expect(calls, why).toBe(0);
       expect(spendCli(['--where'], envFor(home, extra), root).status, why).toBe(1);
     }
     expect(existsSync(join(root, 'gone'))).toBe(false);
     expect(existsSync('/tmp/x') && readFileSync('/tmp/x', 'utf8').includes('"kind"')).toBe(false);
-    expect(existsSync(join(home, '.chartr'))).toBe(false);
+    expect(existsSync(join(home, '.clinenv'))).toBe(false);
   });
 });
 
@@ -305,15 +305,15 @@ describe('spend --check --final-reserve (case 16)', () => {
 });
 
 describe('fixes for the P1 findings', () => {
-  it('an empty CHARTR_CANONICAL_LEDGER is an error, not default mode', () => {
+  it('an empty CLINENV_CANONICAL_LEDGER is an error, not default mode', () => {
     const home = tempDir('ledger-empty-marker');
-    const env = envFor(home, { CHARTR_CANONICAL_LEDGER: '' });
+    const env = envFor(home, { CLINENV_CANONICAL_LEDGER: '' });
     expect(resolveLedgerPath(env).problems).not.toEqual([]);
-    expect(() => openNodeLedger({ transport: 'live', env })).toThrow(/CHARTR_CANONICAL_LEDGER/);
+    expect(() => openNodeLedger({ transport: 'live', env })).toThrow(/CLINENV_CANONICAL_LEDGER/);
     const where = spendCli(['--where'], env, home);
     expect(where.status).toBe(1);
     expect(where.stdout).not.toContain('default');
-    expect(existsSync(join(home, '.chartr'))).toBe(false);
+    expect(existsSync(join(home, '.clinenv'))).toBe(false);
   });
 
   it('in own-run mode only a grant from the canonical ledger passes assertGrant', async () => {
@@ -340,7 +340,7 @@ const mem = C.createLedger({ store: memStore,
 check('memory', await mem.batchStart(1));
 try { await L.reserveSpend(g, { bodyBytes: 1, maxTokens: 1 }); out.push('reserveSpend passed'); } catch { out.push('reserveSpend refused'); }
 console.log(JSON.stringify(out));
-`, envFor(home, { CHARTR_CANONICAL_LEDGER: marker }), root);
+`, envFor(home, { CLINENV_CANONICAL_LEDGER: marker }), root);
     expect(r.err).toBe('');
     expect(JSON.parse(r.out)).toEqual(['canonical passed', 'SPEND_LEDGER refused', 'memory refused', 'reserveSpend refused']);
     expect(readRows(shadowPath).map((x) => x.kind)).toEqual(['open']);
