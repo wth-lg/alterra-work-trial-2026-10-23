@@ -174,8 +174,9 @@ describe('projected cap at batch start', () => {
 describe('actual cap', () => {
   it('aborts in-flight calls and refuses the next call when settled reaches the actual cap (case 5)', async () => {
     const store = new MemoryStore();
-    seedSettled(store, ACTUAL_CAP_USD - 200);
+    // The batch opens before the seed, so this setup holds for any PROJECTED_CAP_USD >= 100.
     const grant = await ledgerOn(store).batchStart(100);
+    seedSettled(store, ACTUAL_CAP_USD - 200);
     const hang = fakeClient(grant, (signal) => new Promise<Usage>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
     const inFlight = hang.send();
     // Another call settles at $200.00 actual, so settled reaches exactly ACTUAL_CAP_USD.
@@ -193,11 +194,10 @@ describe('actual cap', () => {
 
   it('aborts every grant of this process when another process takes settled to the actual cap', async () => {
     const store = new MemoryStore();
-    seedSettled(store, ACTUAL_CAP_USD - 100);
     const ledger = ledgerOn(store);
     const a = await ledger.batchStart(10);
     const b = await ledger.batchStart(10);
-    seedSettled(store, 100); // settled by another process
+    seedSettled(store, ACTUAL_CAP_USD); // settled by another process
     await expect(a.reserve({ bodyBytes: 1, maxTokens: 1 })).rejects.toThrow(/actual/);
     expect(a.signal.aborted).toBe(true);
     expect(b.signal.aborted).toBe(true);
@@ -205,21 +205,34 @@ describe('actual cap', () => {
 
   it('refuses a reservation that would take settled + reserved past the actual cap', async () => {
     const store = new MemoryStore();
-    seedSettled(store, ACTUAL_CAP_USD - 100);
     // The batch fills the projected cap exactly.
-    const grant = await ledgerOn(store).batchStart(PROJECTED_CAP_USD - (ACTUAL_CAP_USD - 100));
+    const grant = await ledgerOn(store).batchStart(PROJECTED_CAP_USD);
     const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 50_000 }); // about $1.03
-    seedSettled(store, 100 - w); // spend from another source after batch start
+    seedSettled(store, ACTUAL_CAP_USD - w); // spend from another source after batch start
     await grant.reserve({ bodyBytes: 0, maxTokens: 50_000 }); // settled + reserved = ACTUAL_CAP_USD
     await expect(grant.reserve({ bodyBytes: 0, maxTokens: 1 })).rejects.toThrow(/actual/);
     const t = totals(store.rows);
     expect(t.settled + t.reserved).toBeCloseTo(ACTUAL_CAP_USD, 6);
   });
 
+  it('refuses a batch at the actual cap, not the projected one, and aborts live grants', async () => {
+    const store = new MemoryStore();
+    const ledger = ledgerOn(store);
+    const a = await ledger.batchStart(0);
+    seedSettled(store, ACTUAL_CAP_USD);
+    // Settled at ACTUAL_CAP_USD is also past the projected cap; the refusal must name the actual
+    // cap, since only that refusal aborts this process's grants.
+    const refused = await ledger.batchStart(0).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(SpendRefused);
+    expect((refused as SpendRefused).cap).toBe('actual');
+    expect((refused as SpendRefused).message).toMatch(/has reached/);
+    expect(a.signal.aborted).toBe(true);
+  });
+
   it('records a settle above its reservation at actual and blocks the next call (case 15)', async () => {
     const store = new MemoryStore();
-    seedSettled(store, ACTUAL_CAP_USD - 60);
     const grant = await ledgerOn(store).batchStart(5);
+    seedSettled(store, ACTUAL_CAP_USD - 60);
     const res = await grant.reserve({ bodyBytes: 100, maxTokens: 100 });
     expect(res.worst_usd).toBeLessThan(0.1);
     // 1-hour cache writes at $8/MTok: 7.5M tokens is $60, far above the reservation.
