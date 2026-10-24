@@ -432,12 +432,22 @@ describe('lookup_catalog', () => {
 });
 
 describe('list_inbox', () => {
-  // Task overlays put their own inbox items in the shared world, so each assertion looks only at
-  // this test's task-x-* rows.
-  const own = <T extends { task?: unknown }>(rows: T[]) => rows.filter((x) => String(x.task).startsWith('Task/task-x-'));
+  // Task overlays add their own inbox items to the shared world, with ids tagged '<prefix>-t<N>-'
+  // (as write-gate.test.ts filters them). Each assertion pages through the whole queue, drops
+  // those rows and compares the rest exactly, so a row list_inbox makes up still fails.
+  const overlay = (row: { task?: unknown }) => /^Task\/[a-z]+-t\d+-/.test(String(row.task));
+  const inbox = (input: Record<string, unknown>) => {
+    const rows: Array<Record<string, unknown>> = [];
+    for (let offset: number | undefined = 0; offset !== undefined; ) {
+      const p = ok(call('list_inbox', { ...input, offset }));
+      rows.push(...(p.entries as Array<Record<string, unknown>>));
+      offset = p.next_offset as number | undefined;
+    }
+    return rows.filter((x) => !overlay(x));
+  };
   it('lists a queue by received time, then id, and filters by status', () => {
-    const r = call('list_inbox', { queue: 'results', count: 50 });
-    const rows = own(ok(r).entries as Array<Record<string, unknown>>);
+    const r = call('list_inbox', { queue: 'results' });
+    const rows = inbox({ queue: 'results' });
     expect(rows.map((x) => x.task)).toEqual(['Task/task-x-2', 'Task/task-x-1', 'Task/task-x-3']);
     expect(rows[1]).toEqual({
       task: 'Task/task-x-1',
@@ -449,9 +459,8 @@ describe('list_inbox', () => {
       status: 'requested',
     });
     expectTagsMatch(r);
-    const open = own(ok(call('list_inbox', { queue: 'results', status: 'requested', count: 50 })).entries as Array<{ task: string }>);
-    expect(open.map((x) => x.task)).toEqual(['Task/task-x-1', 'Task/task-x-3']);
-    expect(own(ok(call('list_inbox', { queue: 'messages', count: 50 })).entries as Array<{ task: string }>).map((x) => x.task)).toEqual(['Task/task-x-4']);
+    expect(inbox({ queue: 'results', status: 'requested' }).map((x) => x.task)).toEqual(['Task/task-x-1', 'Task/task-x-3']);
+    expect(inbox({ queue: 'messages' }).map((x) => x.task)).toEqual(['Task/task-x-4']);
   });
 });
 
