@@ -3,8 +3,8 @@
 // audit"; packages/core/explain.ts AuditRow):
 //   {trial: "<task>/<index>", outcome, taxonomy, label?, label_subtype?, model_fault: yes|no|unclear,
 //    decisive_step, evidence_ids: [...], llm_auditor_agrees, adjudicated_label?, note, criteria?}
-// A PASS label has taxonomy, model_fault and decisive_step null. A label without label reads its
-// label from its taxonomy (explain.ts auditLabelOf). Every check reads each record's current grade
+// A PASS label has taxonomy, model_fault and decisive_step null. A row's label is its
+// adjudicated_label, else its label, else the one its taxonomy implies (explain.ts auditLabelOf). Every check reads each record's current grade
 // (packages/core/summary.ts currentGrade: its last cli regrade, else its recorded outcome), and the
 // label set, the fault, the criteria and their texts come from packages/core/outcomes.ts through
 // explain.ts explainTrial; nothing here restates them. It exits 1, naming each violation, unless:
@@ -19,6 +19,11 @@
 //   - every evidence id of every label appears in the trajectory (exposed, referenced or written);
 //   - confirmation criteria M1 and M4 (outcomes.ts CONFIRMATION_CRITERIA) are met on every failure:
 //     pending is a violation too, because an audited trial must show met or not met;
+//   - no failure is the environment's or the grader's fault (explain.ts excludedFromHeadline): such
+//     a trial is excluded from the headline denominator and blocks the run (DENOMINATOR_RULE). This
+//     is where that block is enforced; summary.ts reads no audit rows, matrix or world;
+//   - no run-level block (outcomes.ts RUN_BLOCKS, B1: the oracle or an alternative fails the matrix)
+//     holds on any task_version of the run, named once per task_version;
 //   - no attempt, re-queued ones included, had an INTERNAL tool error;
 //   - every record's replay_final equals its final hash, and replay.json, when present, says
 //     every trial reproduced;
@@ -30,7 +35,8 @@
 // they changed, so a second run leaves the file as it was). The context it gives explainTrial
 // (explainContext): the trajectory; the run manifest's world_hash as the manifest hash; the world
 // for exposability; <run>/matrix.json, {task_versions: {<task_version>: {oracle_pass,
-// alternatives_pass}}}, for M4; and, on a regraded trial whose first failed check is not the one
+// alternatives_pass, failed_checks?}}}, for M4, GR4 and B1 (failed_checks: the gate check ids the
+// oracle or an alternative fails; a value that is not a list of strings reads as not given); and, on a regraded trial whose first failed check is not the one
 // its recorded attribution names, that check's decisive ids (from the task's gate checks) with the
 // step each was first exposed at in the trajectory (packages/grader/exposure.ts firstExposed).
 // --json prints {failures, labelled, environment, grader, violations}. Exit 2 on a usage error.
@@ -40,7 +46,7 @@ import { pathToFileURL } from 'node:url';
 import type { BatchRecord } from '../packages/core/batch.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import type { TrialEvent } from '../packages/core/events.ts';
-import { auditLabelOf, explainTrial, formatCriterion, type AuditRow, type ExplainContext, type ExplainRecord } from '../packages/core/explain.ts';
+import { auditLabelOf, excludedFromHeadline, explainTrial, formatCriterion, type AuditRow, type ExplainContext, type ExplainRecord } from '../packages/core/explain.ts';
 import { AUDIT_LABEL, AUDIT_LABELS, FAULT, type Outcome } from '../packages/core/outcomes.ts';
 import { parseTrajectory } from '../packages/core/trajectory.ts';
 import { currentGrade } from '../packages/core/summary.ts';
@@ -94,9 +100,12 @@ type Matrix = NonNullable<ExplainContext['matrix']>;
 function readMatrix(dir: string): Map<string, Matrix> {
   const file = join(dir, 'matrix.json');
   if (!existsSync(file)) return new Map();
-  const { task_versions } = JSON.parse(readFileSync(file, 'utf8')) as { task_versions?: Record<string, { oracle_pass?: unknown; alternatives_pass?: unknown }> };
-  return new Map(Object.entries(task_versions ?? {}).flatMap(([task_version, m]) =>
-    typeof m.oracle_pass === 'boolean' && typeof m.alternatives_pass === 'boolean' ? [[task_version, { task_version, oracle_pass: m.oracle_pass, alternatives_pass: m.alternatives_pass }] as const] : []));
+  const { task_versions } = JSON.parse(readFileSync(file, 'utf8')) as { task_versions?: Record<string, { oracle_pass?: unknown; alternatives_pass?: unknown; failed_checks?: unknown }> };
+  const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+  return new Map(Object.entries(task_versions ?? {}).flatMap(([task_version, m]): Array<[string, Matrix]> =>
+    typeof m.oracle_pass === 'boolean' && typeof m.alternatives_pass === 'boolean'
+      ? [[task_version, { task_version, oracle_pass: m.oracle_pass, alternatives_pass: m.alternatives_pass, ...(strings(m.failed_checks) ? { failed_checks: m.failed_checks } : {}) }]]
+      : []));
 }
 
 // What explainTrial gets for each record of the run in dir (see the header).
@@ -217,10 +226,22 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   for (const r of failures) {
     const name = trialName(r);
     if (!byTrial.has(name)) v.push(`${name}: ${currentGrade(r).outcome}, no audit label`);
-    for (const c of (await explain(r, byTrial.get(name))).criteria) {
+    const e = await explain(r, byTrial.get(name));
+    for (const c of e.criteria) {
       if ((c.id === 'M1' || c.id === 'M4') && (c.met === false || c.met === 'pending')) v.push(`${name}: ${formatCriterion(c).replace(': ', ' ')}: ${c.evidence}`);
     }
+    const excluded = excludedFromHeadline(e);
+    if (excluded !== null) v.push(`${name}: ${excluded}`);
   }
+  // A run-level block holds for its whole task_version: named once, from the first record that shows it.
+  const blocked = new Map<string, string>();
+  for (const r of records.values()) {
+    for (const n of (await explain(r)).notes) {
+      const key = `${r.task_version}: ${n.id}`;
+      if (n.id === 'B1' && !blocked.has(key)) blocked.set(key, `${r.task_version}: ${n.id} holds: ${n.evidence}; it blocks the run until the task or the grader is fixed`);
+    }
+  }
+  v.push(...blocked.values());
   for (const r of [...records.values(), ...requeued]) {
     const g = currentGrade(r);
     if (FAULT[g.outcome as Outcome] === 'infra' && (g.valid || (!g.regraded && r.valid === true))) v.push(`${trialName(r)}: ${g.outcome} is in the valid set; an INFRA or CANCELLED trial is excluded from it`);

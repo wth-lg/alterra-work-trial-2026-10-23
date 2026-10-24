@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUDIT_LABEL, AUDIT_LABELS, CONFIRMATION_CRITERIA, CONFIRMATION_DEFINITIONS, DENOMINATOR_OPERATOR_NOTE, DENOMINATOR_RULE, FAULT, FAULT_DEFINITIONS, FAULT_PRECEDENCE,
-  FAULT_PRECEDENCE_RULE, OUTCOMES, PASS_DEFINITION, RERUN_OUTCOMES, VALID_OUTCOMES, isValid, type Fault,
+  FAULT_PRECEDENCE_RULE, OUTCOMES, PASS_DEFINITION, RERUN_OUTCOMES, RUN_BLOCKS, VALID_OUTCOMES, isValid, type Fault,
 } from '../outcomes.ts';
 
 const FAULTS: Fault[] = ['model', 'refusal', 'env', 'grader', 'infra'];
@@ -12,7 +12,7 @@ const FAULTS: Fault[] = ['model', 'refusal', 'env', 'grader', 'infra'];
 describe('FAULT_DEFINITIONS', () => {
   it('gives every Fault one plain sentence and the criteria that decide it, each with an id, one sentence, the record fields it reads and a check', () => {
     expect(Object.keys(FAULT_DEFINITIONS).sort()).toEqual([...FAULTS].sort());
-    const all = [...FAULTS.flatMap((f) => FAULT_DEFINITIONS[f].criteria), ...CONFIRMATION_CRITERIA];
+    const all = [...FAULTS.flatMap((f) => FAULT_DEFINITIONS[f].criteria), ...CONFIRMATION_CRITERIA, ...RUN_BLOCKS];
     for (const f of FAULTS) {
       expect(FAULT_DEFINITIONS[f].sentence).toMatch(/^[A-Z][^\n.]*\.$/);
       expect(FAULT_DEFINITIONS[f].criteria.length).toBeGreaterThan(0);
@@ -48,7 +48,7 @@ describe('FAULT_DEFINITIONS', () => {
   });
 
   it('has no two criteria with the same id or text', () => {
-    const all = [...FAULTS.flatMap((f) => FAULT_DEFINITIONS[f].criteria), ...CONFIRMATION_CRITERIA];
+    const all = [...FAULTS.flatMap((f) => FAULT_DEFINITIONS[f].criteria), ...CONFIRMATION_CRITERIA, ...RUN_BLOCKS];
     expect(new Set(all.map((c) => c.id)).size).toBe(all.length);
     expect(new Set(all.map((c) => c.text)).size).toBe(all.length);
   });
@@ -81,10 +81,10 @@ describe('AUDIT_LABEL', () => {
 });
 
 describe('PASS_DEFINITION and DENOMINATOR_RULE', () => {
-  it('PASS_DEFINITION says every gate check met, defines clean as no environment criterion, and that a PASS keeps its outcome', () => {
-    expect(PASS_DEFINITION).toMatch(/every gate check/);
-    expect(PASS_DEFINITION).toMatch(/E1-E5/);
-    expect(PASS_DEFINITION).toMatch(/note/);
+  it('PASS_DEFINITION says every gate check of the current grade is met and any environment or grader criterion that holds is a note (verify m2, review F4)', () => {
+    expect(PASS_DEFINITION).toMatch(/every gate check of its current grade is met/);
+    expect(PASS_DEFINITION).toMatch(/environment or grader criterion that holds is shown as a note/);
+    expect(PASS_DEFINITION).not.toMatch(/no environment criterion/);
     expect(PASS_DEFINITION).not.toMatch(/valid outcomes/);
   });
 
@@ -123,6 +123,38 @@ describe('PASS_DEFINITION and DENOMINATOR_RULE', () => {
   it('the reader rule counts a refusal as a model failure and names refusal_excluded_rate, the view without refusals', () => {
     expect(DENOMINATOR_RULE).toMatch(/refusal counts as a model failure inside the denominator/);
     expect(DENOMINATOR_RULE).toMatch(/refusal_excluded_rate/);
-    expect(DENOMINATOR_RULE.split(/\s+/).length).toBeLessThanOrEqual(90);
+    // 115: round 3 added the environment- and grader-labelled exclusion and how each is resolved.
+    expect(DENOMINATOR_RULE.split(/\s+/).length).toBeLessThanOrEqual(115);
+  });
+});
+
+describe('round 3 (pr-review P14a-2): denominator, precedence and confirmation text', () => {
+  it('DENOMINATOR_RULE excludes an environment- or grader-labelled valid failure and says how each is resolved (review F3)', () => {
+    expect(DENOMINATOR_RULE).toMatch(/valid failure labelled environment or grader is excluded from the denominator and blocks the run/);
+    expect(DENOMINATOR_RULE).toMatch(/environment fix and a rerun of only the affected trials, disclosed in results\/CHANGELOG\.md, or that grader fix and regrade/);
+  });
+
+  it('FAULT_PRECEDENCE_RULE no longer says an environment fault only reruns the trial, and gives the reason for each step', () => {
+    expect(FAULT_PRECEDENCE_RULE).not.toMatch(/only reruns/);
+    expect(FAULT_PRECEDENCE_RULE).toMatch(/check the trial failed/);
+    expect(FAULT_PRECEDENCE_RULE).toMatch(/refusal/);
+  });
+
+  it('CONFIRMATION_DEFINITIONS.confirmed names the record-fact criteria and the audit for the rest', () => {
+    expect(CONFIRMATION_DEFINITIONS.confirmed).toMatch(/E1-E4, GR1 or GR2/);
+    expect(CONFIRMATION_DEFINITIONS.confirmed).toMatch(/E5, GR3 or GR4/);
+  });
+
+  it('GR4 and M4 read the matrix\'s failed checks against the trial\'s failed check; B1 is the run-level block', () => {
+    const gr4 = FAULT_DEFINITIONS.grader.criteria.find((c) => c.id === 'GR4')!;
+    expect(gr4.text).toMatch(/same gate check the trial failed/);
+    expect(gr4.reads.join(' ')).toMatch(/failed_checks/);
+    expect(RUN_BLOCKS.map((c) => c.id)).toEqual(['B1']);
+    expect(RUN_BLOCKS[0]!.text).toMatch(/^[A-Z][^\n]*\.$/);
+  });
+
+  it('the M5 text is the rule the code checks', () => {
+    const m5 = CONFIRMATION_CRITERIA.find((c) => c.id === 'M5')!;
+    expect(m5.text).toMatch(/adjudicated_label, else its label/);
   });
 });

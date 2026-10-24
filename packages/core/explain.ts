@@ -7,8 +7,9 @@
 //
 // Every criterion of outcomes.ts FAULT_DEFINITIONS is checked; the fault is the first of
 // FAULT_PRECEDENCE with a criterion that holds, and the label is AUDIT_LABEL of it. Criteria of
-// the other faults that hold are returned as notes. A PASS has no fault: whatever holds on it is
-// a note (PASS_DEFINITION). The confirmation state follows CONFIRMATION_DEFINITIONS.
+// the other faults that hold are returned as notes, and so is a run-level block (RUN_BLOCKS) that
+// holds. A PASS has no fault: whatever holds on it is a note (PASS_DEFINITION). The confirmation
+// state follows CONFIRMATION_DEFINITIONS, and blocksRun says why a trial blocks the run.
 //
 // The reason is one sentence of at most REASON_WORDS words, in the forms
 // docs/requirements/ui-contract.md fixes for a valid non-pass trial:
@@ -19,9 +20,11 @@
 // Expected and found come from the check's evidence: its expected and found fields when it has
 // them, else a range and the value checked against it, else a list that should be empty.
 import type { TrialEvent } from './events.ts';
+import { MODEL } from './anthropic.ts';
 import { PER_TRIAL_CAP_USD } from './cost.ts';
 import {
-  AUDIT_LABEL, AUDIT_LABELS, CONFIRMATION_CRITERIA, FAULT_DEFINITIONS, FAULT_PRECEDENCE, type AttributionFacts, type AuditLabelName, type Confirmation, type CriterionMet, type Fault,
+  AUDIT_LABEL, AUDIT_LABELS, CONFIRMATION_CRITERIA, FAULT_DEFINITIONS, FAULT_PRECEDENCE, RUN_BLOCKS, type AttributionFacts, type AuditLabelName, type Confirmation, type CriterionMet, type Fault,
+  type MatrixResult,
 } from './outcomes.ts';
 import { currentGrade, type RegradeGrade } from './summary.ts';
 import { TAXONOMY, type Taxonomy } from '../grader/attribution.ts';
@@ -97,8 +100,8 @@ export interface ExplainContext {
   // The exposure of the current decisive check's ids, when the caller recomputed it from the
   // trajectory (a regrade failed another check than the recorded attribution names).
   exposure?: { check: string; ids: ReadonlyArray<{ id: string; first_exposed_step: number | null }> } | null;
-  // The grader validation matrix of the task (pnpm cli matrix).
-  matrix?: { task_version: string; oracle_pass: boolean; alternatives_pass: boolean } | null;
+  // The grader validation matrix of the task (pnpm cli matrix), with the checks it fails when it says.
+  matrix?: MatrixResult | null;
   // The task's gate checks, for traces_to.
   checks?: ReadonlyArray<{ id: string; traces_to: string }>;
 }
@@ -124,7 +127,8 @@ export interface Explanation {
   // The criterion that decided the fault; null on a PASS.
   deciding: Holding | null;
   confirmation: Confirmation | null;
-  // Infra, grader and env criteria that hold but did not decide (lower in FAULT_PRECEDENCE, or on a PASS).
+  // Infra, grader and env criteria that hold but did not decide (lower in FAULT_PRECEDENCE, or on a
+  // PASS), then the run-level blocks (RUN_BLOCKS) that hold, as fault grader.
   notes: Holding[];
   audited: boolean;
   // The label the audit row gives (its adjudicated_label when it has one), next to the computed one.
@@ -144,8 +148,10 @@ export const formatCriterion = (c: Pick<CriterionRow, 'id' | 'met'>): string => 
 
 const isLabel = (l: unknown): l is AuditLabelName => (AUDIT_LABELS as readonly unknown[]).includes(l);
 
-// The audit label a row gives: its label, else the one its taxonomy or a GRADER_BUG outcome implies.
-export function auditLabelOf(row: Pick<AuditRow, 'label' | 'taxonomy' | 'outcome'>): string | null {
+// The audit label a row gives: its adjudicated_label, else its label, else the one its taxonomy or a
+// GRADER_BUG outcome implies. explainTrial's audit_label and M5 and audit-check all read it so.
+export function auditLabelOf(row: Pick<AuditRow, 'label' | 'taxonomy' | 'outcome' | 'adjudicated_label'>): string | null {
+  if (row.adjudicated_label !== undefined && row.adjudicated_label !== null) return row.adjudicated_label;
   if (row.label !== undefined && row.label !== null) return row.label;
   if ((AUDIT_LABELS as readonly (string | null)[]).includes(row.taxonomy)) return row.taxonomy;
   if (row.outcome === 'GRADER_BUG') return 'grader';
@@ -251,7 +257,8 @@ export function explainTrial(record: ExplainRecord, audit: AuditRow | null | und
   const recomputed = failed !== null && !attFits && ctx.exposure?.check === failed.id ? ctx.exposure.ids : null;
   const exposure = attFits ? att.exposure : recomputed;
   const row = audit ?? null;
-  const rowLabel = row === null ? null : auditLabelOf(row);
+  // The row's own label, before adjudication; M5 and audit_label put adjudicated_label first.
+  const rowLabel = row === null ? null : auditLabelOf({ ...row, adjudicated_label: null });
   const facts: AttributionFacts = {
     outcome,
     regraded: grade.regraded,
@@ -259,6 +266,7 @@ export function explainTrial(record: ExplainRecord, audit: AuditRow | null | und
     detail: record.detail ?? null,
     stop_reason: record.stop_reason ?? null,
     model_requested: record.model_requested ?? null,
+    model_expected: MODEL,
     models_returned: record.models_returned ?? [],
     internal_errors: record.tool_errors?.INTERNAL ?? 0,
     state_hash: record.state_hash,
@@ -284,14 +292,20 @@ export function explainTrial(record: ExplainRecord, audit: AuditRow | null | und
   const deciding = outcome === 'PASS' ? null : (holding[0] ?? null);
   const fault = deciding?.fault ?? null;
   // MF and R criteria restate the outcome, so only infra, grader and env criteria are notes.
-  const notes = holding.filter((h) => h.fault !== fault && h.fault !== 'model' && h.fault !== 'refusal');
+  // A run-level block is a note, and is not repeated when GR4 decided on the same matrix.
+  const blocks: Holding[] = RUN_BLOCKS.flatMap((c) => {
+    const r = c.check(facts);
+    return r.met === true && deciding?.id !== 'GR4' ? [{ fault: 'grader' as const, id: c.id, evidence: r.evidence }] : [];
+  });
+  const notes = [...holding.filter((h) => h.fault !== fault && h.fault !== 'model' && h.fault !== 'refusal'), ...blocks];
   const label = fault === null ? null : AUDIT_LABEL[fault];
   const criteria = CONFIRMATION_CRITERIA.map((c) => ({ id: c.id, ...c.check(facts) }));
   const audit_label = facts.audit === null ? null : (facts.audit.adjudicated_label ?? facts.audit.label);
+  const recordFact = fault !== null && FAULT_DEFINITIONS[fault].criteria.find((c) => c.id === deciding?.id)?.record_fact === true;
   const confirmation: Confirmation | null = fault === null ? null
     : fault === 'infra' ? (audit_label === null ? 'confirmed' : 'contradicted')
       : fault === 'model' || fault === 'refusal' ? (criteria.some((c) => c.met === false) ? 'contradicted' : criteria.some((c) => c.met === 'pending') ? 'provisional' : 'confirmed')
-        : facts.audit === null ? 'provisional' : audit_label === label!.label ? 'confirmed' : 'contradicted';
+        : facts.audit !== null ? (audit_label === label!.label ? 'confirmed' : 'contradicted') : recordFact ? 'confirmed' : 'provisional';
   const taxonomy = attFits && (TAXONOMY as readonly string[]).includes(att.auto) ? (att.auto as Taxonomy) : null;
   const ef = failed === null ? null : expectedFound(failed.evidence);
   const decisive_check = failed === null || ef === null ? null : { id: failed.id, traces_to: ctx.checks?.find((c) => c.id === failed.id)?.traces_to ?? null, ...ef };
@@ -299,12 +313,14 @@ export function explainTrial(record: ExplainRecord, audit: AuditRow | null | und
   let reason: string;
   if (grade.valid && outcome !== 'PASS') {
     if (decisive_check !== null) {
+      // The taxonomy speaks only for a model or refusal fault; an infra trial gets the check alone.
+      const modelFault = fault === 'model' || fault === 'refusal';
       const clause = fault === 'env' ? `${deciding!.evidence}, so this is environment`
         : fault === 'grader' ? `${deciding!.id === 'GR3' ? 'an audit found a grader bug' : deciding!.evidence}, so this is grader`
-          : taxonomy !== null ? TAXONOMY_CLAUSE[taxonomy](facts) : null;
+          : modelFault && taxonomy !== null ? TAXONOMY_CLAUSE[taxonomy](facts) : null;
       const base = checkSentence(decisive_check.id, decisive_check.expected, decisive_check.found, REASON_WORDS);
       const fits = (s: string) => words(s).length <= REASON_WORDS;
-      const short = fault === 'env' ? 'environment' : fault === 'grader' ? 'grader' : taxonomy?.replace(/_/g, ' ') ?? null;
+      const short = fault === 'env' ? 'environment' : fault === 'grader' ? 'grader' : modelFault ? (taxonomy?.replace(/_/g, ' ') ?? null) : null;
       reason = clause !== null && fits(`${base}; ${clause}`) ? `${base}; ${clause}` : short !== null && fits(`${base}; ${short}`) ? `${base}; ${short}` : base;
     } else if (outcome === 'REFUSAL') {
       const text = refusalText(record, ctx.events);
@@ -348,4 +364,20 @@ export function explainTrial(record: ExplainRecord, audit: AuditRow | null | und
     criteria,
     fault_criteria,
   };
+}
+
+// Why a trial blocks the run, or null. A valid failure labelled environment or grader is excluded
+// from the headline denominator and blocks the run (DENOMINATOR_RULE); a run-level block (B1) on
+// its task_version blocks it too. Excluded outcomes are not covered here: INFRA and ENV_ERROR are
+// rerun, and summary --require grader_error=0 blocks a GRADER_ERROR. cli/audit-check.ts enforces
+// both: summary.ts sees no audit rows, matrix or world, so it cannot compute these labels.
+export function excludedFromHeadline(e: Explanation): string | null {
+  if (!e.valid || e.outcome === 'PASS' || (e.fault !== 'env' && e.fault !== 'grader')) return null;
+  const fix = e.fault === 'env' ? 'an environment fix and a rerun of the affected trials' : 'a grader fix and a full offline regrade';
+  return `${e.outcome} is the ${e.fault === 'env' ? "environment's" : "grader's"} fault (${e.deciding!.id}): excluded from the headline denominator, and it blocks the run until ${fix}`;
+}
+
+export function blocksRun(e: Explanation): string | null {
+  const block = e.notes.find((n) => RUN_BLOCKS.some((c) => c.id === n.id));
+  return excludedFromHeadline(e) ?? (block === undefined ? null : `${block.id} holds: ${block.evidence}; it blocks the run until the task or the grader is fixed`);
 }

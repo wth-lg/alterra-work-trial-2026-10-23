@@ -11,7 +11,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  CONFIRMATION_CRITERIA, CONFIRMATION_DEFINITIONS, DENOMINATOR_OPERATOR_NOTE, DENOMINATOR_RULE, FAULT_DEFINITIONS, FAULT_PRECEDENCE_RULE, PASS_DEFINITION,
+  CONFIRMATION_CRITERIA, CONFIRMATION_DEFINITIONS, DENOMINATOR_OPERATOR_NOTE, DENOMINATOR_RULE, FAULT_DEFINITIONS, FAULT_PRECEDENCE_RULE, PASS_DEFINITION, RUN_BLOCKS,
 } from '../../packages/core/outcomes.ts';
 import { repoRoot } from './helpers.ts';
 
@@ -31,6 +31,7 @@ function definitions(): Array<{ name: string; text: string }> {
     for (const c of d.criteria) out.push({ name: `FAULT_DEFINITIONS.${fault} ${c.id}`, text: c.text });
   }
   for (const c of CONFIRMATION_CRITERIA) out.push({ name: `CONFIRMATION_CRITERIA ${c.id}`, text: c.text });
+  for (const c of RUN_BLOCKS) out.push({ name: `RUN_BLOCKS ${c.id}`, text: c.text });
   for (const [k, text] of Object.entries(CONFIRMATION_DEFINITIONS)) out.push({ name: `CONFIRMATION_DEFINITIONS.${k}`, text });
   const rules = [['FAULT_PRECEDENCE_RULE', FAULT_PRECEDENCE_RULE], ['PASS_DEFINITION', PASS_DEFINITION], ['DENOMINATOR_RULE', DENOMINATOR_RULE], ['DENOMINATOR_OPERATOR_NOTE', DENOMINATOR_OPERATOR_NOTE]] as const;
   for (const [name, text] of rules) {

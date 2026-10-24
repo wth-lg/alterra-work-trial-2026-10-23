@@ -156,9 +156,9 @@ describe('audit-check: M4 from the run\'s matrix.json (review F3)', () => {
     expect(r.json.violations.join('\n')).toMatch(/t-alpha\/5: M4 pending: /);
   });
 
-  it('an oracle that fails the matrix makes M4 not met: a violation, and the fault grader', async () => {
+  it('an oracle that fails the matrix on the check the trial failed makes M4 not met: a violation, and the fault grader', async () => {
     const dir = run('clean');
-    writeJson(join(dir, 'matrix.json'), { task_versions: { 'v-t-alpha': { oracle_pass: false, alternatives_pass: true }, 'v-t-beta': { oracle_pass: true, alternatives_pass: true } } });
+    writeJson(join(dir, 'matrix.json'), { task_versions: { 'v-t-alpha': { oracle_pass: false, alternatives_pass: true, failed_checks: ['G1'] }, 'v-t-beta': { oracle_pass: true, alternatives_pass: true } } });
     const v = (await check(dir)).json.violations.join('\n');
     expect(v).toMatch(/t-alpha\/5: M4 not met: oracle fails/);
     expect(v).toMatch(/t-alpha\/5: labelled model, and its fault grader has the label grader/);
@@ -210,5 +210,48 @@ describe('audit-check: exposure on a regraded trial (review F5)', () => {
     const r = await check(movedCheck(), async () => { throw new Error('no such task'); });
     expect(r.code).toBe(1);
     expect(r.json.violations.join('\n')).toMatch(/t-alpha\/9: M1 pending: /);
+  });
+});
+
+describe('audit-check: review round 3 (pr-review P14a-2)', () => {
+  it('D1b: an oracle that fails the matrix on another check leaves the model label alone; the failing matrix blocks the run once', async () => {
+    const dir = run('clean');
+    writeJson(join(dir, 'matrix.json'), { task_versions: { 'v-t-alpha': { oracle_pass: false, alternatives_pass: true, failed_checks: ['G2'] }, 'v-t-beta': { oracle_pass: true, alternatives_pass: true } } });
+    const r = await check(dir);
+    expect(r.code).toBe(1);
+    const v = r.json.violations;
+    expect(v.join('\n')).not.toMatch(/labelled model, and its fault grader/);
+    expect(v.join('\n')).not.toMatch(/M4 not met/);
+    expect(v.filter((l) => /B1/.test(l))).toEqual([expect.stringMatching(/^v-t-alpha: B1 holds: .*blocks the run/)]);
+  });
+
+  it('D1b: a matrix.json failed_checks that is not a list of strings is a violation, not a silent pass', async () => {
+    const dir = run('clean');
+    writeJson(join(dir, 'matrix.json'), { task_versions: { 'v-t-alpha': { oracle_pass: false, alternatives_pass: true, failed_checks: 'G1' }, 'v-t-beta': { oracle_pass: true, alternatives_pass: true } } });
+    const v = (await check(dir)).json.violations.join('\n');
+    expect(v).toMatch(/t-alpha\/5: M4 pending: /);
+  });
+
+  it('D2: a row labelled environment, unsure, adjudicated model reads as model', async () => {
+    const dir = run('clean');
+    const adjudicate = (taxonomy: string) => labels(dir).map((l) => (l.trial === 't-beta/5' ? { ...l, taxonomy, label: 'environment', model_fault: 'unclear', llm_auditor_agrees: false, adjudicated_label: 'model', note: 'the weight was in view at step 1' } : l));
+    writeLabels(dir, adjudicate('environment'));
+    // A model label still needs a model taxonomy; the label itself is no longer a disagreement.
+    expect((await check(dir)).json.violations).toEqual([expect.stringMatching(/^t-beta\/5: taxonomy environment is not in the label set/)]);
+    writeLabels(dir, adjudicate('reasoning'));
+    const r = await check(dir);
+    expect(r.code, r.json.violations.join('\n')).toBe(0);
+    expect(r.json.environment).toBe(0);
+  });
+
+  it('D3: a valid failure correctly labelled environment still blocks the run, excluded from the headline denominator', async () => {
+    const dir = run('never-exposable');
+    writeLabels(dir, labels(dir).map((l) => (l.trial === 't-beta/9' ? { ...l, taxonomy: 'environment', label: 'environment', model_fault: 'no', criteria: undefined } : l)));
+    const r = await check(dir, fixtureChecks);
+    expect(r.code).toBe(1);
+    const v = r.json.violations.join('\n');
+    expect(v).not.toMatch(/t-beta\/9: labelled/);
+    expect(v).toMatch(/t-beta\/9: FAIL is the environment's fault \(E5\): excluded from the headline denominator, and it blocks the run/);
+    expect(r.json.environment).toBe(1);
   });
 });
