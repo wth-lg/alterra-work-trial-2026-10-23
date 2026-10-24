@@ -1,0 +1,2594 @@
+[
+  {
+    "key": "00b7c0955c1738191d737b61cf39c4c4d318bb95837b570bd6518fa08364b080",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "017bfbfb6b8fb2cbc24f6b57d8f20c5e24c50fddc16107156cb1a10b18628479",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0209b2449020adb90cdc558b3167ba5c93e58269900abe794930982667f0b9e6",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0346bf07507e29d2295a45e493a5d6d7683cbf53b46527f5969dd1f0414b3947",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "037bd7d3e37998c7bf3e6b48cc0f01d93268f472934b54d1fb739f9c83ed11b3",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "04e0791e8e9fd013e1dde987f0fa85297e172a4fbee71772f273b50a3efa4e6b",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Burma Leuschke | Not in the population | Age 45, under 46 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "072a007d14b18a11b6de351196788ca8280614cdc51c711ad4f0373a064356cd",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "088d93589978b3bed2569b95996346e5dea6b362192fda0fb91a21d0a1d798a5",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "08d14b6a5b70430c03add6753094eb16163a0d968b3d5af29b35757ffd662a19",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "091b8f1034e7d6e6864de6c1325ba2a8672bf6096384327802f100905921fdd5",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0a4dab56dcbe8b14ba8be83e90fbccbf41124c25b2db3004fac55c63b4d6aff1",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0a9ac12b2b5e136bf513b8da43fa9cbb0ac91417c6d88699ecfbf0120590ebe7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0aebd4c0396497ce2dc483e9cccb73b032c855372b642f6d0237755d7872178b",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0cc3f513b5d291a5d05d88cd3a032f7a272742e818b52fb272a639a01cc28288",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0ddd5fec8e8253a1fe9de36d49791000ca9c4cda44aecfb52bbfc38164066b5a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0eff6684f8669fca71baa4ed841c2c4746360afb6a8e5b593b918c13010fc2cf",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0f522559c3dd235100bfe1971051bd0a6ce7aa3c4bb926792c20e406f7ca8610",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0f8844404e712df7b7fd9c5df7ed515f7e25f48f1a8cba5e72816b2164984396",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Harrison O'Keefe | Excluded | Frailty |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "0fd735a72019eee706f52008e15f61ef439aa8ac48f0d4507d1725ba9c386d95",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "11823498783b3a8f3b6c0dd6f12e647e89b8467b5d7df1d0b312e47a02a4679a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "11fe1dc30207578a07e17bc2ba34e5cdc9381bb8818e0664603c2944cd2ac41e",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "127c17a650085cf9243444c7431bd6cb75038ce90f444d617ecb2aeb458ebcd9",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "1398c0b44bccf0b1511570fb4fac23bca39b4ed3d48e2fe1d3d7edab2f83c482",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "178b9ca41cd2e116e13604dd63b356ae69b01de0a6bf616f37b9b784b8b57a9c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "1833f1c9e9e147ee8b9ce2b56542a54fd87dd7d9080e87386e353f7004088543",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "19c47a21dbb85d8b0ee1e6341a941470627b236bb373bd3b12fa871e50e96454",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "1b75ddca65929cb1d10878c2f1bb4162a19d5b62be5f49817fab764ef770b3fc",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "1fb0e0154449eaac66a645c854c8cdc9d117ef2ac87156e862a8a155a5d9c651",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "217f1f303d1dc68ec146155a9d43b9723c34f751c21ac2b5e4895bb8d4de7f96",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "24a39582ea0106d5978dfb7c6f86c7b4b744f61d66778b7b7280fe74f9378718",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "2641ccf81e1e7a2d5c9d2250f692c2731e9017450fb1c8bc5d85a0f0c9deed7d",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Marilu Gaona | Open gap: FIT kit ordered, outreach sent | Age 75, no screening |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "288eba04b2f03065ca7b8a739a6241067ea1e435a2eaaea993f7641df792b15a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "29993a705d0a0c3ef9d5b2735515d8399e0cb9aaef56f457ce76fec6c14fd4e7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "2c5d47331f52c95680af09ca4d52d24c3fc76fdf474cc830b493b790b51db8df",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "2f62500738b5bdbe6fa3fb9873c578b12b2d8572041078308ca68e483d4ada14",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "2fbe3ff01b68afea85543bb8623c3d64c2f008c254e7f241b94814aaf9a63859",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "35a43d08d3bfa9fc9f6803d228099eb2997d23f135b2c7e2ad59222499d0f935",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "364a0f1cf71e1c9857760bf6c094879c1c4c67ba8986075a38a4df68aed1628c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "36f00d1e0d2fdad6a3765e7afdde68c463a8d3ab62908a65b986f76616236b88",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "40313c9f44d48734c77464a611aee7f045fe16314bb21d3f988e274ec716c9a5",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "40ea5b327701419183c14bd816eec5be27c353f7e25a7c054e201b0cb2d4fa3b",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "41704fa6b50b53454db2d737a9d6efa5d53e109378ef1358da298dc423af280a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "4192be07c0ec1f0cd5a530c231cbba54587c5c18b720620ec2ac5dadecc36bbb",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "42318f9a63e591c56f2ae0bb195eab9f6524d7efe6611237bbab1d5e8236d375",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "4896d103544ef899917498c05de0ddc04e93d6390f09a93cbb855079199d78ba",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "4cbdb790be26e8f4407a879bf98cce4174858784692eb3dc4d45b84f80d4af2c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "4ea40edb0b0d4e4c36e94fe85d89cf9a08dd9e6a2afe0cd1ba273de96b9048fa",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "4f65fbf1ff09ff1d2b4d6aac8e846aa6b1a46f429f742514ce37578e8e6ed0e7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "4fc5fd3068547f83607daeac2531c2f6ef76460ad6726f49188ba381d032311c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Ángela Vigil | Open gap: FIT kit ordered, outreach sent | No screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "4fcba83a73b65fe68daf959aabf0b399ff7ca27a7187bca0de651089055061a3",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "50593cacc960040cbc17776f5dd5bb63b3327b5de9e8b72a8e274e7d1e0d0e7f",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "50bb134bf7ca4542c74861def508607c1af5af329bdf87cfabc84844552368cb",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "52f2609b4e882156f4ea2cbe8167a8419454d0570987c4f82e847346c35203a2",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "55b7144dd52ac080a1f317b73be7dbeb2bc20e162223fb550def0d73b0e62d8c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "56dd87818670321a2b5586ba273615e44df67e52648b2a8a3ec30eb83fbd3d79",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "5a14b835fc60d9cd9485374fb5fa9c85161b13232a5d593fee617c0e7e33a68c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "5b5c5019f41a44c1f0177122c067b4ebc8a1bbc8d2a8fb6a37b05231cb5e6332",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "60387fc4c919811eb8e024702830f54d06d9a7f0690bc8a5434db0b134600ea8",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "63c4730728c47014f0a1e9057c719d21b8583d33537d260c29797eed4078119d",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "654e514ef1412f62bd3ccc6da5c11ae72724ee741ac88e6f874fddd36e754312",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "67606ee0e049a171f0d3095998d3cfb693449dd9861ce7354376c0194dd4bdee",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Due (gap) | Colonoscopy Nov 2016 is outside the 2017-2026 lookback; FIT kit ordered and patient messaged |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "6862768b63b8d880eb1a6859a329bed9ac16e6ca804cf86d70d6c7069c3e80dc",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "68867ab0d8f264d40d4bd0a1ccee1e353be8eda7271410470828bf80ee3f9c41",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Tiny Koss | Screening up to date | FIT 2025-12-03, within a year |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "6892ccca8bf1d6e7f364472b8d785bd1480b0455e2898b415b66defba7eee120",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "6ac10d8179b5beb381f395161561baed3a5a50b947030bf97df31cb0a87be649",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "6b7d80c1f1023c7767a5c9868852eccf8c93f3b6c071d4feeeedd3507a5cc98b",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "6fa55e80978a09e0b66a6919e3516a419f86cdcbfec7ea271be6649a781de075",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "702857d882558389994b1bae17570e77ec8e1e6975023a4c3ce43c53b21c2ffb",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "714eb70051210564d6c3a11121240ede5f3171f60f9931b5210ec28fa1d794fd",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "724c47f61d6512ab97c9cc0694d40cb34490bebfa5d2073e90dac8a4bf2a27d7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "7529b94f403b4b47ce56c096032d1f0a786e4dce650567550a0c9e6e0954da1a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Lance Muller | Screening up to date | sDNA-FIT 2023-11-20, within 3 years |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "782414264601f305eee4a4d85ea24dad603f4aaa12a0e20554dd33e4df037589",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "7a684810c89899f5f1a690b7a3fdd4f73b0fffe55d42d40c9566b7801b19c4ef",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Elly Trantow | Open gap: FIT kit ordered, outreach sent | Frailty without an advanced illness diagnosis |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "7c21080e6e15417f400f7fc0685f282e166fae8bf4997c7caf741cf0900c19c5",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "7c989d3239762d4ed07b38c74a254e9256fc28262bcfc18f86058ea3551b7d75",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "7e82e25a61b9dccd18671c73a542c98bcfdf82a03e071db392ac53f630586048",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "8264fdb99fb1bb6a90ee599769fbbb788c84ae54f66150610fe7fd461cbf2dbe",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "84f909d2eb02fddc9ff1318ad72be6a526833dab0f9d33c9526349244bc22d07",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "870de96b2a9fc008c949675cb2cdc4ba46ca2c2738dcdd955f240c76b982dcbd",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "8790bb9d13da09024f3f3f07fab137307118337aad2a8ef5b6ac27890fe44dc4",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "881313acef90672f56ffc4cf0a8cd53f2b57450583b7a2750f37b22a397e0497",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "89cc3d212f2bfbcc4a363468ab576fb843b919533de993832166d905ce0ee5a4",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "8a8bd4310718d1ba4971d028ac350af7f0fdcfd68341502fd921f71a1626893c",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "8e199d6c49be69c97f23a5d824668f938e8bb9f769a1e1c116dd3b8602e11f01",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "8eb4b340022295eee6d5334086ff743b7d1506e8045b357f989fff34d98885bf",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "8f0fbd4714616ffd9546016dc3365fa03630493772bd0296fb3e4eec38fa05e9",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "919492fa787208ec3d0572b026ade39578b69f324f686db3211bdde796831c10",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "93ac27ef94200af10640207b630308d27cef8f582ebed1368940425b08420621",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "9479142fe0645050bb0f9f3e8c4d3456201f02ba9b5624070e2ab0ca41be36b2",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "96fcb925aa745729069c91721720d34fdeb37e945c3bb7ed852772b8ffb5cb5e",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "99874a2ea730104388279f03530fbc233f78c0c7546b9c0838d2d338c09c5b4a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "9cdd735d8cb42289efa873969533a7fe848302cc4f73a804eebe00daa2cdb4ad",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "9e1c3848184d1df00ce087f47372720c6dec85e9caa75254a760239600629b71",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "9e534e1b2da1fd5e1f150843e1658d8f15edb3509665cf2144188bb22f459387",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "a0a844d97f1d5d875f483e447fe4b9b29dd4d4e84fc4dbdb663e2bac3eef7f95",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "a4788a289fcefc27ab1d1c7fa4772f5866db9a73946559c06543231769904a80",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "a5cbf2a77d0c217e1ddfcfb840c7017c389b9ba9f494c07a8d600c98107157cb",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "a77c9b9883a9e534f23ed5456a233fdb44e73bf9602bcb09385ff17a02c974cd",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "a95792c3724ac1c0687d54b6b6d9b08c1d59abd01d0ce10a282ca3c368f32f0d",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "aae214cb1347ea58017bee3aad67bc7855fb81bc5adcc4d6e975e5b5481c57d9",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ac35087b2f16dde3faf69148f25314dcbbf9c56438f74d00037824e7985412a8",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ac8e41a6e2ed07a85fb70c9203411be91ad5ea5cebd767ad8d8764bd57957d33",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ae07f0d58e88edb309ffa827282ef366168c2c7f4a6e05666ee5e69a2623c160",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ae282c6108942a5a4d57c1215a1864c913b72e84366f0f6c98460c58bcf012f7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "aea227fae45eae18dc93d1dc012aa139495861419d1036cfa1e7afea7b31ea21",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "b02b260d5a00bf75e3196f61cca06d0ae3c4a8822fa5654d7753874d95bbc8e0",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "be1fd6daf0609e21ab4be7dac3ab8a86c9fd2df0c3734e961c7ef4f28a4c63c1",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "be8b3a90574e2dd3c5aae0c5139cd4f33d57ffe938a9ecd33096d4b51b78b2c8",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "c09b8aca394628b51da51502475511235358c3212728460b2a5db02868fd7050",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Stephan Herman | Screening up to date | Colonoscopy 2016-11-15, within 10 years |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "c2df06447c0b8e88e7eec1dba8d31d6465c41458e1452e815a42c31c875613d3",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "c50a0a5b6e11a85d6141b57f49a7a5ca39b9968addc3255299af0b3d8afb31db",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Stephan Herman | Open gap: FIT kit ordered, outreach sent | Last colonoscopy 2016-11-15, before the 2017-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "c6bf37aca35396e533951e8aa96211f50da1547e41836a9a782f01566b0c56c2",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "c72d58b9b880130f875f44a815bf1c6ea8d0f3278289b4a0ebb8c2663dffa050",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "c9820181997941410f32ccf4aa9e22cbdeacce08e8a46e611786732a836a7728",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ce2e6125e74d1cc0ada51ab66706bf521e3f94d0d3ee0ed2a355830c7d53364a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "not_met",
+      "quote": "| Delaine MacGyver | Open gap: FIT kit ordered, outreach sent | FOBT 2024 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ce9b5efa205412b825fb37560e3cdaeb82451db47d6b2380777c33c8f96bd26b",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "d2302351f5b81f66f8b0d081d736685401770d816135da0da2dfa0983d3b66b2",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "d2c2051f5f62ce86a04b879e7d4716fa9c5d3d4a070e15a6d5835bc133fdc8d0",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "d35d71dd8fc718b69197796dc3987c5230f3d2af421a93722745ca66e8d8b326",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "d63f1aeb192baa6a85f1fb8c0af475aca43660bb2a52a6a066c16deb2faa52d6",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "d9be5ce3e3045f7e65d604122b8a00a2aa5d3cb789cd2861da6fc4503fc90847",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "d9d805c8d6edd7d869a911c794c1afc152bdd97eca5a85ca6c702433b2acbaad",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ddec027dc6d685ea974d3802a9c3e7042447bcbeb8f8bb04f47b3939a315701d",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ddfb7a28b9f31814578d00383aaf40b2dda9658abdc2fbfc33c13efc6dd8c5df",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "e0dfdccdbe5531e1442aa9d92a234e489de81bb30be48c1b558e1fabf4714d84",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Harrison O'Keefe | Open gap: FIT kit ordered, outreach sent | Age 69 with frailty but no advanced illness or dementia medication, so not excluded; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "e436b412623e398f44f57a0b022c27c3a23edad799eef1ef80e4d0429ad70d1d",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "e873ff16e6446321c7f4503fe9c7eee14a52349263c01455f5937d13fbda2196",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ebc6632777ef087fd45caaff651e10b1b54c9eaf86e74860059e8dbb1c7fad2f",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ebdf511a1e49807a6882e4998149ac1dbd07d6614202a78c3c16df42682aec1d",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ef473ad25c5bf519a4f40ffc89419b567b4ddb21c1b49dc1b8f597ae83fd34b7",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "ef9150f6855e60a48b60cab79887211b5b4973a08b0978e8c913f376759054aa",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f00b9741aa4e0f8f36f871260449dbabe78b6a0d64a2fe8a832e0f52bf544b5a",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f0296c1e18d9f126ff1393a9610429c2ca1031849b1c65517882bc256d3fe348",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Tiny Koss | Open gap: FIT kit ordered, outreach sent | FIT 2025-12-03 was in 2025; a FIT counts only in the measurement period |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f105f3b331bf049fa4f53be08e37af67bcf5cfd0aba182a69c819371e00b3973",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f10b299c65dc22ba3f8ffc23bd1045d0602a6906a00738de05a5669692e96140",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Danika Ullrich | Screening up to date | CT colonography 2022-03-08, within the measurement period or the 4 years before it (2022-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f26fee1af4702c128d70294a849d588c90a3d988b1b95e24aee274f203574420",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Ángela Vigil | Excluded | Total proctocolectomy (outside operative note, 2015) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f318c1d6c2c465188ed01f0d263b9e70bca95826de79403f9fd963e0e4471a55",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Elly Trantow | Excluded | Age 72 with frailty and a dementia medication (donepezil): advanced illness |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f3b3d23005c2375e41f3c25f9ae7548f1368eebf72472b1e43f39fd157399662",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Due (gap), kit already ordered | Active FIT order from 9/30/2026, so no new order; reminder sent |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f4a22103237182e8a40c19ad922956f6290215d1d6dd22e8db849459951a1246",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Santo Pagac | Screening up to date | Colonoscopy 2018-05-21, within the measurement period or the 9 years before it (2017-2026) |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f7ac5c138b9e8fe617176ee270d61638d00876e00220ddbac41c6899a5aa6192",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Delaine MacGyver | Open gap, no new order | FIT order already active since 2026-09-30; FOBT 2024-06-11 does not count |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f83c19874ae20eb980ad4f689006597289afe352dbd4669846489577711817ec",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Lance Muller | Open gap: FIT kit ordered, outreach sent | sDNA-FIT 2023-11-20, before the 2024-2026 window |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "f8a8c43127caab4783182a03cadd9b60529b6f26ab5532d214944d83947f14f4",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Kelsie Rohan | Excluded | In hospice care since 2026-08-20 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "fb923066375ea24e6438bf89c5934e8a7aa61884c625bea404b823a499e400ec",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Burma Leuschke | Open gap: FIT kit ordered, outreach sent | Born 1980-12-15: 46 at the end of 2026, in the population; no screening on record |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  },
+  {
+    "key": "fc42cc2eb27780c108b1938088195abd23f56d670b5e1521fa24cd2be4106d45",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "| Marilu Gaona | Not in the population | Born 1950-11-20: 76 at the end of 2026, over 75 |"
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-47)",
+      "at": "2026-10-24T10:56:00Z"
+    }
+  }
+]
