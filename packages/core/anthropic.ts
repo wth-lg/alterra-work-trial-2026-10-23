@@ -15,13 +15,19 @@
 //                            settled at the worst case: usage is unknown, and the partial
 //                            answer is discarded, never appended to the conversation
 // Retried: 408, 409, 429, 5xx (529 included), an error event mid-stream, a dropped stream, a
-// network error; up to maxAttempts, waiting retry-after or an exponential backoff. An abort is
+// network error; up to maxAttempts (8), waiting retry-after (at most 60 s) or an exponential
+// backoff with jitter from 2 s to 60 s (design section 1, "Failure modes"). An abort is
 // never retried: send takes a per-request signal, combined with the grant's, and once either
 // has aborted the call throws the abort reason. Aborted before the reserve, nothing is
-// reserved or sent; aborted in flight, the attempt is settled at the worst case. A 400
-// closes the grant, which stops every client of the batch; any other 4xx fails the call
-// only. Headers are never logged, and the key is redacted from every log line and error
-// message.
+// reserved or sent; aborted in flight, the attempt is settled at the worst case.
+// classifyFailure says how a failed call ends a trial, for the trial loop and the judge alike,
+// and whether it stops the batch: a 400, 401, 403, 404 (the model: /v1/messages is the only
+// endpoint), a billing error, a substituted model, an egress refusal, a spend refusal and any
+// local error do (design section 1, "Failure modes"; section 5, "Outcomes"). A call that
+// stops the batch closes the grant, which stops every client of the batch, and the grant
+// closes on nothing else; any other 4xx fails the call only, and so does an abort. Headers
+// are never logged, and the key is redacted from every log
+// line and error message.
 //
 // Threat model: these checks guard against accidental unmetered or under-metered calls by code
 // in this repo: a send that skips MessagesClient (refused by the egress guard where an entry
@@ -46,16 +52,24 @@
 //   - Node's http, https, http2, net and tls modules with a host built at runtime (lint flags a
 //     literal API host passed to them)
 import { usageCostUsd, type Usage } from './cost.ts';
-import { assertClientGrant, type BatchGrant, type Ledger, type Reservation, type ReserveRequest } from './ledger.ts';
+import { assertClientGrant, SpendRefused, type BatchGrant, type Ledger, type Reservation, type ReserveRequest } from './ledger.ts';
 import { redactText } from './redact.ts';
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2026-10-21';
 export const MODEL = 'claude-opus-5-5';
-export const MAX_ATTEMPTS = 4;
-const BACKOFF_BASE_MS = 1000;
-const BACKOFF_MAX_MS = 30_000;
+// Design section 1, "Failure modes": a 429 honours retry-after, else exponential backoff with
+// jitter, 2 s to 60 s, 8 attempts; a 529, other 5xx, network error or dropped stream gets the
+// same backoff.
+export const MAX_ATTEMPTS = 8;
+const BACKOFF_BASE_MS = 2000;
+const BACKOFF_MAX_MS = 60_000;
 const RETRY_AFTER_MAX_MS = 60_000;
+
+// The wait before retry `attempt` + 1: the exponential step (2 s, 4 s, ... up to 60 s) times a
+// jitter factor from 0.5 to 1, never under 2 s.
+const backoffMs = (attempt: number, random: number): number =>
+  Math.max(BACKOFF_BASE_MS, Math.round(Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS) * (0.5 + random / 2)));
 
 const API_HOST = new URL(MESSAGES_URL).hostname;
 const API_DOMAIN = API_HOST.slice(API_HOST.indexOf('.') + 1);
@@ -266,6 +280,10 @@ export function reserveRequest(history: readonly MessageParam[], params: Message
 }
 
 const retryableStatus = (s: number) => s === 408 || s === 409 || s === 429 || s >= 500;
+// The statuses that stop the batch: no other request of it can succeed either.
+const stopsBatchStatus = (s: number, type: string | null) => s === 400 || s === 401 || s === 403 || s === 404 || type === 'billing_error';
+// A billing failure: a billing_error, or a 400 about the credit balance or billing.
+const isBilling = (e: ApiError) => e.errorType === 'billing_error' || (e.status === 400 && /credit balance|billing/i.test(e.message));
 const broken = (message: string, type: string | null = null, retryable = true) =>
   new ApiError(message, { status: 200, type, retryable, stopsBatch: false, partial: true });
 const retryableStreamError = (type: string | null) => type === 'overloaded_error' || type === 'api_error' || type === 'rate_limit_error';
@@ -283,7 +301,7 @@ async function errorStatus(res: Response): Promise<ApiError> {
   const retryable = retryableStatus(res.status);
   const after = Number(res.headers.get('retry-after') ?? NaN);
   return new ApiError(`HTTP ${res.status}${type ? ` ${type}` : ''}${detail ? `: ${detail}` : ''}`, {
-    status: res.status, type, retryable, stopsBatch: res.status === 400, retryAfter: Number.isFinite(after) && after >= 0 ? after : null,
+    status: res.status, type, retryable, stopsBatch: stopsBatchStatus(res.status, type), retryAfter: Number.isFinite(after) && after >= 0 ? after : null,
   });
 }
 
@@ -398,7 +416,7 @@ async function sendOnce(f: Transport, apiKey: string, body: string, signal?: Abo
   } catch (e) {
     // The guard refused the attempt and never let this Request out, so nothing was sent: an
     // error that is not billed and would recur on retry.
-    if (e instanceof EgressRefusal && !sent.has(request)) throw new ApiError(e.message, { status: null, type: 'egress_refused', retryable: false, stopsBatch: false });
+    if (e instanceof EgressRefusal && !sent.has(request)) throw new ApiError(e.message, { status: null, type: 'egress_refused', retryable: false, stopsBatch: true });
     throw e;
   } finally {
     outbound.delete(request);
@@ -406,6 +424,37 @@ async function sendOnce(f: Transport, apiKey: string, body: string, signal?: Abo
   if (res.status !== 200) throw await errorStatus(res);
   if (!res.body) throw broken('HTTP 200 without a body');
   return { status: res.status, message: await readStream(res.body) };
+}
+
+// How a failed call ends a trial (design section 1, "Failure modes"; section 5, "Outcomes"),
+// whichever call failed: a model call in the trial loop or a judge call in the grader.
+//   INVALID        a response from another model
+//   INFRA_HARNESS  a request we built wrong (a 400 that is not billing), the egress guard, a
+//                  spend refusal, or any other local error (a request the client refused to
+//                  build, a ledger fault)
+//   INFRA_API      401, 403, 404, a billing error, retries exhausted, a network error
+// stopsBatch: true for every INFRA_HARNESS (design section 5), for a 401, 403, 404 or billing
+// error, and for a substituted model (coordinator decision, P8 fix round 3, 2026-10-23: an
+// API-side fault a rerun does not cure). Retries exhausted and a network error do not stop the
+// batch: the trial is rerun. MessagesClient.send closes the grant exactly when this says so.
+export interface ClientFailure {
+  status: 'INVALID' | 'INFRA_HARNESS' | 'INFRA_API';
+  code: string;
+  stopsBatch: boolean;
+  message: string;
+}
+
+export function classifyFailure(e: unknown): ClientFailure {
+  if (e instanceof SpendRefused) return { status: 'INFRA_HARNESS', code: `spend_refused_${e.cap}`, stopsBatch: true, message: e.message };
+  if (e instanceof ApiError) {
+    const message = e.message;
+    if (e.errorType === 'model_mismatch') return { status: 'INVALID', code: 'model_mismatch', stopsBatch: true, message };
+    if (isBilling(e)) return { status: 'INFRA_API', code: 'billing_error', stopsBatch: true, message };
+    const code = e.errorType ?? (e.status === null ? 'network' : `http_${e.status}`);
+    if (e.status === 400 || e.errorType === 'egress_refused') return { status: 'INFRA_HARNESS', code, stopsBatch: true, message };
+    return { status: 'INFRA_API', code, stopsBatch: e.stopsBatch, message };
+  }
+  return { status: 'INFRA_HARNESS', code: 'client_error', stopsBatch: true, message: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
 }
 
 // What the client sends through: the global fetch by default. A transport receives one Request
@@ -423,6 +472,8 @@ export interface ClientOptions {
   trial?: string;
   // Attempts per send, retries included; default MAX_ATTEMPTS.
   maxAttempts?: number;
+  // A number in [0, 1) for the backoff jitter; default Math.random.
+  random?: () => number;
 }
 
 export interface SendOptions {
@@ -470,6 +521,7 @@ export class MessagesClient {
   readonly #log: (line: string) => void;
   readonly #trial: string | undefined;
   readonly #maxAttempts: number;
+  readonly #random: () => number;
 
   constructor(opts: ClientOptions) {
     assertClientGrant(opts.grant, opts.ledger);
@@ -486,14 +538,25 @@ export class MessagesClient {
     this.#log = (line) => opts.log?.(redactText(line, [opts.apiKey]));
     this.#trial = opts.trial;
     this.#maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
+    this.#random = opts.random ?? Math.random;
   }
 
   // Sends history + params and, on a complete answer that is not a refusal, appends it to
-  // history. Anything else leaves history as it was.
+  // history. Anything else leaves history as it was. A failure that stops the batch
+  // (classifyFailure) closes the grant first; an abort never does.
   async send(history: MessageParam[], params: MessageParams, opts: SendOptions = {}): Promise<CallResult> {
+    const signal = opts.signal ? AbortSignal.any([this.#grant.signal, opts.signal]) : this.#grant.signal;
+    try {
+      return await this.#send(history, params, opts, signal);
+    } catch (e) {
+      if (!signal.aborted && classifyFailure(e).stopsBatch) await this.#grant.close();
+      throw e;
+    }
+  }
+
+  async #send(history: MessageParam[], params: MessageParams, opts: SendOptions, signal: AbortSignal): Promise<CallResult> {
     const body = requestBody(history, params);
     const req = reserveFor(body, checkRequest(params, body), this.#trial);
-    const signal = opts.signal ? AbortSignal.any([this.#grant.signal, opts.signal]) : this.#grant.signal;
     const settle = async (res: Reservation, usage: Usage | null) => {
       await this.#grant.settle(res, usage);
       opts.onSettle?.((usage === null ? null : usageCostUsd(usage)) ?? res.worst_usd);
@@ -518,19 +581,14 @@ export class MessagesClient {
         err.message = redactText(err.message, [this.#apiKey]);
         if (err.stack) err.stack = redactText(err.stack, [this.#apiKey]);
         this.#log(`attempt ${attempt}: ${err.message}`);
-        if (err instanceof ApiError && err.stopsBatch) {
-          await this.#grant.close();
-          throw err;
-        }
-        if (!(err instanceof ApiError) || !err.retryable || attempt >= this.#maxAttempts) throw err;
-        await sleepUnlessAborted(this.#sleep, err.retryAfter !== null ? Math.min(err.retryAfter * 1000, RETRY_AFTER_MAX_MS) : Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS), signal);
+        if (err.stopsBatch || !err.retryable || attempt >= this.#maxAttempts) throw err;
+        await sleepUnlessAborted(this.#sleep, err.retryAfter !== null ? Math.min(err.retryAfter * 1000, RETRY_AFTER_MAX_MS) : backoffMs(attempt, this.#random()), signal);
         continue;
       }
       await settle(res, out.message.usage);
       const { message } = out;
       if (message.model !== MODEL) {
         this.#log(`attempt ${attempt}: response model ${message.model} is not ${MODEL}`);
-        await this.#grant.close();
         throw new ApiError(`response model ${message.model} is not ${MODEL}`, { status: out.status, type: 'model_mismatch', retryable: false, stopsBatch: true });
       }
       if (message.stop_reason === 'refusal') {

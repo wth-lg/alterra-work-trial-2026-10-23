@@ -6,11 +6,16 @@
 // Every event carries the schema version v, its 0-based position seq and ts, the injected wall
 // clock as an ISO instant; ts is the only field that differs between two runs of the same
 // mocked trial. turn is the request the event belongs to (0 before the first request). The
-// events that end a trial, limit, error and cancelled, come last; P8 adds graded.
+// event that ends a trial, limit, error or cancelled, comes after the final hashes, and graded,
+// which carries the trial's record with its grade, comes last for every outcome (plan phase
+// P8). Version 2 added graded; a version 1 trajectory (P7, no graded line) still parses and
+// reads as ungraded.
 import type { ContentBlock, MessageParam, MessageParams } from './anthropic.ts';
 import type { Usage } from './cost.ts';
+import type { TrialRecord } from './run.ts';
 
-export const EVENT_SCHEMA_VERSION = 1;
+export const EVENT_SCHEMA_VERSION = 2;
+export const EVENT_SCHEMA_VERSIONS = [1, EVENT_SCHEMA_VERSION] as const;
 
 export const TRIAL_STATUSES = ['COMPLETED', 'REFUSAL', 'LIMIT', 'CANCELLED', 'ENV_ERROR', 'INFRA_API', 'INFRA_HARNESS', 'INVALID'] as const;
 export type TrialStatus = (typeof TRIAL_STATUSES)[number];
@@ -21,7 +26,7 @@ export type Limit = (typeof LIMITS)[number];
 export const HASH_POINTS = ['initial', 'write', 'final', 'replay_final'] as const;
 
 interface Base {
-  v: typeof EVENT_SCHEMA_VERSION;
+  v: (typeof EVENT_SCHEMA_VERSIONS)[number];
   seq: number;
   ts: string;
   turn: number;
@@ -94,9 +99,18 @@ export interface CancelledEvent extends Base {
   type: 'cancelled';
   reason: string;
 }
+// The trial's record, grade included, exactly as run() returns it.
+export interface GradedEvent extends Base {
+  type: 'graded';
+  record: TrialRecord;
+}
 
 export type TrialEvent =
-  | RequestEvent | ResponseEvent | UsageEvent | ToolCallEvent | ToolResultEvent | StateHashEvent | LimitEvent | ErrorEvent | CancelledEvent;
+  | RequestEvent | ResponseEvent | UsageEvent | ToolCallEvent | ToolResultEvent | StateHashEvent | LimitEvent | ErrorEvent | CancelledEvent | GradedEvent;
+
+// The event that ended the trial's episode: the last one before graded (the last event of an
+// ungraded trajectory); undefined for an empty one.
+export const terminalEvent = (events: readonly TrialEvent[]): TrialEvent | undefined => events.findLast((e) => e.type !== 'graded');
 
 // An event before the emitter stamps it.
 type Unstamped<E> = E extends TrialEvent ? Omit<E, 'v' | 'seq' | 'ts'> : never;
@@ -132,7 +146,7 @@ const message: Check = (v) => isObj(v) && (v.role === 'user' || v.role === 'assi
 const usage: Check = (v) => isObj(v) && nat(v.input_tokens) && nat(v.output_tokens);
 const totals: Check = (v) => isObj(v) && ['input', 'cache_write', 'cache_read', 'output'].every((k) => num(v[k])) && Object.keys(v).length === 4;
 
-const BASE: Record<string, Check> = { v: (v) => v === EVENT_SCHEMA_VERSION, seq: nat, ts: str, turn: nat, type: str };
+const BASE: Record<string, Check> = { v: (v) => (EVENT_SCHEMA_VERSIONS as readonly unknown[]).includes(v), seq: nat, ts: str, turn: nat, type: str };
 const FIELDS: Record<TrialEvent['type'], Record<string, Check>> = {
   request: { messages_from: nat, messages: arrayOf(message), params: optional(isObj) },
   response: {
@@ -148,6 +162,11 @@ const FIELDS: Record<TrialEvent['type'], Record<string, Check>> = {
   limit: { limit: oneOf(LIMITS), cap: num, value: num },
   error: { status: oneOf(ERROR_STATUSES), code: str, message: str },
   cancelled: { reason: str },
+  // Only in version 2; the record is run()'s, checked for the fields a reader needs first.
+  graded: {
+    v: (v) => v === EVENT_SCHEMA_VERSION,
+    record: (v) => isObj(v) && str(v.trial_id) && str(v.outcome) && bool(v.valid) && Array.isArray(v.checks) && num(v.cost_usd) && nat(v.turns),
+  },
 };
 
 // Returns x as a TrialEvent, or throws naming the first field that does not fit the schema.

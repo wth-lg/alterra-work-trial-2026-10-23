@@ -93,13 +93,15 @@ const partial = (how: 'eof' | 'error' | 'overloaded'): Step => () => {
 const PARAMS = { max_tokens: 1024, output_config: { effort: 'low' } };
 const user = (): MessageParam[] => [{ role: 'user', content: 'hello' }];
 
-async function client(steps: Step[], opts: { setupLedger?: ReturnType<typeof setup>; projection?: number; fetch?: Transport; maxAttempts?: number } = {}) {
+async function client(steps: Step[], opts: { setupLedger?: ReturnType<typeof setup>; projection?: number; fetch?: Transport; maxAttempts?: number; random?: () => number } = {}) {
   const s = opts.setupLedger ?? setup();
   const grant = await s.ledger.batchStart(opts.projection ?? 1);
   const m = mockFetch(steps);
   const sleeps: number[] = [];
   const c = new MessagesClient({
     grant, ledger: s.ledger, apiKey: fakeKey(), fetch: opts.fetch ?? m.fetch, sleep: async (ms) => void sleeps.push(ms),
+    // The top of the jitter range: each backoff is its full exponential step.
+    random: opts.random ?? (() => 1),
     ...(opts.maxAttempts ? { maxAttempts: opts.maxAttempts } : {}),
   });
   return { ...s, ...m, grant, c, sleeps };
@@ -120,14 +122,33 @@ describe('retries', () => {
     expect(history.at(-1)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'fine' }] });
   });
 
-  it('529 on every attempt: throws a retryable ApiError after 4 attempts, each one settled', async () => {
-    const t = await client([1, 2, 3, 4].map(() => status(529, 'overloaded_error')));
+  // Design section 1, "Failure modes": a 429 honours retry-after, else exponential backoff with
+  // jitter from 2 s to 60 s, 8 attempts; a 529 or other 5xx gets the same backoff.
+  it('529 on every attempt: throws a retryable ApiError after 8 attempts, backing off 2 s to 60 s, each one settled', async () => {
+    expect(anthropic.MAX_ATTEMPTS).toBe(8);
+    const t = await client(Array.from({ length: 8 }, () => status(529, 'overloaded_error')));
     const err = await t.c.send(user(), PARAMS).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({ status: 529, retryable: true, stopsBatch: false });
-    expect(t.calls).toHaveLength(4);
-    expect(t.sleeps).toEqual([1000, 2000, 4000]);
-    expect(rows(t.store, 'settle')).toHaveLength(4);
+    expect(t.calls).toHaveLength(8);
+    expect(t.sleeps).toEqual([2000, 4000, 8000, 16000, 32000, 60000, 60000]);
+    expect(rows(t.store, 'settle')).toHaveLength(8);
+  });
+
+  it('429 on every attempt without retry-after: 8 attempts, the same backoff', async () => {
+    const t = await client(Array.from({ length: 8 }, () => status(429, 'rate_limit_error')));
+    const err = await t.c.send(user(), PARAMS).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 429, retryable: true, stopsBatch: false });
+    expect(t.calls).toHaveLength(8);
+    expect(t.sleeps).toEqual([2000, 4000, 8000, 16000, 32000, 60000, 60000]);
+  });
+
+  it('jitter: the bottom of the range waits half the step, never under 2 s', async () => {
+    const t = await client(Array.from({ length: 8 }, () => status(429, 'rate_limit_error')), { random: () => 0 });
+    await t.c.send(user(), PARAMS).catch(() => {});
+    expect(t.sleeps).toEqual([2000, 2000, 4000, 8000, 16000, 30000, 30000]);
+    // Retries exhausted does not stop the batch: the trial is INFRA_API and rerun.
+    expect(rows(t.store, 'close')).toHaveLength(0);
   });
 
   it('400 stops the batch: no retry, the grant is closed, and the next call sends nothing', async () => {
@@ -323,7 +344,7 @@ describe('pnpm live:node refuses before any call', () => {
 // P2 fix round (findings p2-findings-1): each test below failed at 63259f5.
 describe('MessagesClient is the only way to send', () => {
   it('exports only the metered client, its error and pure helpers', () => {
-    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'EgressRefusal', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'isApiHost', 'requestUrl', 'reserveRequest']);
+    expect(Object.keys(anthropic).sort()).toEqual(['ANTHROPIC_VERSION', 'ApiError', 'EgressRefusal', 'MAX_ATTEMPTS', 'MODEL', 'MessagesClient', 'claimOutbound', 'classifyFailure', 'isApiHost', 'requestUrl', 'reserveRequest']);
   });
 
   it('no exported function sends without a grant', async () => {
@@ -403,12 +424,20 @@ describe('status and local failure handling', () => {
     expect(rows(t.store, 'close')).toHaveLength(0);
   });
 
-  it('a 401 is not retried and does not close the batch: only 400 stops it', async () => {
-    const t = await client([status(401, 'authentication_error'), ok()]);
-    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: 401, retryable: false, stopsBatch: false });
+  it.each([[401, 'authentication_error'], [403, 'permission_error'], [404, 'not_found_error'], [402, 'billing_error']])('a %i %s is not retried and stops the batch: the grant is closed, the next call sends nothing', async (code, type) => {
+    const t = await client([status(code, type), ok()]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: code, retryable: false, stopsBatch: true });
     expect(t.calls).toHaveLength(1);
-    expect(rows(t.store, 'close')).toHaveLength(0);
+    expect(rows(t.store, 'close')).toHaveLength(1);
     expect(rows(t.store, 'settle').map((x) => x.cost_usd)).toEqual([0]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toThrow(/closed|stopped/);
+    expect(t.calls).toHaveLength(1);
+  });
+
+  it('a 422 fails the call only', async () => {
+    const t = await client([status(422, 'invalid_request_error'), ok()]);
+    await expect(t.c.send(user(), PARAMS)).rejects.toMatchObject({ status: 422, retryable: false, stopsBatch: false });
+    expect(rows(t.store, 'close')).toHaveLength(0);
   });
 
   it('a key that is not a valid header value throws in the constructor with 0 reserves and 0 fetch calls', async () => {

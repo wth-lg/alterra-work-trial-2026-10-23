@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { scriptedTransport, SCENARIOS } from '../../../apps/web/src/harness/scenarios.ts';
 import { WRITE_TASK } from '../../../apps/web/src/harness/write-task.ts';
 import { MessagesClient } from '../anthropic.ts';
-import { parseEvent, type TrialEvent } from '../events.ts';
+import { parseEvent, terminalEvent, type TrialEvent } from '../events.ts';
 import { admitStore, createLedger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 import { run } from '../run.ts';
 import { taskSource } from '../tasks.ts';
@@ -98,7 +98,8 @@ describe('an environment exception in run()', () => {
     Object.assign(fail, inject);
     const { result, events } = await trial(badWorld ? async () => Promise.reject(new Error('injected world read failure')) : undefined);
     expect(result.record).toMatchObject({ status: 'ENV_ERROR', detail: 'INTERNAL' });
-    expect(events.at(-1)).toMatchObject({ type: 'error', status: 'ENV_ERROR', code: 'INTERNAL', message: expect.stringMatching(/injected/) });
+    expect(terminalEvent(events)).toMatchObject({ type: 'error', status: 'ENV_ERROR', code: 'INTERNAL', message: expect.stringMatching(/injected/) });
+    expect(events.at(-1)!.type).toBe('graded');
     expect(events.filter((e) => e.type === 'error' || e.type === 'limit' || e.type === 'cancelled')).toHaveLength(1);
     for (const e of events) parseEvent(JSON.parse(JSON.stringify(e)));
     expect(toJsonl(result.events)).toBe(events.map((e) => `${JSON.stringify(e)}\n`).join(''));

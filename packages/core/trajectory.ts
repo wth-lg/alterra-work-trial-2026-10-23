@@ -23,10 +23,17 @@ export function parseTrajectory(jsonl: string): TrialEvent[] {
     });
 }
 
-// The JSONL with every ts removed: what two runs of the same mocked trial must agree on.
+// The JSONL with every ts removed, and on graded lines the clock-derived fields of the graded
+// record (started, ended, and trial_id, whose default is <task>:<started ms>): what two runs of
+// the same mocked trial must agree on. Everything else in the graded record, outcome, checks,
+// score, cost, turns and hashes, is still compared.
 export const stripTimestamps = (jsonl: string): string =>
   parseTrajectory(jsonl)
-    .map(({ ts: _ts, ...rest }) => `${JSON.stringify(rest)}\n`)
+    .map(({ ts: _ts, ...rest }) => {
+      if (rest.type !== 'graded') return `${JSON.stringify(rest)}\n`;
+      const { started: _s, ended: _e, trial_id: _t, ...record } = rest.record;
+      return `${JSON.stringify({ ...rest, record })}\n`;
+    })
     .join('');
 
 // The calls that ran, in order: every tool_call whose tool_result says executed.
