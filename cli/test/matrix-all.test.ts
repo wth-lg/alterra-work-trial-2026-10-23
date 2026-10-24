@@ -65,3 +65,27 @@ describe('matrix --task all', () => {
     expect(lines.join('\n')).toMatch(/^ {2}broken: FAIL \(usage: --task: no task\.toml\)$/m);
   });
 });
+
+// CI's matrix job fans out over this list, one job per task, so a new task needs no CI edit.
+describe('matrix --list-tasks', () => {
+  async function list(tasks: string[]) {
+    const lines: string[] = [];
+    const code = await main(['--list-tasks'], { env: process.env, out: (l) => lines.push(l), tasks: () => tasks });
+    return { code, lines };
+  }
+
+  it('prints the ids --task all runs as one line of JSON', async () => {
+    expect(await list(['_toy', 'b'])).toEqual({ code: 0, lines: ['["_toy","b"]'] });
+    const lines: string[] = [];
+    expect(await main(['--list-tasks'], { env: process.env, out: (l) => lines.push(l) })).toBe(0);
+    expect(lines.map((l) => JSON.parse(l) as string[])).toEqual([matrixTaskIds()]);
+  });
+
+  it('exits 1 when there is no task, so CI never runs an empty matrix', async () => {
+    expect(await list([])).toEqual({ code: 1, lines: ['matrix: no task directory has tests/'] });
+  });
+
+  it('takes no other argument', async () => {
+    expect(await main(['--list-tasks', 'x'], { env: process.env, out: () => {} })).toBe(2);
+  });
+});
