@@ -6,9 +6,11 @@
 //
 // The run's mode and expected tasks come from its manifest (task_versions) or --task. Whenever a
 // requirement is given, a task expected and without records is a violation, and so is a run that
-// is not live, unless the caller allows a mock run. GRADER_ERROR is counted raw over every
-// record, a record a later regrade passed included (regrade never rewrites the outcome): a
-// GRADER_ERROR is settled, never re-queued as a model trial, so only grader_error=0 catches it.
+// is not live, unless the caller allows a mock run. grader_error=N checks each record's current
+// grade: its last regrades[] entry, else its outcome, so a run whose grader bug was fixed and
+// regraded can pass. grader_error_history counts the records that were GRADER_ERROR in an earlier
+// grade; it is disclosed, never a requirement. A GRADER_ERROR is settled, never re-queued as a
+// model trial: regrade grades it again from its trajectory.
 //
 // Wilson score interval, z = 1.959964 (two-sided 95%), for k passes in n valid trials, p = k/n:
 //   centre = (p + z²/2n) / (1 + z²/n)
@@ -47,6 +49,8 @@ export interface SummaryTrial {
   cost_usd: number;
   judge_cost_usd?: number;
   score: number | null;
+  // cli regrade's entries, oldest first; the last is the current grade.
+  regrades?: ReadonlyArray<{ outcome: string }>;
 }
 
 export interface SummaryInput {
@@ -76,7 +80,8 @@ export interface TaskSummary {
   refusal_excluded_rate: number | null;
   outcomes: Record<string, number>;
   env_error_raw: number;
-  grader_error_raw: number;
+  grader_error: number; // records whose current grade is GRADER_ERROR
+  grader_error_history: number; // records that were GRADER_ERROR in an earlier grade
   requeued: number;
   mean_score: number | null;
   mean_cost_usd: number | null;
@@ -98,7 +103,7 @@ export interface Summary {
   schema_version: number;
   run_id: string;
   tasks: Record<string, TaskSummary>;
-  totals: { records: number; trials: number; passes: number; env_error_raw: number; grader_error_raw: number; requeued: number; internal_errors: number; cost_usd: number };
+  totals: { records: number; trials: number; passes: number; env_error_raw: number; grader_error: number; grader_error_history: number; requeued: number; internal_errors: number; cost_usd: number };
   mode: string | null;
   expected_tasks: { tasks: string[]; from: string } | null;
   models: string[];
@@ -108,6 +113,9 @@ export interface Summary {
   violations: string[];
 }
 
+// A record's current grade, and the grades before it.
+const currentOutcome = (t: SummaryTrial): string => t.regrades?.at(-1)?.outcome ?? t.outcome;
+const earlierOutcomes = (t: SummaryTrial): string[] => (t.regrades?.length ? [t.outcome, ...t.regrades.slice(0, -1).map((r) => r.outcome)] : []);
 const keyOf = (t: Pick<SummaryTrial, 'task_id' | 'index'>) => `${t.task_id}/${t.index}`;
 const mean = (xs: readonly number[]): number | null => (xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length);
 const sorted = (xs: Iterable<string>) => [...new Set(xs)].sort();
@@ -134,7 +142,8 @@ export function summarize(input: SummaryInput): Summary {
       refusal_excluded_rate: valid.length - refusals === 0 ? null : passes / (valid.length - refusals),
       outcomes,
       env_error_raw: [...mine, ...requeued].filter((t) => t.outcome === 'ENV_ERROR').length,
-      grader_error_raw: [...mine, ...requeued].filter((t) => t.outcome === 'GRADER_ERROR').length,
+      grader_error: [...mine, ...requeued].filter((t) => currentOutcome(t) === 'GRADER_ERROR').length,
+      grader_error_history: [...mine, ...requeued].filter((t) => earlierOutcomes(t).includes('GRADER_ERROR')).length,
       requeued: requeued.length,
       mean_score: mean(valid.flatMap((t) => (t.score === null ? [] : [t.score]))),
       mean_cost_usd: mean(mine.map((t) => t.cost_usd + (t.judge_cost_usd ?? 0))),
@@ -153,7 +162,8 @@ export function summarize(input: SummaryInput): Summary {
       trials: s.reduce((a, t) => a + t.trials, 0),
       passes: s.reduce((a, t) => a + t.passes, 0),
       env_error_raw: s.reduce((a, t) => a + t.env_error_raw, 0),
-      grader_error_raw: s.reduce((a, t) => a + t.grader_error_raw, 0),
+      grader_error: s.reduce((a, t) => a + t.grader_error, 0),
+      grader_error_history: s.reduce((a, t) => a + t.grader_error_history, 0),
       requeued: input.requeued.length,
       internal_errors: all.reduce((a, t) => a + (t.tool_errors.INTERNAL ?? 0), 0),
       cost_usd: all.reduce((a, t) => a + t.cost_usd + (t.judge_cost_usd ?? 0), 0),
@@ -241,8 +251,9 @@ export function checkRequirements(s: Summary, req: Requirements): string[] {
   if (req.env_error_raw !== undefined && s.totals.env_error_raw > req.env_error_raw) {
     out.push(`ENV_ERROR raw count ${s.totals.env_error_raw} (re-queued attempts included), required at most ${req.env_error_raw}`);
   }
-  if (req.grader_error !== undefined && s.totals.grader_error_raw > req.grader_error) {
-    out.push(`GRADER_ERROR raw count ${s.totals.grader_error_raw} (regraded records included), required at most ${req.grader_error}`);
+  if (req.grader_error !== undefined && s.totals.grader_error > req.grader_error) {
+    const n = s.totals.grader_error;
+    out.push(`GRADER_ERROR in ${n} record${n === 1 ? ' at its' : 's at their'} current grade, required at most ${req.grader_error}`);
   }
   if (req.model !== undefined) {
     const other = s.models.filter((m) => m !== req.model);
@@ -278,7 +289,7 @@ export function validateSummary(x: unknown): string[] {
     expected_tasks: (v) => v === null || (isObj(v) && strings(v.tasks) && typeof v.from === 'string'),
   });
   if (isObj(x.totals)) {
-    check('totals.', x.totals, { records: count, trials: count, passes: count, env_error_raw: count, grader_error_raw: count, requeued: count, internal_errors: count, cost_usd: num });
+    check('totals.', x.totals, { records: count, trials: count, passes: count, env_error_raw: count, grader_error: count, grader_error_history: count, requeued: count, internal_errors: count, cost_usd: num });
   }
   if (isObj(x.replay)) check('replay.', x.replay, { ran: (v) => typeof v === 'boolean', matched: count, mismatched: strings, missing: strings });
   if (isObj(x.tasks)) {
@@ -289,7 +300,7 @@ export function validateSummary(x: unknown): string[] {
       }
       check(`tasks.${id}.`, t, {
         task_versions: strings, records: count, trials: count, passes: count, pass_rate: rate, wilson95: interval, refusals: count,
-        refusal_excluded_rate: rate, env_error_raw: count, grader_error_raw: count, requeued: count, mean_score: (v) => v === null || num(v), mean_cost_usd: (v) => v === null || num(v),
+        refusal_excluded_rate: rate, env_error_raw: count, grader_error: count, grader_error_history: count, requeued: count, mean_score: (v) => v === null || num(v), mean_cost_usd: (v) => v === null || num(v),
         outcomes: (v) => isObj(v) && Object.entries(v).every(([o, n]) => (OUTCOMES as readonly string[]).includes(o) && count(n)),
       });
       if (count(t.passes) && count(t.trials) && (t.passes as number) > (t.trials as number)) errors.push(`tasks.${id}.passes: more than its trials`);

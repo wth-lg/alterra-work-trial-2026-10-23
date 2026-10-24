@@ -9,8 +9,10 @@
 //   model=M          every record requested M and every response came from M
 //   replay=all       replay.json exists and every trial reproduced; every record's replay_final
 //                    equals its final hash
-//   grader_error=N   at most N GRADER_ERROR records, counted raw: a record a later regrade passed
-//                    still counts. GRADER_ERROR is settled, never re-queued as a model trial
+//   grader_error=N   at most N records whose current grade (the last regrade, else the recorded
+//                    outcome) is GRADER_ERROR. GRADER_ERROR is settled, never re-queued as a
+//                    model trial; the records that were GRADER_ERROR in an earlier grade are
+//                    printed as history, never required
 //   mode=M           the manifest's mode is M (mode=live)
 // With any requirement, every task the run must hold has records: those of --task (all, or a
 // comma list), else the manifest's task_versions; and a run that is not live is a violation
@@ -36,10 +38,12 @@ export interface Deps {
 const defaults: Deps = { out: (l) => process.stdout.write(`${l}\n`), err: (l) => process.stderr.write(`${l}\n`) };
 const USAGE = 'usage: pnpm cli summary <run> [--require valid=N,band=a-b,env_error_raw=N,grader_error=N,model=M,replay=all,mode=live] [--task all|<id,...>] [--allow-mock] [--json]';
 
-const toTrial = (r: BatchRecord): SummaryTrial => ({
+// A record as cli regrade leaves it: its regrades[] entries appended.
+const toTrial = (r: BatchRecord & { regrades?: Array<{ outcome: string }> }): SummaryTrial => ({
   task_id: r.task_id, task_version: r.task_version ?? null, index: r.index, outcome: r.outcome, model_requested: r.model_requested,
   models_returned: r.models_returned ?? [], state_hash: r.state_hash, tool_errors: r.tool_errors ?? {}, cost_usd: r.cost_usd ?? 0,
   judge_cost_usd: r.judge_cost_usd ?? 0, score: r.score ?? null,
+  ...(r.regrades ? { regrades: r.regrades } : {}),
 });
 
 // replay.json as trial -> reproduced; null when replay has not run.
@@ -116,7 +120,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     const w = t.wilson95 === null ? 'n/a' : `${pct(t.wilson95.lo)}-${pct(t.wilson95.hi)}`;
     say(`${id.padEnd(width)}  ${t.passes}/${t.trials}  Wilson 95% ${w}  ENV_ERROR raw ${t.env_error_raw}  re-queued ${t.requeued}`);
   }
-  say(`GRADER_ERROR raw ${s.totals.grader_error_raw} (regraded records included; a GRADER_ERROR is never re-queued as a model trial: regrade grades it again)`);
+  say(`GRADER_ERROR ${s.totals.grader_error} at the current grade; history ${s.totals.grader_error_history} (GRADER_ERROR in an earlier grade, disclosed only). A GRADER_ERROR is never re-queued as a model trial: regrade grades it again`);
   for (const v of s.violations) say(`violation: ${v}`);
   say(`summary: ${s.violations.length === 0 ? 'every requirement holds' : `${s.violations.length} violation(s)`}; wrote ${join(dir, 'summary.json')}`);
   if (json) deps.out(JSON.stringify(s));

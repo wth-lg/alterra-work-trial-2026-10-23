@@ -7,7 +7,7 @@ import { MODEL } from '../../packages/core/anthropic.ts';
 
 export const SUMMARY_FIXTURES = ['nine-trials', 'model-mismatch', 'requeued-env-error', 'replay-mismatch', 'eight-of-ten', 'missing-task', 'mock-mode', 'grader-error'] as const;
 export const AUDIT_FIXTURES = ['missing-label', 'environment-label', 'evidence-absent', 'unadjudicated', 'never-exposable', 'one-audited-pass', 'model-fault-no'] as const;
-export type Fixture = 'clean' | (typeof SUMMARY_FIXTURES)[number] | (typeof AUDIT_FIXTURES)[number];
+export type Fixture = 'clean' | 'grader-error-regraded' | (typeof SUMMARY_FIXTURES)[number] | (typeof AUDIT_FIXTURES)[number];
 
 export const TASKS = ['t-alpha', 't-beta'];
 const EXPOSED = 'Patient/pt-0001';
@@ -79,9 +79,10 @@ export function writeFixtureRun(dir: string, fixture: Fixture): void {
   if (fixture === 'requeued-env-error') {
     put(dir, 'requeued/t-alpha/3.a-0.json', `${JSON.stringify(record('t-alpha', 3, 'ENV_ERROR', { status: 'ENV_ERROR', attempt: 'a-0', settled: false, requeue_reason: 'ENV_ERROR' }), null, 2)}\n`);
   }
-  if (fixture === 'grader-error') {
-    // An eleventh record: a check threw, and a later regrade with a fixed grader passes it.
-    const regrades = [{ grader_version: 'g-next', outcome: 'PASS', score: 1, valid: true, changed: true, at: '2026-10-24T00:00:00.000Z' }];
+  if (fixture === 'grader-error' || fixture === 'grader-error-regraded') {
+    // An eleventh record: a check threw; in grader-error-regraded a later regrade with a fixed
+    // grader passes it.
+    const regrades = fixture === 'grader-error' ? [] : [{ grader_version: 'g-next', outcome: 'PASS', score: 1, valid: true, changed: true, at: '2026-10-24T00:00:00.000Z' }];
     put(dir, 'trials/t-alpha/10.json', `${JSON.stringify(record('t-alpha', 10, 'GRADER_ERROR', { mode, regrades }), null, 2)}\n`);
     put(dir, 'trajectories/t-alpha/10.jsonl', TRAJECTORY);
     replay['t-alpha/10'] = { match: true };

@@ -52,7 +52,7 @@ describe('summary --require', () => {
     const r = await cli(summary, [run(fixture), '--require', REQUIRE]);
     expect(r.code, r.out + r.err).toBe(1);
     const why = { 'nine-trials': /t-alpha.*9 valid trials.*10/, 'model-mismatch': /claude-other-model/, 'requeued-env-error': /ENV_ERROR.*1.*0/, 'replay-mismatch': /replay.*t-alpha\/2/, 'eight-of-ten': /t-alpha.*8\/10.*2-7/,
-      'missing-task': /t-beta.*expected.*no records/, 'mock-mode': /mock-fixture.*--allow-mock/, 'grader-error': /GRADER_ERROR raw count 1/,
+      'missing-task': /t-beta.*expected.*no records/, 'mock-mode': /mock-fixture.*--allow-mock/, 'grader-error': /GRADER_ERROR in 1 record at its current grade/,
     }[fixture];
     expect(r.out + r.err).toMatch(why);
   });
@@ -74,11 +74,14 @@ describe('summary --require', () => {
     expect(r.out).toMatch(/t-gamma: expected by --task, no records/);
   });
 
-  it('grader_error counts a GRADER_ERROR record a later regrade passed, and says GRADER_ERROR is never re-queued', async () => {
-    const r = await cli(summary, [run('grader-error'), '--require', 'grader_error=0', '--json']);
-    expect(r.code).toBe(1);
-    expect(r.err).toMatch(/GRADER_ERROR raw 1 .*never re-queued/);
-    expect(JSON.parse(r.out).totals.grader_error_raw).toBe(1);
+  it('grader_error checks the current grade: a current GRADER_ERROR fails, one a regrade passed meets it with its history printed', async () => {
+    const failing = await cli(summary, [run('grader-error'), '--require', 'grader_error=0', '--json']);
+    expect(failing.code).toBe(1);
+    expect(JSON.parse(failing.out).totals).toMatchObject({ grader_error: 1, grader_error_history: 0 });
+    const regraded = await cli(summary, [run('grader-error-regraded'), '--require', REQUIRE, '--json']);
+    expect(regraded.code, regraded.err).toBe(0);
+    expect(regraded.err).toMatch(/GRADER_ERROR 0 at the current grade; history 1 .*never re-queued/);
+    expect(JSON.parse(regraded.out).totals).toMatchObject({ grader_error: 0, grader_error_history: 1 });
   });
 
   it('exits 2 on an unknown requirement and 1 on a missing run', async () => {

@@ -91,8 +91,12 @@ describe('--require', () => {
     expect(checkRequirements(mock, { ...parseRequire('valid=10'), allow_mock: true })).toEqual([]);
     expect(checkRequirements(mock, { ...parseRequire('valid=10,mode=live'), allow_mock: true })).toEqual(['mode mock-toy, required live']);
     const graderError = summarize({ ...base, mode: 'live', trials: [...clean, trial('t-a', 10, 'GRADER_ERROR')] });
-    expect(graderError.totals.grader_error_raw).toBe(1);
-    expect(checkRequirements(graderError, parseRequire('valid=10,grader_error=0'))).toEqual([expect.stringMatching(/GRADER_ERROR raw count 1/)]);
+    expect(graderError.totals).toMatchObject({ grader_error: 1, grader_error_history: 0 });
+    expect(checkRequirements(graderError, parseRequire('valid=10,grader_error=0'))).toEqual([expect.stringMatching(/GRADER_ERROR in 1 record at its current grade/)]);
+    const regrades = [{ outcome: 'GRADER_ERROR' }, { outcome: 'FAIL' }];
+    const regraded = summarize({ ...base, mode: 'live', trials: [...clean, trial('t-a', 10, 'GRADER_ERROR', { regrades })] });
+    expect(regraded.totals).toMatchObject({ grader_error: 0, grader_error_history: 1 });
+    expect(checkRequirements(regraded, parseRequire('valid=10,grader_error=0'))).toEqual([]);
     expect(() => assertSummary(JSON.parse(JSON.stringify(graderError)))).not.toThrow();
   });
 });
