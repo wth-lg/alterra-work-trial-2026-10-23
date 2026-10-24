@@ -1,7 +1,8 @@
 // `pnpm cli run-one` (plan phase P7) with the mocked API: its dry run prints the projection
 // batchStart is given and opens nothing; a ledger whose exposure plus that projection crosses
-// $450 refuses before any call; a mocked trial writes the record and the trajectory JSONL,
-// meters through the ledger and closes its batch; a rerun of a recorded trial key sends nothing.
+// PROJECTED_CAP_USD refuses before any call; a mocked trial writes the record and the trajectory
+// JSONL, meters through the ledger and closes its batch; a rerun of a recorded trial key sends
+// nothing.
 // The toy has a grader (tasks/_toy/tests/grader.ts), so the dry-run projection is the per-trial
 // cap plus its judge allowance (bounded by the judge's body cap), and the mocked trial makes three
 // model calls and two judge calls, each judge call on its own right-sized grant, and PASSes.
@@ -14,6 +15,7 @@ import { main, projection, type Deps } from '../../../cli/run-one.ts';
 import { checks as TOY_CHECKS } from '../../../tasks/_toy/tests/grader.ts';
 import type { Transport } from '../anthropic.ts';
 import { PER_TRIAL_CAP_USD } from '../cost.ts';
+import { PROJECTED_CAP_USD } from '../ledger.ts';
 import { JUDGE_MAX_CALL_USD } from '../../grader/judge.ts';
 import { parseTrajectory } from '../trajectory.ts';
 
@@ -49,14 +51,15 @@ describe('cli run-one', () => {
   });
 
   // The loop's grant is the per-trial cap; the dry run's larger projection is the upper bound
-  // spend --check takes, and each judge call is checked against $450 on its own grant.
-  it('refuses with 0 calls when ledger + the per-trial cap = $450.01', async () => {
+  // spend --check takes, and each judge call is checked against PROJECTED_CAP_USD on its own grant.
+  it('refuses with 0 calls when ledger + the per-trial cap is one cent over the projected cap', async () => {
     const dir = tempDir('run-one');
-    write(dir, 'spend.jsonl', seed(Number((450.01 - PER_TRIAL_CAP_USD).toFixed(6))));
+    write(dir, 'spend.jsonl', seed(Number((PROJECTED_CAP_USD + 0.01 - PER_TRIAL_CAP_USD).toFixed(6))));
     const h = harness({ SPEND_LEDGER: join(dir, 'spend.jsonl') });
     expect(await main([...ARGS, '--mock', 'toy', '--out', dir], h.deps)).toBe(1);
     expect(h.calls()).toBe(0);
-    expect(h.lines.join('\n')).toMatch(/projected cap: .* = \$450\.01 > \$450/);
+    expect(h.lines.join('\n')).toMatch(/projected cap: /);
+    expect(h.lines.join('\n')).toContain(`= $${(PROJECTED_CAP_USD + 0.01).toFixed(2)} > $${PROJECTED_CAP_USD}`);
     expect(existsSync(join(dir, 'trials/_toy/claude-opus-5-5/high/mock-toy/0.json'))).toBe(false);
   });
 

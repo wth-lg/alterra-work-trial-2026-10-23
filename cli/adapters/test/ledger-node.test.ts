@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { repoRoot, runScript, tempDir, write } from '../../../scripts/test/helpers.ts';
-import { assertGrant, SpendRefused, totals, type LedgerRow } from '../../../packages/core/ledger.ts';
+import { ACTUAL_CAP_USD, assertGrant, PROJECTED_CAP_USD, SpendRefused, totals, type LedgerRow } from '../../../packages/core/ledger.ts';
 import { AUDITOR_ALLOWANCE_USD, worstCaseUsd } from '../../../packages/core/cost.ts';
 import { openNodeLedger, readRows, reserveSpend, resolveLedgerPath, settleSpend } from '../ledger-node.ts';
 
@@ -88,7 +88,7 @@ describe('ledger modes', () => {
     expect(mode).toBe('default');
     expect(existsSync(path)).toBe(true);
     let calls = 0;
-    await expect(ledger.batchStart(450.01).then(() => calls++)).rejects.toThrow(SpendRefused);
+    await expect(ledger.batchStart(PROJECTED_CAP_USD + 0.01).then(() => calls++)).rejects.toThrow(SpendRefused);
     expect(calls).toBe(0);
     expect(readRows(path)).toEqual([]);
   });
@@ -128,12 +128,12 @@ describe('ledger modes', () => {
 });
 
 describe('cross-process caps', () => {
-  it('4 concurrent processes near $500 never take settled + reserved past $500 (case 6)', async () => {
+  it('4 concurrent processes near the actual cap never take settled + reserved past it (case 6)', async () => {
     const root = tempDir('ledger-c6');
     const path = join(root, 'spend.jsonl');
     // Each reservation's worst case is w; the seeded room fits exactly 2 of them.
     const w = worstCaseUsd({ bodyBytes: 0, maxTokens: 500 });
-    seed(path, history(500 - 2.1 * w));
+    seed(path, history(ACTUAL_CAP_USD - 2.1 * w));
     // All four reserve in the same millisecond and 2 fit. Each reads a long ledger before it
     // appends, so without the lock all four see room and all four append.
     const start = Date.now() + 1500;
@@ -147,20 +147,22 @@ catch (e) { if (e.name !== 'SpendRefused') throw e; console.log('refused'); }
     const results = await Promise.all([0, 1, 2, 3].map(() => child(code, env, root)));
     for (const r of results) expect(r.err).toBe('');
     const t = totals(readRows(path));
-    expect(t.settled + t.reserved).toBeLessThanOrEqual(500 + 1e-9);
+    expect(t.settled + t.reserved).toBeLessThanOrEqual(ACTUAL_CAP_USD + 1e-9);
     expect(results.map((r) => r.out.trim()).sort()).toEqual(['ok', 'ok', 'refused', 'refused']);
   });
 
-  it('exactly one of two concurrent batchStart(300) gets a grant; a killed batch counts until spend --close (case 12)', async () => {
+  it('exactly one of two concurrent batchStarts that each fit alone gets a grant; a killed batch counts until spend --close (case 12)', async () => {
     const root = tempDir('ledger-c12');
     const path = join(root, 'spend.jsonl');
     seed(path, history(100));
+    // One batch fits under the projected cap; two do not.
+    const projection = 0.6 * (PROJECTED_CAP_USD - 100);
     const start = Date.now() + 1500;
     const code = `
 const { ledger } = L.openNodeLedger({ transport: 'live' });
 while (Date.now() < ${start}) {}
 let grant;
-try { grant = await ledger.batchStart(300); } catch (e) { if (e.name !== 'SpendRefused') throw e; console.log(JSON.stringify({ refused: true })); process.exit(0); }
+try { grant = await ledger.batchStart(${projection}); } catch (e) { if (e.name !== 'SpendRefused') throw e; console.log(JSON.stringify({ refused: true })); process.exit(0); }
 await grant.reserve({ bodyBytes: 0, maxTokens: 250000 });
 console.log(JSON.stringify({ batch_id: grant.batch_id }));
 process.kill(process.pid, 'SIGKILL');
@@ -173,9 +175,9 @@ process.kill(process.pid, 'SIGKILL');
     expect(killed?.signal).toBe('SIGKILL');
     const batchId = outs.find((o) => o.batch_id)?.batch_id ?? '';
 
-    // 100 settled + the dead batch at its 300 projection + 100 > 450.
+    // 100 settled + the dead batch at its projection + the rest of the projected cap and a cent.
     const { ledger } = openNodeLedger({ transport: 'live', env });
-    await expect(ledger.batchStart(100)).rejects.toThrow(SpendRefused);
+    await expect(ledger.batchStart(PROJECTED_CAP_USD - 100 - projection + 0.01)).rejects.toThrow(SpendRefused);
     const close = spendCli(['--close', batchId], env, root);
     expect(close.stderr).toBe('');
     expect(close.status).toBe(0);
@@ -266,10 +268,10 @@ describe('spend command', () => {
 describe('spend --check --final-reserve (case 16)', () => {
   const reserve = 60 * 6 * 1.15 + AUDITOR_ALLOWANCE_USD;
 
-  it('with no runs prints 60 x $6 x 1.15 plus the auditor allowance and exits 1 exactly above $450', () => {
+  it('with no runs prints 60 x $6 x 1.15 plus the auditor allowance and exits 1 exactly above the projected cap', () => {
     for (const [seeded, status] of [
-      [450 - 10 - reserve, 0],
-      [450 - 10 - reserve + 0.01, 1],
+      [PROJECTED_CAP_USD - 10 - reserve, 0],
+      [PROJECTED_CAP_USD - 10 - reserve + 0.01, 1],
     ] as const) {
       const root = tempDir('ledger-c16');
       const path = join(root, 'spend.jsonl');
