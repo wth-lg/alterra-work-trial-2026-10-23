@@ -5,17 +5,20 @@
 // trajectory JSONL line for line, and every event validates against events.ts.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { scriptedTransport, SCENARIOS, type Script, type ScriptedTransport } from '../../../apps/web/src/harness/scenarios.ts';
+import { scriptedTransport, SCENARIOS, sse, turnEvents, type Script, type ScriptedTransport } from '../../../apps/web/src/harness/scenarios.ts';
+import { WRITE_TASK } from '../../../apps/web/src/harness/write-task.ts';
 import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
-import { MessagesClient } from '../anthropic.ts';
+import { MessagesClient, type Transport } from '../anthropic.ts';
 import { parseEvent, type TrialEvent } from '../events.ts';
 import { admitStore, createLedger, type LedgerRow, type LedgerStore } from '../ledger.ts';
 import { run, type RunOptions } from '../run.ts';
+import { taskSource } from '../tasks.ts';
 import { stripTimestamps, toJsonl } from '../trajectory.ts';
 
 const root = new URL('../../../', import.meta.url);
 const WORLD = new Uint8Array(readFileSync(new URL('fixtures/world.ndjson.gz', root)));
 const MANIFEST = JSON.parse(readFileSync(new URL('fixtures/manifest.json', root), 'utf8')) as { world: { state_hash: string } };
+const DEFINITIONS = JSON.parse(readFileSync(new URL('fixtures/definitions-pruned.json', root), 'utf8'));
 
 class MemoryStore implements LedgerStore {
   rows: LedgerRow[] = [];
@@ -31,7 +34,7 @@ class MemoryStore implements LedgerStore {
 
 // A trial over the committed world and tasks/, through a real MessagesClient metered by an
 // in-memory ledger, with a wall clock that moves 4 s per request sent.
-async function trial(script: Script, over: Partial<RunOptions> = {}, task = '_toy') {
+async function trial(script: Script, over: Partial<RunOptions> = {}, task = '_toy', transport?: Transport) {
   const store = new MemoryStore();
   admitStore(store);
   let id = 0;
@@ -39,7 +42,7 @@ async function trial(script: Script, over: Partial<RunOptions> = {}, task = '_to
   const grant = await ledger.batchStart(6);
   const mock: ScriptedTransport = scriptedTransport(script);
   let clock = Date.UTC(2026, 9, 23, 12);
-  const send = mock.transport;
+  const send = transport ?? mock.transport;
   const client = new MessagesClient({ grant, ledger, apiKey: 'test-key-not-real', fetch: (r) => ((clock += 4000), send(r)), sleep: async () => {} });
   const events: TrialEvent[] = [];
   const result = await run(task, 'claude-opus-5-5', {
@@ -166,5 +169,47 @@ describe('run() with a mocked API', () => {
     // Timestamps are the only thing an injected clock changes.
     const again = await trial(SCENARIOS.toy, { now: () => 0 });
     expect(stripTimestamps(toJsonl(again.result.events))).toBe(stripTimestamps(toJsonl(result.events)));
+  });
+
+  it('replays with the tools the task offered: a call to a tool it does not offer stays the model\'s error', async () => {
+    // static-analyzer-20's probe: _toy offers get_context, fhir_read and finish; send_message is a write.
+    const script: Script = [
+      { tools: [{ id: 'toolu_p1', name: 'send_message', input: { recipient: 'Practitioner/pr-okafor', priority: 'routine', subject: 'hi', body: 'hello', about: [] } }] },
+      { tools: [{ id: 'toolu_p2', name: 'finish', input: { summary: 'done' } }] },
+    ];
+    const { result, events } = await trial(script);
+    checkStream(events, result.events);
+    const rejected = events.find((e) => e.type === 'tool_result' && e.tool_use_id === 'toolu_p1');
+    expect(rejected).toMatchObject({ executed: true, is_error: true, error_code: 'NOT_SUPPORTED' });
+    expect(result.record).toMatchObject({ status: 'COMPLETED', stop: 'finish', detail: null });
+    expect(result.record.state_hash.final).toBe(MANIFEST.world.state_hash);
+    expect(result.record.state_hash.replay_final).toBe(result.record.state_hash.final);
+  });
+
+  it('replays a committed write to the same final hash', async () => {
+    const { result, events } = await trial(SCENARIOS.write, { tasks: taskSource(async () => [WRITE_TASK], { testMode: true }), definitions: DEFINITIONS }, '_write');
+    checkStream(events, result.events);
+    const written = events.find((e) => e.type === 'tool_result' && e.tool_use_id === 'toolu_w2');
+    expect(written).toMatchObject({ executed: true, is_error: false, written_ids: expect.arrayContaining([expect.stringMatching(/^Task\//)]) });
+    expect(events.filter((e) => e.type === 'state_hash').map((e) => e.at)).toEqual(['initial', 'write', 'final', 'replay_final']);
+    expect(result.record.status).toBe('COMPLETED');
+    expect(result.record.state_hash.final).not.toBe(result.record.state_hash.initial);
+    expect(result.record.state_hash.replay_final).toBe(result.record.state_hash.final);
+  });
+
+  it.each([100, Infinity, Number.NaN])('clamps maxCostUsd %s to the per-trial cap', async (asked) => {
+    // Each answer costs more than the $6 cap: 2M input tokens.
+    let n = 0;
+    const costly: Transport = async (request) => {
+      await request.text();
+      const events = turnEvents(SCENARIOS.forever(++n), n) as Array<{ type: string; message?: { usage: object } }>;
+      events[0]!.message!.usage = { ...events[0]!.message!.usage, input_tokens: 2_000_000 };
+      return new Response(sse(events), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+    const { result, events } = await trial(SCENARIOS.forever, { maxCostUsd: asked }, '_toy', costly);
+    checkStream(events, result.events);
+    expect(n).toBe(1);
+    expect(result.record.status).toBe('LIMIT');
+    expect(events.at(-1)).toMatchObject({ type: 'limit', limit: 'cost', cap: 6 });
   });
 });

@@ -92,6 +92,11 @@ export const SCENARIOS = {
   finishMid: [
     { tools: [getContext('toolu_f1'), { id: 'toolu_f2', name: 'finish', input: { summary: 'Stopping early on purpose.' } }, readPatient('toolu_f3', 'pt-0001')] },
   ],
+  // One committed write (create_task) on the harness task _write (write-task.ts), then finish.
+  write: [
+    { thinking: 'Create the follow-up.', tools: [getContext('toolu_w1'), { id: 'toolu_w2', name: 'create_task', input: { patient: 'pt-0001', owner: 'Group/pool-rn-triage', due: '2026-11-06', priority: 'routine', description: 'Call with results' } }] },
+    { tools: [{ id: 'toolu_w3', name: 'finish', input: { summary: 'Created one follow-up Task.' } }] },
+  ],
   // Never stops calling tools: for the turn, cost and wall-clock caps.
   forever: (n: number): MockTurn => ({ thinking: `Turn ${n}.`, tools: [getContext(`toolu_l${n}`)] }),
 } satisfies Record<string, Script>;

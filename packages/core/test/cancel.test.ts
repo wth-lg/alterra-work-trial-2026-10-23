@@ -9,7 +9,7 @@ import { nodeTaskSource } from '../../../cli/adapters/tasks-node.ts';
 import { MessagesClient, type Transport } from '../anthropic.ts';
 import { parseEvent, type TrialEvent } from '../events.ts';
 import { admitStore, createLedger, type LedgerRow, type LedgerStore } from '../ledger.ts';
-import { run } from '../run.ts';
+import { run, type RunOptions } from '../run.ts';
 import { toJsonl } from '../trajectory.ts';
 
 const root = new URL('../../../', import.meta.url);
@@ -38,7 +38,7 @@ async function clientOver(transport: Transport) {
   return { client, store };
 }
 
-async function cancelledTrial(mock: ScriptedTransport, controller: AbortController, onEvent: (e: TrialEvent) => void = () => {}) {
+async function cancelledTrial(mock: ScriptedTransport, controller: AbortController, onEvent: (e: TrialEvent) => void = () => {}, over: Partial<RunOptions> = {}) {
   const { client, store } = await clientOver(mock.transport);
   const events: TrialEvent[] = [];
   const result = await run('_toy', 'claude-opus-5-5', {
@@ -52,11 +52,14 @@ async function cancelledTrial(mock: ScriptedTransport, controller: AbortControll
       events.push(e);
       onEvent(e);
     },
+    ...over,
   });
   return { result, events, store };
 }
 
 const kinds = (rows: LedgerRow[], kind: LedgerRow['kind']) => rows.filter((r) => r.kind === kind);
+// What the ledger settled, in micro-dollars, to compare with a record's cost_usd.
+const settledMicros = (rows: LedgerRow[]) => Math.round(kinds(rows, 'settle').reduce((a, r) => a + r.cost_usd, 0) * 1e6);
 
 describe('cancel through opts.signal', () => {
   it.each(['before-response', 'mid-stream'] as const)('an abort during a call (%s) makes 1 fetch, 1 worst-case settle, and ends cancelled', async (when) => {
@@ -71,6 +74,8 @@ describe('cancel through opts.signal', () => {
     expect(settles[0]).toMatchObject({ call_id: reserves[0]!.call_id, usage: null, cost_usd: reserves[0]!.cost_usd });
     expect(result.record.status).toBe('CANCELLED');
     expect(events.at(-1)!.type).toBe('cancelled');
+    // The record's cost includes the worst-case settle, so it equals the ledger.
+    expect(Math.round(result.record.cost_usd * 1e6)).toBe(settledMicros(store.rows));
     for (const e of events) parseEvent(JSON.parse(JSON.stringify(e)));
     expect(toJsonl(result.events)).toBe(events.map((e) => `${JSON.stringify(e)}\n`).join(''));
   });
@@ -96,6 +101,38 @@ describe('cancel through opts.signal', () => {
     expect(mock.raw).toHaveLength(0);
     expect(store.rows.filter((r) => r.kind === 'reserve')).toHaveLength(0);
     expect(result.record.status).toBe('CANCELLED');
+  });
+});
+
+describe('the wall-clock cap in flight', () => {
+  it.each(['before-response', 'mid-stream'] as const)('aborts a stalled call (%s) at the remaining budget: 1 fetch, a worst-case settle, LIMIT', async (when) => {
+    const trialSignal = new AbortController();
+    const wall = new AbortController();
+    const asked: number[] = [];
+    // The injected clock: 1 s has passed when the request goes out; the timer fires once it is in flight.
+    let clock = 0;
+    const mock = stallingTransport(when, () => wall.abort(new DOMException('wall clock', 'TimeoutError')));
+    const { result, events, store } = await cancelledTrial(mock, trialSignal, () => {}, {
+      now: () => (clock += 500),
+      maxWallMs: 60_000,
+      timeout: (ms) => (asked.push(ms), wall.signal),
+    });
+    expect(mock.raw).toHaveLength(1);
+    expect(asked).toEqual([59_500]);
+    expect(kinds(store.rows, 'reserve')).toHaveLength(1);
+    expect(kinds(store.rows, 'settle').map((r) => r.usage)).toEqual([null]);
+    expect(result.record).toMatchObject({ status: 'LIMIT', detail: 'wall_clock' });
+    expect(events.at(-1)).toMatchObject({ type: 'limit', limit: 'wall_clock', cap: 60_000 });
+    expect(Math.round(result.record.cost_usd * 1e6)).toBe(settledMicros(store.rows));
+  });
+});
+
+describe('record cost and the ledger', () => {
+  it('a completed trial records what the ledger settled', async () => {
+    const mock = scriptedTransport(SCENARIOS.toy);
+    const { result, store } = await cancelledTrial(mock, new AbortController());
+    expect(result.record.status).toBe('COMPLETED');
+    expect(Math.round(result.record.cost_usd * 1e6)).toBe(settledMicros(store.rows));
   });
 });
 

@@ -9,15 +9,18 @@
 //                          recorded as a tool_result with executed false and "episode finished"
 //   an answer without tool use (end_turn)
 //   a refusal              REFUSAL
-//   a cap                  LIMIT: turns (requests sent), cost (priced usage so far) and wall
-//                          clock (the injected clock), checked before each request; and a
+//   a cap                  LIMIT: turns (requests sent), cost (what the ledger settled so far,
+//                          worst-case settles included) and wall clock (the injected clock),
+//                          checked before each request; the wall clock also aborts a request
+//                          in flight through the injected `timeout` at the remaining budget,
+//                          and that call settles at its worst case with no retry; and a
 //                          second max_tokens stop in a row (the first is asked to continue)
 //   opts.signal aborted    CANCELLED, checked before each request and passed to the client
-//   an exception from a tool other than ToolError
+//   an exception from the environment: a tool (other than a ToolError) or the state hash
 //                          ENV_ERROR, code INTERNAL: the environment's fault, not the model's
 //   a client error         INFRA_API, INFRA_HARNESS or INVALID (a response from another model)
 // It reads no clock and draws no randomness (eslint-rules/determinism.js): time comes from the
-// injected `now`, used only for the wall-clock cap.
+// injected `now` and `timeout`, used only for the wall-clock cap.
 import { ApiError, type CallResult, type MessageParam, type MessageParams, type SendOptions } from './anthropic.ts';
 import { usageCostUsd, type Usage } from './cost.ts';
 import type { ErrorStatus, EventBody, Limit, TrialStatus } from './events.ts';
@@ -46,6 +49,8 @@ export interface LoopInput {
   ctx: WriteContext;
   caps: Caps;
   now: () => number;
+  // A signal that aborts after ms of wall-clock time.
+  timeout: (ms: number) => AbortSignal;
   signal?: AbortSignal;
   emit: (body: EventBody) => void;
   stateHash: () => Promise<string>;
@@ -83,7 +88,7 @@ interface ToolUse {
   input: unknown;
 }
 
-const errorText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+export const errorText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
 // How a failed send ends the trial (design section 1, "Failure modes").
 function clientFailure(e: unknown, signal: AbortSignal | undefined): Exclude<Terminal, { type: 'limit' }> {
@@ -114,7 +119,7 @@ export const newOutcome = (): LoopOutcome => ({
 });
 
 export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
-  const { client, params, history, tools, ctx, caps, now, signal, emit } = input;
+  const { client, params, history, tools, ctx, caps, now, timeout, signal, emit } = input;
   const started = now();
   const out = newOutcome();
   const end = (status: TrialStatus, terminal: Terminal | null, stop: LoopOutcome['stop'] = null): LoopOutcome =>
@@ -122,20 +127,28 @@ export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
   // Messages already carried by a request or response event.
   let logged = 0;
   let maxTokensInARow = 0;
+  // A usage that cannot be priced: the ledger settled it at the worst case, and the trial stops.
+  let unpriced = false;
+  const onSettle = (usd: number) => {
+    out.cost_usd += usd;
+  };
+  const internal = (e: unknown) => end('ENV_ERROR', { type: 'error', status: 'ENV_ERROR', code: 'INTERNAL', message: errorText(e) });
 
   for (;;) {
     if (signal?.aborted) return end('CANCELLED', { type: 'cancelled', reason: errorText(signal.reason) });
     if (out.turns >= caps.maxTurns) return end('LIMIT', { type: 'limit', limit: 'turns', cap: caps.maxTurns, value: out.turns });
-    if (out.cost_usd >= caps.maxCostUsd) return end('LIMIT', { type: 'limit', limit: 'cost', cap: caps.maxCostUsd, value: out.cost_usd });
+    if (unpriced || out.cost_usd >= caps.maxCostUsd) return end('LIMIT', { type: 'limit', limit: 'cost', cap: caps.maxCostUsd, value: out.cost_usd });
     const elapsed = now() - started;
     if (elapsed >= caps.maxWallMs) return end('LIMIT', { type: 'limit', limit: 'wall_clock', cap: caps.maxWallMs, value: elapsed });
 
     const turn = ++out.turns;
     emit({ type: 'request', turn, messages_from: logged, messages: history.slice(logged), ...(turn === 1 ? { params } : {}) });
+    const wall = timeout(caps.maxWallMs - elapsed);
     let r: CallResult;
     try {
-      r = await client.send(history, params, signal ? { signal } : {});
+      r = await client.send(history, params, { signal: signal ? AbortSignal.any([signal, wall]) : wall, onSettle });
     } catch (e) {
+      if (!signal?.aborted && wall.aborted) return end('LIMIT', { type: 'limit', limit: 'wall_clock', cap: caps.maxWallMs, value: now() - started });
       const t = clientFailure(e, signal);
       return end(t.type === 'error' ? t.status : 'CANCELLED', t);
     }
@@ -155,8 +168,7 @@ export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
     out.usage.cache_write += u.cache_creation_input_tokens ?? 0;
     out.usage.cache_read += u.cache_read_input_tokens ?? 0;
     out.usage.output += u.output_tokens;
-    // Usage that cannot be priced counts as the whole cost cap, so the trial stops.
-    out.cost_usd += priced ?? caps.maxCostUsd;
+    if (priced === null) unpriced = true;
     emit({ type: 'usage', turn, total: { ...out.usage }, cost_usd: out.cost_usd });
 
     if (r.refusal) {
@@ -193,7 +205,15 @@ export async function runLoop(input: LoopInput): Promise<LoopOutcome> {
         type: 'tool_result', turn, tool_use_id: use.id, name: use.name, executed: true, is_error: res.is_error, error_code: code, content: res.content,
         exposed_ids: res.exposed_ids, referenced_ids: res.referenced_ids, ...(res.written_ids ? { written_ids: res.written_ids } : {}),
       });
-      if (res.written_ids) emit({ type: 'state_hash', turn, at: 'write', hash: await input.stateHash(), tool_use_id: use.id });
+      if (res.written_ids) {
+        let hash: string;
+        try {
+          hash = await input.stateHash();
+        } catch (e) {
+          return internal(e);
+        }
+        emit({ type: 'state_hash', turn, at: 'write', hash, tool_use_id: use.id });
+      }
       blocks.push(toolResultBlock(use.id, res));
       if (use.name === 'finish' && !res.is_error) finished = true;
     }
