@@ -36,6 +36,10 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # The grader validation matrix (plan phase P9), offline: canned judge outputs, no key, no
+      # live call; a judge cache miss fails the step.
+      - name: grader validation matrix
+        run: pnpm cli matrix --task _toy
       - run: pnpm build
       - run: pnpm fixtures:verify
       - name: keyscan working tree and build output
