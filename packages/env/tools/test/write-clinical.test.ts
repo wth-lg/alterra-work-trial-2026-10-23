@@ -82,6 +82,19 @@ const APIXABAN: MedicationRequest = {
   dosageInstruction: [{ text: '2.5 mg twice daily', timing: { repeat: { frequency: 2, period: 1, periodUnit: 'd' } }, doseAndRate: [{ doseQuantity: { value: 2.5, unit: 'mg', system: UCUM, code: 'mg' } }] }],
   dispenseRequest: { numberOfRepeatsAllowed: 5, expectedSupplyDuration: { value: 90, unit: 'days', system: UCUM, code: 'd' } },
 };
+// An active simvastatin 20 mg with no route and no dispense, as the base cohort writes them;
+// test-only, so no task overlay can change it.
+const SIMVASTATIN: MedicationRequest = {
+  resourceType: 'MedicationRequest',
+  id: 'mr-w-simva',
+  status: 'active',
+  intent: 'order',
+  category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/medicationrequest-category', code: 'community', display: 'Community' }], text: 'Community' }],
+  medicationCodeableConcept: { coding: [{ system: RXNORM, code: '312961', display: 'Simvastatin 20 MG Oral Tablet' }], text: 'Simvastatin 20 MG Oral Tablet' },
+  subject: { reference: 'Patient/pt-0001' },
+  authoredOn: '2019-05-09T10:00:00-04:00',
+  requester: { reference: 'Practitioner/pr-okafor' },
+};
 const DRAFT: MedicationRequest = { ...APIXABAN, id: 'mr-w-draft', status: 'draft' };
 const STOPPED_WITH_REASON: MedicationRequest = { ...APIXABAN, id: 'mr-w-held', status: 'on-hold', statusReason: { text: 'AKI' } };
 // T3: a panel of patients (design: "Okafor CRC 2026").
@@ -108,7 +121,7 @@ const inboxTask = (id: string, status: Task['status']): Task => ({
 const INBOX = (['draft', 'requested', 'received', 'accepted', 'ready', 'in-progress', 'on-hold'] as const).map((s) => inboxTask(`task-c-${s}`, s));
 
 const fresh = (): WriteContext => ({
-  world: new Store([...base, NKDA, APIXABAN, DRAFT, STOPPED_WITH_REASON, PANEL, ...INBOX]),
+  world: new Store([...base, NKDA, APIXABAN, SIMVASTATIN, DRAFT, STOPPED_WITH_REASON, PANEL, ...INBOX]),
   clock,
   policies: POLICIES,
   catalog: CATALOG,
@@ -262,11 +275,11 @@ describe('2. change_medication modify: product, strength and route', () => {
 
   it('simvastatin 20 -> 40 mg at bedtime: 2 tablets without a product, the 40 MG tablet with one', () => {
     const c = fresh();
-    const two = get<MedicationRequest>(c, call(c, 'change_medication', { medication_request: 'mr-00008', action: 'modify', reason: 'LDL above goal', new_dose: { value: 40, unit: 'mg', frequency: 'QHS' } }).new_medication_request as string);
+    const two = get<MedicationRequest>(c, call(c, 'change_medication', { medication_request: 'mr-w-simva', action: 'modify', reason: 'LDL above goal', new_dose: { value: 40, unit: 'mg', frequency: 'QHS' } }).new_medication_request as string);
     expect(two.medicationCodeableConcept?.coding?.[0]?.display).toBe('Simvastatin 20 MG Oral Tablet');
     expect(dosage(two).text).toBe('40 mg (2 tablets) at bedtime');
     const c2 = fresh();
-    const one = get<MedicationRequest>(c2, call(c2, 'change_medication', { medication_request: 'mr-00008', action: 'modify', reason: 'LDL above goal', medication_code: '198211', route: 'oral', new_dose: { value: 40, unit: 'mg', frequency: 'QHS' } }).new_medication_request as string);
+    const one = get<MedicationRequest>(c2, call(c2, 'change_medication', { medication_request: 'mr-w-simva', action: 'modify', reason: 'LDL above goal', medication_code: '198211', route: 'oral', new_dose: { value: 40, unit: 'mg', frequency: 'QHS' } }).new_medication_request as string);
     expect(one.medicationCodeableConcept?.coding?.[0]?.display).toBe('simvastatin 40 MG Oral Tablet');
     expect(dosage(one).text).toBe('40 mg by mouth at bedtime');
     expect(one.category?.[0]?.coding?.[0]?.code).toBe('community');
@@ -460,9 +473,9 @@ describe('9. status machines', () => {
   });
   it('change_medication complete, cancel and entered-in-error, each where R4 allows it', async () => {
     const c = fresh();
-    expect(call(c, 'change_medication', { medication_request: 'mr-00007', action: 'complete', reason: 'course finished' }).status).toBe('completed');
-    expect(await rejected(c, 'change_medication', { medication_request: 'mr-00008', action: 'cancel', reason: 'x' })).toMatchObject({ code: 'CONFLICT', field: 'action' });
-    expect(await rejected(c, 'change_medication', { medication_request: 'mr-00008', action: 'entered-in-error', reason: 'x' })).toMatchObject({ code: 'CONFLICT', field: 'action' });
+    expect(call(c, 'change_medication', { medication_request: 'mr-w-apix', action: 'complete', reason: 'course finished' }).status).toBe('completed');
+    expect(await rejected(c, 'change_medication', { medication_request: 'mr-w-simva', action: 'cancel', reason: 'x' })).toMatchObject({ code: 'CONFLICT', field: 'action' });
+    expect(await rejected(c, 'change_medication', { medication_request: 'mr-w-simva', action: 'entered-in-error', reason: 'x' })).toMatchObject({ code: 'CONFLICT', field: 'action' });
     expect(call(c, 'change_medication', { medication_request: 'mr-w-draft', action: 'cancel', reason: 'not needed' }).status).toBe('cancelled');
     const created = call(c, 'order_medication', { patient: 'pt-0001', rxnorm_code: '860975', dose_value: 500, dose_unit: 'mg', route: 'oral', frequency: 'BID', reason: 'r' }).medication_request as string;
     expect(call(c, 'change_medication', { medication_request: created, action: 'cancel', reason: 'ordered for the wrong patient' }).status).toBe('cancelled');

@@ -42,10 +42,11 @@ describe('oracle', () => {
     expect(JSON.parse(h.text())).toEqual({ tasks: [{ id: '_toy', outcome: 'PASS', score: 1, judge_unknown: 0, misses: [] }] });
   });
 
-  it('--task all that grades no task exits 1 (item 6)', async () => {
+  // Item 6's other half, `all` grading no task, is unreachable once tasks/ holds a real task.
+  it('--task all grades every real task from its canned cache (item 6)', async () => {
     const lines: string[] = [];
-    expect(await main(['--task', 'all'], { env: {}, out: (l) => lines.push(l), fetch: vi.fn<Transport>() })).toBe(1);
-    expect(lines.join('\n')).toContain('no tasks graded');
+    expect(await main(['--task', 'all'], { env: {}, out: (l) => lines.push(l), fetch: vi.fn<Transport>() })).toBe(0);
+    expect(lines.join('\n')).toContain('oracle renal-dose-review: PASS score 1.000 judge.unknown 0');
   });
 
   it("the toy's canned cache says it is scripted and took no calls (item 4)", () => {
