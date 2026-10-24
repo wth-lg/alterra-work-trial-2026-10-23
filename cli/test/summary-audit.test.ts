@@ -11,7 +11,7 @@ import { main as auditCheck } from '../audit-check.ts';
 import { main as summary } from '../summary.ts';
 import { main as taskHash } from '../task-hash.ts';
 import { repoRoot, tempDir } from '../../scripts/test/helpers.ts';
-import { AUDIT_FIXTURES, SUMMARY_FIXTURES, writeFixtureRun, type Fixture } from './run-fixtures.ts';
+import { AUDIT_FIXTURES, fixtureChecks, SUMMARY_FIXTURES, writeFixtureRun, type Fixture } from './run-fixtures.ts';
 
 const REQUIRE = `valid=10,band=2-7,env_error_raw=0,grader_error=0,model=${MODEL},replay=all`;
 
@@ -21,10 +21,10 @@ function run(fixture: Fixture): string {
   return dir;
 }
 
-async function cli(main: (args: string[], deps: { out: (l: string) => void; err: (l: string) => void }) => Promise<number>, args: string[]) {
+async function cli(main: (args: string[], deps: { out: (l: string) => void; err: (l: string) => void; checks?: typeof fixtureChecks }) => Promise<number>, args: string[]) {
   const out: string[] = [];
   const err: string[] = [];
-  const code = await main(args, { out: (l) => out.push(l), err: (l) => err.push(l) });
+  const code = await main(args, { out: (l) => out.push(l), err: (l) => err.push(l), checks: fixtureChecks });
   return { code, out: out.join('\n'), err: err.join('\n') };
 }
 

@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { explainTrial, type AuditRow } from '../../packages/core/explain.ts';
 import { tempDir } from '../../scripts/test/helpers.ts';
 import { explainContext, main as auditCheck } from '../audit-check.ts';
-import { AUDIT_FIXTURES, SUMMARY_FIXTURES, writeFixtureRun, type Fixture } from './run-fixtures.ts';
+import { AUDIT_FIXTURES, fixtureChecks, SUMMARY_FIXTURES, writeFixtureRun, type Fixture } from './run-fixtures.ts';
 
 function run(fixture: Fixture): string {
   const dir = tempDir(`audit-${fixture}`);
@@ -34,9 +34,6 @@ function retrial(dir: string, over: Record<string, unknown>): void {
   const file = join(dir, 'trials/t-alpha/9.json');
   writeJson(file, { ...readJson(file), checks: [], attribution: null, ...over });
 }
-
-// The fixture tasks' gate checks: G1 names the patient step 1 exposes.
-const fixtureChecks = async () => [{ id: 'G1', decisive_ids: ['Patient/pt-0001'] }];
 
 describe('audit-check: P12 fixtures exit as intended', () => {
   // Each P12 fixture's exit code from audit-check on main at b06d202, before P14a, with one

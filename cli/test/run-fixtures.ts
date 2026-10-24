@@ -10,6 +10,9 @@ export const AUDIT_FIXTURES = ['missing-label', 'environment-label', 'evidence-a
 export type Fixture = 'clean' | 'grader-error-regraded' | (typeof SUMMARY_FIXTURES)[number] | (typeof AUDIT_FIXTURES)[number];
 
 export const TASKS = ['t-alpha', 't-beta'];
+// The fixture tasks' gate checks, for audit-check's Deps.checks: G1 names the patient step 1
+// exposes, so a regraded trial's exposure can be recomputed.
+export const fixtureChecks = async (): Promise<Array<{ id: string; decisive_ids: string[] }>> => [{ id: 'G1', decisive_ids: ['Patient/pt-0001'] }];
 const EXPOSED = 'Patient/pt-0001';
 const NOTE = 'DocumentReference/note-fx-1';
 
