@@ -19,9 +19,24 @@
 //   effort = "medium"               # the judge's effort: low | medium | high, default medium;
 //                                   # calibrated per task by the pilot
 // instruction.md is the user turn the trial starts with.
+//
+// A task's versions (taskVersions) split what the agent works in from what grades it:
+//   env_version          sha256(the env files + the world's state hash + TOOLS_VERSION): every
+//                        file that shapes what the agent sees or the state it starts from
+//                        (ENV_FILES: task.toml, instruction.md, policy/**, overlay.ts), the world,
+//                        and the tool code (packages/env/tools/registry.ts TOOLS_VERSION);
+//   grader_task_version  sha256(every other file of the task + GRADER_VERSION): tests/**, expected.ts,
+//                        policy.ts, solution/**, *.test.ts, which the agent never sees, and the
+//                        grader code (packages/grader/grade.ts GRADER_VERSION);
+//   task_version         sha256 of the two: any change to the task is a new task_version.
+// replay compares env_version only (the trajectory must reach the record's state); regrade
+// records the grader_task_version it graded at; a batch resumes by env_version, so a grader fix
+// regrades a run instead of discarding it; cost projections and the freeze read task_version.
 import { parse } from 'smol-toml';
 import { CATALOG_KINDS, type CatalogEntry, type Policy } from '../env/tools/read/context.ts';
+import { TOOLS_VERSION } from '../env/tools/registry.ts';
 import { TOOLS } from '../env/tools/write/index.ts';
+import { GRADER_VERSION } from '../grader/grade.ts';
 
 export const DEFAULT_MAX_TURNS = 80;
 export const JUDGE_EFFORTS = ['low', 'medium', 'high'] as const;
@@ -48,6 +63,19 @@ export interface Task {
   judgeEffort: JudgeEffort;
   // sha256 over the task's files, path and content, in path order.
   filesHash: string;
+  // The same over the env files (isEnvFile) and over the rest, the grader-side files.
+  envFilesHash: string;
+  graderFilesHash: string;
+}
+
+// The files that shape what the agent sees or the state it starts from; every other file of a
+// task is grader-side.
+export const isEnvFile = (path: string): boolean => path === 'task.toml' || path === 'instruction.md' || path === 'overlay.ts' || path.startsWith('policy/');
+
+export interface TaskVersions {
+  env_version: string;
+  grader_task_version: string;
+  task_version: string;
 }
 
 export interface TaskSource {
@@ -129,7 +157,10 @@ export async function parseTask({ id, files }: TaskFiles): Promise<Task> {
   if (!(JUDGE_EFFORTS as readonly unknown[]).includes(effort)) throw new Error(`${where}/task.toml [judge]: effort must be one of ${JUDGE_EFFORTS.join(', ')}`);
 
   const paths = Object.keys(files).sort(byPath);
-  const filesHash = await sha256Hex(JSON.stringify(paths.map((p) => [p, files[p]])));
+  const hashOf = (ps: string[]) => sha256Hex(JSON.stringify(ps.map((p) => [p, files[p]])));
+  const filesHash = await hashOf(paths);
+  const envFilesHash = await hashOf(paths.filter(isEnvFile));
+  const graderFilesHash = await hashOf(paths.filter((p) => !isEnvFile(p)));
   return {
     id,
     title: field(t, task, 'title', 'string', true) as string,
@@ -140,11 +171,17 @@ export async function parseTask({ id, files }: TaskFiles): Promise<Task> {
     catalog,
     judgeEffort: effort as JudgeEffort,
     filesHash,
+    envFilesHash,
+    graderFilesHash,
   };
 }
 
-// The design's task_version: sha256(task files + world hash), so a change to either is a new version.
-export const taskVersion = (task: Task, worldHash: string): Promise<string> => sha256Hex(`${task.filesHash}\n${worldHash}`);
+// A task's env_version, grader_task_version and task_version (the header says what each covers).
+export async function taskVersions(task: Task, worldHash: string): Promise<TaskVersions> {
+  const env_version = await sha256Hex(`env\n${task.envFilesHash}\n${worldHash}\ntools ${TOOLS_VERSION}`);
+  const grader_task_version = await sha256Hex(`grader\n${task.graderFilesHash}\ngrader ${GRADER_VERSION}`);
+  return { env_version, grader_task_version, task_version: await sha256Hex(`${env_version}\n${grader_task_version}`) };
+}
 
 // A TaskSource over the directories `list` returns (each one holding a task.toml). It calls
 // `list` once, on first use, and answers every later get and all from that read: a run of many

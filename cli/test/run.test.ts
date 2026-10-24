@@ -11,7 +11,7 @@ import { MessagesClient, MODEL, type Transport } from '../../packages/core/anthr
 import { memorySink, runBatch } from '../../packages/core/batch.ts';
 import { JUDGE_ALLOWANCE_USD, PER_TRIAL_CAP_USD, RERUN_FACTOR } from '../../packages/core/cost.ts';
 import { admitStore, createLedger, PROJECTED_CAP_USD, type LedgerRow, type LedgerStore } from '../../packages/core/ledger.ts';
-import { taskVersion } from '../../packages/core/tasks.ts';
+import { taskVersions } from '../../packages/core/tasks.ts';
 import { checks as toyChecks } from '../../tasks/_toy/tests/grader.ts';
 import { commitFile, fakeKey, git, repoRoot, tempDir, tempRepo, write } from '../../scripts/test/helpers.ts';
 import { readRows } from '../adapters/ledger-node.ts';
@@ -190,7 +190,7 @@ describe('cli run', { timeout: 480_000 }, () => {
       writeFileSync(toml, readFileSync(toml, 'utf8').replace(/^id = "_toy"$/m, `id = "${id}"`));
     }
     const tasks = nodeTaskSource({ root: tasksRoot, testMode: false });
-    const crc = await taskVersion(await tasks.get('crc-care-gap'), WORLD_HASH);
+    const crc = (await taskVersions(await tasks.get('crc-care-gap'), WORLD_HASH)).task_version;
     const runs = tempDir('cost-runs');
     for (const [name, cost] of [['a', 1], ['b', 2]] as const) {
       for (let i = 0; i < 10; i++) write(runs, `${name}/trials/crc-care-gap/${i}.json`, JSON.stringify({ task_id: 'crc-care-gap', task_version: crc, cost_usd: cost }));

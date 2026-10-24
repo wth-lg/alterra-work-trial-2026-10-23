@@ -1,7 +1,7 @@
 // pnpm cli run --task all|<id,...> --model claude-opus-5-5 --out <run dir> [--trials 10] [--effort high]
 //              [--concurrency 4] [--cost-from <run,...>] [--mock <scenario>] [--dry-run]
 // A batch of trials through packages/core/batch.ts runBatch, the loop a UI batch runs too: keyed
-// by (task_version, model, effort, index), so a rerun with the same arguments resumes with the
+// by (env_version, model, effort, index), so a rerun with the same arguments resumes with the
 // keys not yet recorded, and a killed batch's open ledger batch is closed first.
 //   --task         all, or a comma list of task ids; an unknown id exits 1
 //   --out          the run directory (results/runs/<run_id>); its name is the run id

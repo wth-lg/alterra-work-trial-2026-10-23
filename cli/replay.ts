@@ -5,10 +5,16 @@
 // replay reaches the record's final state hash and the grade has the outcome, score and check
 // results of the record's current grade (packages/core/summary.ts currentGrade: its last cli
 // regrade, else its recorded grade). A last regrade entry written before regrade stored check
-// results is compared on outcome and score only, and replay says so. A trial whose record's task_version is not the checkout's (the task or the world
-// changed since it ran) is not replayed: it does not match, with the reason 'task changed: run at
-// <record's>, checkout at <checkout's>' (regrade still grades it, against the newer version).
-// Writes <run>/replay.json, {trials: {"<task>/<index>": {match, outcome,
+// results is compared on outcome and score only, and replay says so. A trial whose record's
+// env_version is not the checkout's (what the agent sees changed since it ran: the task's env
+// files, the world or the tools, packages/core/tasks.ts) is not replayed: it does not match,
+// with the reason 'environment changed: run at env_version <record's>, checkout at <checkout's>'
+// (regrade still grades it, and refuses it when its trajectory does not reach the record's
+// state). A change to the task's grader-side files or the grader (its grader_task_version) does
+// not stop a replay: after a grader fix and a regrade (the GRADER_ERROR policy,
+// packages/grader/grade.ts), replay compares the trajectory against the regraded current grade,
+// so `summary --require replay=all` can pass on that run.
+// Writes <run>/replay.json, {trials: {"<trialName>": {match, outcome,
 // recorded_outcome, current_outcome, error?}}}, which `summary --require replay=all` reads. Exit 0 when every trial
 // matches; 1 otherwise; 2 on a usage error.
 import { existsSync, readFileSync } from 'node:fs';
@@ -17,8 +23,8 @@ import { pathToFileURL } from 'node:url';
 import type { BatchRecord } from '../packages/core/batch.ts';
 import { installEgressGuard } from '../packages/core/egress.ts';
 import { gradeTrajectory } from '../packages/core/run.ts';
-import { currentGrade } from '../packages/core/summary.ts';
-import { taskVersion, type TaskSource } from '../packages/core/tasks.ts';
+import { currentGrade, trialName } from '../packages/core/summary.ts';
+import { taskVersions, type TaskSource, type TaskVersions } from '../packages/core/tasks.ts';
 import { parseTrajectory } from '../packages/core/trajectory.ts';
 import type { Grade } from '../packages/grader/grade.ts';
 import { JudgeCacheMiss } from '../packages/grader/judge.ts';
@@ -33,8 +39,6 @@ export interface Deps {
 }
 
 const defaults: Deps = { out: (l) => process.stdout.write(`${l}\n`), err: (l) => process.stderr.write(`${l}\n`) };
-
-export const trialName = (r: Pick<BatchRecord, 'task_id' | 'index'>): string => `${r.task_id}/${r.index}`;
 
 export type Regraded = { stored: StoredRecord; grade: Grade } | { stored: StoredRecord; miss: string } | { stored: StoredRecord; error: string };
 
@@ -55,6 +59,24 @@ export async function regradeRun(dir: string, tasks: TaskSource, records = settl
   return out;
 }
 
+// The checkout's versions of each task, looked up once.
+export function checkoutVersions(tasks: TaskSource): (id: string) => Promise<TaskVersions> {
+  const { worldHash } = repoWorld();
+  const versions = new Map<string, Promise<TaskVersions>>();
+  return (id) => {
+    if (!versions.has(id)) versions.set(id, tasks.get(id).then((t) => taskVersions(t, worldHash)));
+    return versions.get(id) as Promise<TaskVersions>;
+  };
+}
+
+// audit-check names trials through replay; the one definition is packages/core/summary.ts.
+export { trialName };
+
+// Why a record's trial is not this checkout's environment. A record written before env_version
+// existed has none, and never matches.
+export const envChanged = (r: Pick<BatchRecord, 'env_version' | 'task_version'>, now: string): string =>
+  `environment changed: run at env_version ${r.env_version ?? `(none: recorded before env_version, task_version ${r.task_version})`}, checkout at ${now}`;
+
 const metOf = (checks: ReadonlyArray<{ id: string; met: unknown }> | undefined) => JSON.stringify((checks ?? []).map((c) => [c.id, c.met]));
 
 export async function main(args: string[], deps: Deps = defaults): Promise<number> {
@@ -72,24 +94,19 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   const tasks = deps.tasks ?? nodeTaskSource({ testMode: false });
   const trials: Record<string, { match: boolean; outcome: string | null; recorded_outcome: string; current_outcome: string; error?: string }> = {};
   const notes: string[] = [];
-  const { worldHash } = repoWorld();
-  const versions = new Map<string, Promise<string>>();
-  const current = (id: string) => {
-    if (!versions.has(id)) versions.set(id, tasks.get(id).then((t) => taskVersion(t, worldHash)));
-    return versions.get(id) as Promise<string>;
-  };
+  const current = checkoutVersions(tasks);
   const same: StoredRecord[] = [];
   for (const stored of settledRecords(dir)) {
     const r = stored.record;
-    let now: string;
+    let now: TaskVersions;
     try {
       now = await current(r.task_id);
     } catch (e) {
       trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, current_outcome: currentGrade(r).outcome, error: (e as Error).message };
       continue;
     }
-    if (r.task_version === now) same.push(stored);
-    else trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, current_outcome: currentGrade(r).outcome, error: `task changed: run at ${r.task_version}, checkout at ${now}` };
+    if (r.env_version === now.env_version) same.push(stored);
+    else trials[trialName(r)] = { match: false, outcome: null, recorded_outcome: r.outcome, current_outcome: currentGrade(r).outcome, error: envChanged(r, now.env_version) };
   }
   const results = await regradeRun(dir, tasks, same);
   for (const res of results) {
