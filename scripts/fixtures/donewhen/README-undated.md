@@ -1,6 +1,6 @@
 # Riverbend clinical agent environment
 
-Open https://wth-lg.github.io/alterra-work-trial-2026-10-23/ or run `pnpm i && pnpm dev`.
+Open https://wth-lg.github.io/clinical-agent-env/ or run `pnpm i && pnpm dev`.
 
 ## Findings
 Text.

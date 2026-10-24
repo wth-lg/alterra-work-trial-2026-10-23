@@ -70,7 +70,7 @@ async function mockLocalRunner(page: Page, token: string) {
     keyCalls.push({ method: r.method(), token: (await r.headerValue(TOKEN_HEADER)) ?? null, body: r.postData(), url: r.url() });
     return json(route, 200, r.method() === 'DELETE' ? SAMPLES.keyCleared : SAMPLES.keyAccepted);
   });
-  await page.route((url) => url.pathname.endsWith('/alterra-work-trial-2026-10-23/') || url.pathname.endsWith('/index.html'), async (route) => {
+  await page.route((url) => url.pathname.endsWith('/clinical-agent-env/') || url.pathname.endsWith('/index.html'), async (route) => {
     const res = await route.fetch();
     const html = (await res.text()).replace('<head>', `<head>\n    <meta name="${TOKEN_META}" content="${token}" />`);
     return route.fulfill({ response: res, body: html });
