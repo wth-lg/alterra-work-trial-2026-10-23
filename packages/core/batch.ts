@@ -1,8 +1,11 @@
 // The batch loop (plan phase P12, design section 6 "Orchestration"): the trials of a run, keyed
-// by (task_version, model, effort, index), run through run() over injected stores, so a CLI batch
-// (cli/run.ts) and a UI batch (the local runner) run this same code.
+// by (env_version, model, effort, index), run through run() over injected stores, so a CLI batch
+// (cli/run.ts) and a UI batch (the local runner) run this same code. The key is the task's
+// env_version, not its task_version (packages/core/tasks.ts): a grader fix (tests/** or
+// GRADER_VERSION) leaves the settled trials in place, and the GRADER_ERROR policy regrades them
+// offline (cli/regrade.ts); a change to what the agent sees is a new run directory.
 //
-// planBatch resolves every task and its task_version, reads the run's settled records from the
+// planBatch resolves every task and its versions, reads the run's settled records from the
 // ResultSink and returns the keys still to run and their projection: projectBatch, the one
 // projection function (trials x latest p90 per task_version from the cost-from runs, the earlier
 // version as fallback, else the $6 cap, x 1.15, plus the judge allowance). A key whose record is
@@ -36,7 +39,7 @@ import type { BatchGrant, Ledger, LedgerRow } from './ledger.ts';
 import { errorText, type TrialClient } from './loop.ts';
 import { isValid } from './outcomes.ts';
 import { run, type Effort, type TrialRecord } from './run.ts';
-import { taskVersion, type TaskSource } from './tasks.ts';
+import { taskVersions, type TaskSource, type TaskVersions } from './tasks.ts';
 import type { FixtureSource } from '../env/fixture-source.ts';
 import type { Check } from '../grader/check.ts';
 
@@ -48,15 +51,15 @@ const RERUN = new Set(['INFRA_API', 'INFRA_HARNESS', 'ENV_ERROR']);
 
 export interface TrialKey {
   task_id: string;
-  task_version: string;
+  env_version: string;
   model: string;
   effort: Effort;
   index: number;
 }
 
 // The idempotence key.
-export const trialKey = (k: TrialKey): string => `${k.task_version}/${k.model}/${k.effort}/${k.index}`;
-export const recordKey = (r: Pick<BatchRecord, 'task_id' | 'task_version' | 'model_requested' | 'effort' | 'index'>): string => trialKey({ task_id: r.task_id, task_version: r.task_version ?? '', model: r.model_requested, effort: r.effort, index: r.index });
+export const trialKey = (k: TrialKey): string => `${k.env_version}/${k.model}/${k.effort}/${k.index}`;
+export const recordKey = (r: Pick<BatchRecord, 'task_id' | 'env_version' | 'model_requested' | 'effort' | 'index'>): string => trialKey({ task_id: r.task_id, env_version: r.env_version ?? '', model: r.model_requested, effort: r.effort, index: r.index });
 
 // A trial record as a batch stores it. settled: the key's record; false for a re-queued attempt.
 export type BatchRecord = TrialRecord & {
@@ -91,7 +94,11 @@ export interface RunManifest {
   world_hash: string;
   api_version: string;
   trials: number;
+  // Each task's versions at the latest batch (packages/core/tasks.ts); env_versions and
+  // grader_task_versions are absent from a manifest written before the split.
   task_versions: Record<string, string>;
+  env_versions?: Record<string, string>;
+  grader_task_versions?: Record<string, string>;
   batches: BatchEntry[];
   [k: string]: unknown;
 }
@@ -148,7 +155,7 @@ export interface BatchDeps {
 }
 
 export interface BatchPlan {
-  versions: Record<string, string>;
+  versions: Record<string, TaskVersions>;
   keys: TrialKey[];
   remaining: TrialKey[];
   projection: Projection;
@@ -174,8 +181,8 @@ export async function planBatch(spec: BatchSpec, deps: Pick<BatchDeps, 'tasks' |
   if (!Number.isSafeInteger(spec.trials) || spec.trials < 1) throw new BatchRefused(`trials must be a whole number >= 1, got ${spec.trials}`);
   if (!Number.isSafeInteger(spec.concurrency) || spec.concurrency < 1) throw new BatchRefused(`concurrency must be a whole number >= 1, got ${spec.concurrency}`);
   if (spec.taskIds.length === 0 || new Set(spec.taskIds).size !== spec.taskIds.length) throw new BatchRefused('tasks must be a non-empty list without repeats');
-  const versions: Record<string, string> = {};
-  for (const id of spec.taskIds) versions[id] = await taskVersion(await deps.tasks.get(id), deps.worldHash);
+  const versions: Record<string, TaskVersions> = {};
+  for (const id of spec.taskIds) versions[id] = await taskVersions(await deps.tasks.get(id), deps.worldHash);
   const manifest = await deps.sink.manifest();
   if (manifest !== null) {
     for (const f of ['model', 'effort', 'mode'] as const) {
@@ -184,18 +191,19 @@ export async function planBatch(spec: BatchSpec, deps: Pick<BatchDeps, 'tasks' |
   }
   const settled = await deps.sink.settled();
   for (const r of settled) {
-    const v = versions[r.task_id];
-    if (v !== undefined && r.task_version !== v) {
-      throw new BatchRefused(`the run directory holds ${r.task_id} at task_version ${r.task_version}, and the task is now ${v}; use a new run directory`);
+    const v = versions[r.task_id]?.env_version;
+    if (v !== undefined && r.env_version !== v) {
+      const at = r.env_version ? `env_version ${r.env_version}` : `task_version ${r.task_version}, recorded before env_version`;
+      throw new BatchRefused(`the run directory holds ${r.task_id} at ${at}, and the task's env_version is now ${v}; use a new run directory`);
     }
   }
   const done = new Set(settled.map(recordKey));
   const keys = spec.taskIds.flatMap((task_id) =>
-    Array.from({ length: spec.trials }, (_, index): TrialKey => ({ task_id, task_version: versions[task_id] as string, model: spec.model, effort: spec.effort, index })),
+    Array.from({ length: spec.trials }, (_, index): TrialKey => ({ task_id, env_version: versions[task_id]!.env_version, model: spec.model, effort: spec.effort, index })),
   );
   const remaining = keys.filter((k) => !done.has(trialKey(k)));
   const projection = projectBatch(
-    spec.taskIds.map((task_id) => ({ task_id, task_version: versions[task_id] as string, trials: remaining.filter((k) => k.task_id === task_id).length })).filter((t) => t.trials > 0),
+    spec.taskIds.map((task_id) => ({ task_id, task_version: versions[task_id]!.task_version, trials: remaining.filter((k) => k.task_id === task_id).length })).filter((t) => t.trials > 0),
     spec.observations ?? [],
   );
   return { versions, keys, remaining, projection };
@@ -240,9 +248,11 @@ async function lockedBatch(spec: BatchSpec, deps: BatchDeps, log: (line: string)
     settled: 0, requeued: 0, stopped: null, cancelled: false,
   };
   const prior = await deps.sink.manifest();
+  const pick = (k: keyof TaskVersions) => Object.fromEntries(Object.entries(plan.versions).map(([id, v]) => [id, v[k]]));
   const manifest: RunManifest = {
     ...prior, ...spec.manifest, run_id: spec.runId, model: spec.model, effort: spec.effort, mode: spec.mode, world_hash: deps.worldHash,
-    api_version: ANTHROPIC_VERSION, trials: Math.max(spec.trials, prior?.trials ?? 0), task_versions: { ...prior?.task_versions, ...plan.versions },
+    api_version: ANTHROPIC_VERSION, trials: Math.max(spec.trials, prior?.trials ?? 0), task_versions: { ...prior?.task_versions, ...pick('task_version') },
+    env_versions: { ...prior?.env_versions, ...pick('env_version') }, grader_task_versions: { ...prior?.grader_task_versions, ...pick('grader_task_version') },
     batches: [...(prior?.batches ?? []), entry],
   };
 

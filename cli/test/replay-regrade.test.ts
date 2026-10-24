@@ -90,17 +90,17 @@ describe('replay and regrade', () => {
     expect(bad.text).toMatch(/_toy\/0: regrade gives PASS score 1, the current grade FAIL score 0/);
   });
 
-  it('replay refuses a trial whose task_version is not the checkout\'s, naming both; regrade still runs', async () => {
+  it('replay refuses a trial whose env_version is not the checkout\'s, naming both; regrade still runs', async () => {
     const copy = join(tempDir('replay-changed'), 'replay-changed');
     cpSync(dir, copy, { recursive: true });
     const file = join(copy, 'trials', '_toy', '0.json');
-    const rec = JSON.parse(readFileSync(file, 'utf8')) as { task_version: string; regrades?: unknown };
-    const current = rec.task_version;
+    const rec = JSON.parse(readFileSync(file, 'utf8')) as { env_version: string; regrades?: unknown };
+    const current = rec.env_version;
     delete rec.regrades;
-    writeFileSync(file, JSON.stringify({ ...rec, task_version: 'v-before-the-edit' }, null, 2));
+    writeFileSync(file, JSON.stringify({ ...rec, env_version: 'v-before-the-edit' }, null, 2));
     const r = await cli(replay, [copy]);
     expect(r.code, r.text).toBe(1);
-    expect(r.text).toContain(`_toy/0: task changed: run at v-before-the-edit, checkout at ${current}`);
+    expect(r.text).toContain(`_toy/0: environment changed: run at env_version v-before-the-edit, checkout at ${current}`);
     const j = JSON.parse(readFileSync(join(copy, 'replay.json'), 'utf8'));
     expect(j.trials['_toy/0']).toMatchObject({ match: false });
     expect(j.trials['_toy/1']).toMatchObject({ match: true });
