@@ -16,6 +16,16 @@
 // never a requirement. A GRADER_ERROR is settled, never re-queued as a model trial: regrade grades
 // it again from its trajectory. audit-check and replay read the grade through currentGrade too.
 //
+// The GRADER_ERROR policy (packages/grader/grade.ts header): fix the grader, regrade the whole
+// run offline (cli/regrade.ts), then disclose. A final run must pass --require grader_error=0
+// and replay=all: grader_error counts the current grade, grader_error_history the records that
+// were GRADER_ERROR before, and replay compares env_version only, so a regrade after a grader
+// fix does not stop replay=all from passing. Each task reports the env_versions its records ran
+// at and the grader_task_versions of their current grades.
+//
+// Trials are named by trialName, as replay.json names them: <task>/<index> for a batch record,
+// the run-one key <task>/<model>/<effort>/<mode>/<index> for a run-one record (it has no index).
+//
 // Wilson score interval, z = 1.959964 (two-sided 95%), for k passes in n valid trials, p = k/n:
 //   centre = (p + z²/2n) / (1 + z²/n)
 //   half   = z / (1 + z²/n) · sqrt(p(1-p)/n + z²/4n²)
@@ -23,7 +33,8 @@
 import { isValid, OUTCOMES } from './outcomes.ts';
 
 // 2: recorded_outcomes and regraded added, and every figure reads the current grade.
-export const SUMMARY_SCHEMA_VERSION = 2;
+// 3: env_versions and grader_task_versions added per task.
+export const SUMMARY_SCHEMA_VERSION = 3;
 export const WILSON_Z = 1.959963984540054;
 
 export interface Interval {
@@ -45,7 +56,13 @@ export function wilson(k: number, n: number, z = WILSON_Z): Interval | null {
 export interface SummaryTrial {
   task_id: string;
   task_version: string | null;
-  index: number;
+  // null on a record written before the versions were split.
+  env_version?: string | null;
+  grader_task_version?: string | null;
+  // A batch record's index; a run-one record has none and is named by its trajectory path.
+  index?: number;
+  trajectory?: string;
+  trial_id?: string;
   outcome: string;
   model_requested: string;
   models_returned: readonly string[];
@@ -62,6 +79,8 @@ export interface SummaryTrial {
 // before checks were stored have no checks.
 export interface RegradeGrade {
   outcome: string;
+  // The task's grader_task_version the regrade graded at; absent on older entries.
+  grader_task_version?: string | null;
   score?: number | null;
   valid?: boolean;
   checks?: ReadonlyArray<{ id: string; met: unknown }>;
@@ -74,14 +93,28 @@ export interface CurrentGrade {
   // The check results of the current grade; null when its regrade entry did not store them.
   checks: ReadonlyArray<{ id: string; met: unknown }> | null;
   regraded: boolean;
+  // The grader_task_version it was graded at; null when its record or entry predates the field.
+  grader_task_version: string | null;
 }
+
+// A trial's name in messages, replay.json and summary.json: <task>/<index> for a batch record; a
+// run-one record has no index, and is named by its key, <task>/<model>/<effort>/<mode>/<index>,
+// the path its trajectory is at (trajectories/<key>.jsonl), else its trial_id.
+export const trialName = (r: { task_id: string; index?: number | undefined; trajectory?: string | undefined; trial_id?: string | undefined }): string => {
+  if (typeof r.index === 'number') return `${r.task_id}/${r.index}`;
+  const key = r.trajectory?.match(/^trajectories\/(.+)\.jsonl$/)?.[1];
+  return key ?? r.trial_id ?? r.task_id;
+};
 
 // A record's current grade: its last regrades[] entry, else its recorded outcome, score and
 // checks. The one reader of a record's grade for summary, audit-check and replay.
-export function currentGrade(r: { outcome: string; score?: number | null; checks?: ReadonlyArray<{ id: string; met: unknown }> | null; regrades?: ReadonlyArray<RegradeGrade> }): CurrentGrade {
+export function currentGrade(r: { outcome: string; score?: number | null; checks?: ReadonlyArray<{ id: string; met: unknown }> | null; grader_task_version?: string | null; regrades?: ReadonlyArray<RegradeGrade> }): CurrentGrade {
   const last = r.regrades?.at(-1);
-  if (last === undefined) return { outcome: r.outcome, score: r.score ?? null, valid: isValid(r.outcome), checks: r.checks ?? null, regraded: false };
-  return { outcome: last.outcome, score: last.score ?? null, valid: typeof last.valid === 'boolean' ? last.valid : isValid(last.outcome), checks: last.checks ?? null, regraded: true };
+  if (last === undefined) return { outcome: r.outcome, score: r.score ?? null, valid: isValid(r.outcome), checks: r.checks ?? null, regraded: false, grader_task_version: r.grader_task_version ?? null };
+  return {
+    outcome: last.outcome, score: last.score ?? null, valid: typeof last.valid === 'boolean' ? last.valid : isValid(last.outcome), checks: last.checks ?? null, regraded: true,
+    grader_task_version: last.grader_task_version ?? null,
+  };
 }
 
 export interface SummaryInput {
@@ -90,7 +123,7 @@ export interface SummaryInput {
   trials: readonly SummaryTrial[];
   // Attempts that were re-queued (INFRA, ENV_ERROR, CANCELLED): counted raw, never in a rate.
   requeued: readonly SummaryTrial[];
-  // replay.json, written by `pnpm cli replay`: whether each trial (<task>/<index>) reproduced
+  // replay.json, written by `pnpm cli replay`: whether each trial (by trialName) reproduced
   // its grade. null when replay has not run.
   replay: Readonly<Record<string, boolean>> | null;
   // The manifest's mode (live, mock-<scenario>); null without a manifest.
@@ -101,6 +134,9 @@ export interface SummaryInput {
 
 export interface TaskSummary {
   task_versions: string[];
+  // The env_versions the records ran at, and the grader_task_versions of their current grades.
+  env_versions: string[];
+  grader_task_versions: string[];
   records: number; // settled records
   trials: number; // valid trials: the headline denominator
   passes: number;
@@ -149,7 +185,7 @@ export interface Summary {
 
 // The grades before a record's current one.
 const earlierOutcomes = (t: SummaryTrial): string[] => (t.regrades?.length ? [t.outcome, ...t.regrades.slice(0, -1).map((r) => r.outcome)] : []);
-const keyOf = (t: Pick<SummaryTrial, 'task_id' | 'index'>) => `${t.task_id}/${t.index}`;
+const keyOf = trialName;
 const mean = (xs: readonly number[]): number | null => (xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length);
 const sorted = (xs: Iterable<string>) => [...new Set(xs)].sort();
 const histogram = (xs: readonly string[]): Record<string, number> => {
@@ -170,6 +206,8 @@ export function summarize(input: SummaryInput): Summary {
     const refusals = valid.filter((g) => g.outcome === 'REFUSAL').length;
     tasks[id] = {
       task_versions: sorted(mine.flatMap((t) => (t.task_version === null ? [] : [t.task_version]))),
+      env_versions: sorted(mine.flatMap((t) => (t.env_version ? [t.env_version] : []))),
+      grader_task_versions: sorted(grades.flatMap((g) => (g.grader_task_version === null ? [] : [g.grader_task_version]))),
       records: mine.length,
       trials: valid.length,
       passes,
@@ -343,7 +381,7 @@ export function validateSummary(x: unknown): string[] {
       }
       const histogram = (v: unknown) => isObj(v) && Object.entries(v).every(([o, n]) => (OUTCOMES as readonly string[]).includes(o) && count(n));
       check(`tasks.${id}.`, t, {
-        task_versions: strings, records: count, trials: count, passes: count, pass_rate: rate, wilson95: interval, refusals: count,
+        task_versions: strings, env_versions: strings, grader_task_versions: strings, records: count, trials: count, passes: count, pass_rate: rate, wilson95: interval, refusals: count,
         refusal_excluded_rate: rate, env_error_raw: count, grader_error: count, grader_error_history: count, regraded: count, requeued: count, mean_score: (v) => v === null || num(v), mean_cost_usd: (v) => v === null || num(v),
         outcomes: histogram, recorded_outcomes: histogram,
       });

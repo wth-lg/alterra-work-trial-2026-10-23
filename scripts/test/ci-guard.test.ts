@@ -57,6 +57,18 @@ describe('ci-guard', () => {
     expect(r.stdout).toMatch(/ci\.yml:\d+:/);
   });
 
+  // CI fans the grader matrix out with strategy.matrix; a key or a live project handed in as a
+  // matrix value is caught like any other value.
+  it.each([
+    ['a secret as a matrix value', '        key:\n          - ${{ secrets.ANTHROPIC_API_KEY }}\n    steps:\n      - run: pnpm cli matrix --task all\n'],
+    ['a live project as a matrix value', '        project: [live]\n    steps:\n      - run: pnpm exec playwright test --project=${{ matrix.project }}\n'],
+  ])('fails on %s in a matrix job', (_name, tail) => {
+    const r = guard(`${CLEAN}  per-task:\n    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n${tail}`);
+    expect(r.status).toBe(1);
+    expect(r.stdout).not.toMatch(/not valid YAML/);
+    expect(r.stdout).toMatch(/ci\.yml:\d+: (references repository secrets|selects Playwright project)/);
+  });
+
   it('accepts an allowed project in another case, since Playwright lowercases it', () => {
     expect(guard(CLEAN + '      - run: pnpm exec playwright test --project=Mocked\n').status).toBe(0);
   });

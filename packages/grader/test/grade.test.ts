@@ -272,6 +272,25 @@ describe('a check that throws', () => {
     expect(g.checks.map((c) => [c.id, c.met])).toEqual([['G1', true], ['G9', 'unknown']]);
   });
 
+  it('a gate that throws first does not stop the others: every check runs, judge items included, so the judge cache is complete', async () => {
+    const j = scriptedJudge([MET, NOT_MET]);
+    const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [careless, ...CHECKS] }, { judge: j.client });
+    expect(g).toMatchObject({ outcome: 'GRADER_ERROR', valid: false, fault: 'grader', score: null, attribution: null, error: { check: 'G9', stops_batch: false } });
+    expect(g.checks.map((c) => c.id)).toEqual(['G9', ...CHECKS.map((c) => c.id)]);
+    expect(g.checks.filter((c) => c.id !== 'G9').every((c) => c.met !== 'unknown' || c.method !== 'code')).toBe(true);
+    expect(j.requests).toHaveLength(2);
+    expect(g.judge.cache).toHaveLength(2);
+    // The same trial graded again from that cache, with no client, has the grade of the fixed grader.
+    expect((await grade(input([...READS, ...WRITES], GOOD_FINAL), { cache: g.judge.cache })).outcome).toBe('PASS');
+  });
+
+  it('when several checks throw, error names the first and its message lists the others', async () => {
+    const bad = rubric({ id: 'R9', points: 1, method: 'code', category: 'documentation', traces_to: 'prompt L1', decisive_ids: [], fn: () => { throw new TypeError('bug in R9'); } });
+    const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [careless, ...CHECKS, bad] }, { judge: scriptedJudge([MET, NOT_MET]).client });
+    expect(g.error).toMatchObject({ check: 'G9', message: expect.stringMatching(/Cannot read properties of undefined.*; also threw: R9 \(TypeError: bug in R9\)$/) });
+    expect(g.checks.filter((c) => c.evidence.grader_error !== undefined).map((c) => c.id)).toEqual(['G9', 'R9']);
+  });
+
   it('a rubric item that throws is a grader error too, and never changes into ENV_ERROR', async () => {
     const bad = rubric({ id: 'R9', points: 1, method: 'code', category: 'documentation', traces_to: 'prompt L1', decisive_ids: [], fn: () => { throw new TypeError('bug in R9'); } });
     const g = await grade({ ...input([...READS, ...WRITES], GOOD_FINAL), checks: [CHECKS[0]!, bad] });

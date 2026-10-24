@@ -1,4 +1,5 @@
 // pnpm cli matrix --task <id>|all
+// pnpm cli matrix --list-tasks
 // The grader validation matrix of one task (packages/grader/matrix/matrix.ts), offline: the
 // oracle, the alternatives, the mutants and the null, spray, output-gap and status-only agents
 // run as scripted models through run(), graded by tasks/<id>/tests/grader.ts with judge items
@@ -8,7 +9,9 @@
 // cache miss included: it names the item and never makes a call), 2 on a usage error.
 // --task all runs the matrix of every directory under tasks/ that has tests/, one after the
 // other, prints a summary line per task and exits 1 when any task fails (a usage error
-// included), 0 when all pass. CI runs this form.
+// included), 0 when all pass.
+// --list-tasks prints the ids --task all runs as one line of JSON and exits 1 when there are
+// none. CI's matrix job fans out over it and runs --task <id> once per task, in parallel.
 // It never builds a Messages client and opens no ledger: `pnpm cli oracle --live-judge` is the
 // only command that asks the judge live and refreshes the cache.
 // Two checks need Node and live here, given to the matrix as options:
@@ -37,7 +40,7 @@ import { nodeTaskSource, TASKS_DIR } from './adapters/tasks-node.ts';
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 // A task id is a directory name: no path separators, no '..'.
 export const TASK_ID = /^[A-Za-z0-9_-]+$/;
-const USAGE = 'usage: pnpm cli matrix --task <id>|all';
+const USAGE = 'usage: pnpm cli matrix --task <id>|all\n       pnpm cli matrix --list-tasks';
 
 // The TOML parser is packages/core's dependency (its task parser's); it is resolved from there,
 // so reading [matrix] needs no new dependency.
@@ -51,7 +54,7 @@ export interface Deps {
   // Narrows the run (a unit test's subset of cases, one trial, one grade); default the whole
   // matrix with the isolation check and the policy import graph.
   options?: MatrixOptions;
-  // The task ids --task all runs; default matrixTaskIds.
+  // The task ids --task all runs and --list-tasks prints; default matrixTaskIds.
   tasks?: () => string[];
 }
 
@@ -109,11 +112,23 @@ export async function loadMatrixTask(id: string, root: string = TASKS_DIR): Prom
 }
 
 export async function main(args: string[], deps: Deps): Promise<number> {
+  if (args.length === 1 && args[0] === '--list-tasks') return listTasks(deps);
   if (args.length !== 2 || args[0] !== '--task') return usage(deps, args.length === 0 ? '--task is required' : `unexpected arguments ${args.join(' ')}`);
   const id = args[1]!;
   if (id === 'all') return all(deps);
   const r = await one(id, deps);
   return r.usage === undefined ? r.code : usage(deps, r.usage);
+}
+
+// The ids as JSON, for CI's strategy.matrix; an empty matrix would fail there less clearly.
+function listTasks(deps: Deps): number {
+  const ids = (deps.tasks ?? matrixTaskIds)();
+  if (ids.length === 0) {
+    deps.out('matrix: no task directory has tests/');
+    return 1;
+  }
+  deps.out(JSON.stringify(ids));
+  return 0;
 }
 
 // Every task's matrix in turn, then one summary line per task.

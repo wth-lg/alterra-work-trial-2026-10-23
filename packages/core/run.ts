@@ -14,7 +14,8 @@
 // packages/grader) with the task's checks, judge items through the trial's own client, and the
 // record, grade included, is emitted as the graded event, last for every outcome, and
 // returned. An invalid trial (INVALID, INFRA, CANCELLED, ENV_ERROR) runs no check and no judge
-// call. Grading does not throw: a check that throws grades the trial GRADER_ERROR and a judge
+// call. Grading does not throw: a check that throws grades the trial GRADER_ERROR (after every
+// other check ran, so the judge cache is complete for an offline regrade) and a judge
 // call the client failed grades it as classifyFailure says (INFRA_API for a 401 or retries
 // exhausted), both invalid, both graded last with the cost, turns, tool calls, models and
 // hashes the trial really had. The judge's calls carry opts.signal, so an abort cancels a judge
@@ -29,7 +30,7 @@ import { ANTHROPIC_VERSION, MODEL, type MessageParam, type MessageParams } from 
 import { PER_TRIAL_CAP_USD } from './cost.ts';
 import { createEmitter, type TrialEvent, type TrialStatus } from './events.ts';
 import { errorText, newOutcome, runLoop, type LoopOutcome, type TrialClient } from './loop.ts';
-import { taskVersion, type Task, type TaskSource } from './tasks.ts';
+import { taskVersions, type Task, type TaskSource, type TaskVersions } from './tasks.ts';
 import { toolLog } from './trajectory.ts';
 import type { Check } from '../grader/check.ts';
 import { grade, gradeWith, judgeFor, ungraded, type Grade } from '../grader/grade.ts';
@@ -95,7 +96,11 @@ class SinkError extends Error {
 export interface TrialRun {
   trial_id: string;
   task_id: string;
+  // The task's versions (packages/core/tasks.ts taskVersions); null where an environment
+  // exception came first. replay compares env_version; regrade records grader_task_version.
   task_version: string | null;
+  env_version: string | null;
+  grader_task_version: string | null;
   fixture_hash: string;
   // null where an environment exception (ENV_ERROR INTERNAL) came first.
   state_hash: { initial: string | null; final: string | null; replay_final: string | null };
@@ -191,12 +196,12 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
   let initial: string | null = null;
   let final: string | null = null;
   let replayFinal: string | null = null;
-  let taskVer: string | null = null;
+  let versions: TaskVersions | null = null;
   let ctx: WriteContext | undefined;
   let initialState: Resource[] = [];
   let finalState: Resource[] | null = null;
   try {
-    taskVer = await taskVersion(task, opts.worldHash);
+    versions = await taskVersions(task, opts.worldHash);
     const bytes = await opts.world.read();
     const source: FixtureSource = { read: async () => bytes };
     const store = await loadStore(source);
@@ -244,7 +249,9 @@ export async function run(taskId: string, model: string, opts: RunOptions): Prom
   const facts: Omit<TrialRun, 'ended' | 'judge_cost_usd'> = {
     trial_id: opts.trialId ?? `${task.id}:${started}`,
     task_id: task.id,
-    task_version: taskVer,
+    task_version: versions?.task_version ?? null,
+    env_version: versions?.env_version ?? null,
+    grader_task_version: versions?.grader_task_version ?? null,
     fixture_hash: opts.worldHash,
     state_hash: { initial, final, replay_final: replayFinal },
     model_requested: MODEL,
@@ -293,7 +300,7 @@ function withSignal(client: TrialClient | null, signal: AbortSignal | undefined)
 export function internalErrorRecord(t: { trialId: string; taskId: string; worldHash: string; effort: Effort; started: number; ended: number }): TrialRecord {
   const o = newOutcome();
   return {
-    trial_id: t.trialId, task_id: t.taskId, task_version: null, fixture_hash: t.worldHash,
+    trial_id: t.trialId, task_id: t.taskId, task_version: null, env_version: null, grader_task_version: null, fixture_hash: t.worldHash,
     state_hash: { initial: null, final: null, replay_final: null },
     model_requested: MODEL, models_returned: [], effort: t.effort, api_version: ANTHROPIC_VERSION,
     started: iso(t.started), ended: iso(t.ended), turns: 0, tool_calls: 0, tool_errors: o.tool_errors, usage: o.usage,

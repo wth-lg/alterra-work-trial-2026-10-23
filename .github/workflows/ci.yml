@@ -36,10 +36,6 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      # The grader validation matrix (plan phase P9) of every task with tests, offline: canned
-      # judge outputs, no key, no live call; a judge cache miss or any failing task fails the step.
-      - name: grader validation matrix
-        run: pnpm cli matrix --task all
       # The requirement-trace matrix (plan phase P9t): every assignment sentence and user
       # modification has a row with code, tests, a UI screen and action, evidence and an expect.
       - name: requirement trace
@@ -49,6 +45,63 @@ jobs:
       - run: pnpm fixtures:lint
       - name: keyscan working tree and build output
         run: pnpm keyscan
+
+  # The grader validation matrix (plan phase P9) runs beside check, one job per task with tests,
+  # offline: canned judge outputs, no key, no live call; a judge cache miss fails that task's job.
+  # The task list comes from the repo, so a new task needs no edit here.
+  tasks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ids: ${{ steps.list.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: list
+        run: |
+          ids=$(pnpm --silent cli matrix --list-tasks)
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+
+  matrix:
+    name: matrix (${{ matrix.task }})
+    needs: tasks
+    runs-on: ubuntu-latest
+    # The slowest task took about 2 minutes on 16 local cores. The runner has 4 vCPUs and the
+    # isolation pass grades 3 cases at a time there instead of 8, so allow 5x plus setup, with margin.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        task: ${{ fromJSON(needs.tasks.outputs.ids) }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: grader validation matrix
+        env:
+          TASK: ${{ matrix.task }}
+        run: pnpm cli matrix --task "$TASK"
+
+  # One check name for branch protection however many tasks the matrix fans out to. always()
+  # makes it run, and fail, when a matrix job fails or the task list cannot be built.
+  matrix-ok:
+    needs: matrix
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.matrix.result }}
+        run: test "$RESULT" = success
 
   # Browsers and their system libraries come from the image, so this job installs nothing
   # with apt. The tag must equal @playwright/test in apps/web/package.json
