@@ -1,0 +1,20 @@
+[
+  {
+    "key": "770c35b1f8cc16405d32aed29083dfbfb1636fd6183e0a69a4ae3c7ba91176eb",
+    "kind": "judge",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "judge-v1",
+    "answer": {
+      "verdict": "met",
+      "quote": "The report recommends no follow-up imaging, so no follow-up is needed under RBC-RAD-05 and RBC-INBOX-01 §3."
+    },
+    "error": null,
+    "calls": 0,
+    "provenance": {
+      "source": "scripted",
+      "model": "none: a rule-based script with no network call (builder-46; re-keyed by builder-56 when the comment dropped \"Bosniak I\")",
+      "at": "2026-10-24T13:00:00Z"
+    }
+  }
+]
