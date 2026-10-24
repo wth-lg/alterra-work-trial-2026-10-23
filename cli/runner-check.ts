@@ -18,7 +18,8 @@
 //              The graded trial must report models_returned [claude-opus-5-5] and replay_final
 //              equal to final.
 //   --dry-run  stops after POST /api/trials?dry_run=1 and prints the projection as
-//              LIVE_PROJECTION_USD=<x>, for `pnpm cli spend --check --projected <x>`.
+//              LIVE_PROJECTION_USD=<x>, for `pnpm cli spend --check --projected <x>`. It makes no
+//              call: under --live the key is not sent.
 //   --json     prints one JSON report instead of lines.
 // Exit 0 when every check holds; 1 otherwise; 2 on a usage error. The key is never printed.
 import { spawn, spawnSync } from 'node:child_process';
@@ -214,11 +215,6 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
     const foreignHost = await http(port, 'GET', '/api/health', { host: `evil.example:${port}` });
     check('foreign host refused', foreignHost.status >= 400 && foreignHost.status < 500, `Host evil.example:${port}: ${foreignHost.status}`);
 
-    if (mode === 'live') {
-      const k = await http(port, 'POST', '/api/key', { token, body: { key } });
-      check('key validated', k.status === 200, `POST /api/key: ${k.status}${k.status === 200 ? '' : ` ${k.text.slice(0, 300)}`}`);
-    }
-
     const trial = { tasks: ['_toy'], trials: 1, concurrency: 1, effort: 'high', session_cap_usd: PROJECTED_CAP_USD };
     const dry = await http(port, 'POST', '/api/trials?dry_run=1', { token, body: trial });
     try {
@@ -229,6 +225,11 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
       check('dry run', false, `status ${dry.status}: ${(e as Error).message}`);
     }
 
+    // The key goes to the runner only for a trial: a dry run makes no call, not even Validate.
+    if (mode === 'live' && !flags.has('--dry-run') && checks.every((c) => c.ok)) {
+      const k = await http(port, 'POST', '/api/key', { token, body: { key } });
+      check('key validated', k.status === 200, `POST /api/key: ${k.status}${k.status === 200 ? '' : ` ${k.text.slice(0, 300)}`}`);
+    }
     if (!flags.has('--dry-run') && projection !== null && checks.every((c) => c.ok)) {
       const posted = await http(port, 'POST', '/api/trials', { token, body: { ...trial, session_cap_usd: projection } });
       const accepted = parseTrialsAccepted(JSON.parse(posted.text));
