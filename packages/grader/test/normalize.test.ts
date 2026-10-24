@@ -2,7 +2,7 @@
 // The tau2 regressions are here: 25 and 25.0 are the same number, 2.5 mg and 2.50 mg the same
 // dose, mg and MG the same unit.
 import { describe, expect, it } from 'vitest';
-import { canonicalNumber, clinicDate, conceptIs, dailyDose, displayKey, dosesPerDay, drugOf, isActive, isDrug, quantity, sameNumber, sameQuantity, type MedicationRequest } from '../normalize.ts';
+import { canonicalNumber, clinicDate, conceptIs, dailyDose, displayKey, doseOf, dosesPerDay, drugOf, isActive, isDrug, quantity, sameNumber, sameQuantity, type MedicationRequest } from '../normalize.ts';
 import { medication } from './helpers.ts';
 
 describe('numbers', () => {
@@ -72,6 +72,26 @@ describe('frequency and total daily dose', () => {
   it('totals dose x frequency, in mg', () => {
     expect(dailyDose(medication('m1', 'metformin 1000 MG Oral Tablet', 1000, 'mg', 2) as MedicationRequest)).toEqual({ value: 2000, unit: 'mg' });
     expect(dailyDose(medication('m2', 'metformin 1000 MG Oral Tablet', 1, 'g', 2) as MedicationRequest)).toEqual({ value: 2000, unit: 'mg' });
+  });
+
+  it('turns a tablet or capsule count into mg through the product unit strength', () => {
+    const mr = (display: string, n: number, unit: string, perDay: number) => medication('m', display, n, unit, perDay) as MedicationRequest;
+    expect(dailyDose(mr('apixaban 2.5 MG Oral Tablet', 2, '{tablet}', 2))).toEqual({ value: 10, unit: 'mg' });
+    expect(dailyDose(mr('apixaban 5 MG Oral Tablet', 0.5, '{tablet}', 2))).toEqual({ value: 5, unit: 'mg' });
+    expect(dailyDose(mr('metformin hydrochloride 1000 MG Oral Tablet', 1, 'tablet', 2))).toEqual({ value: 2000, unit: 'mg' });
+    expect(dailyDose(mr('gabapentin 300 MG Oral Capsule', 2, '{capsule}', 2))).toEqual({ value: 1200, unit: 'mg' });
+    expect(dailyDose(mr('gabapentin 300 MG Oral Capsule', 2, '{capsule}', 2), 'g')).toEqual({ value: 1.2, unit: 'g' });
+    const two = mr('apixaban 2.5 MG Oral Tablet', 2, '{tablet}', 2);
+    expect(doseOf(two, two.dosageInstruction![0]!)).toEqual({ value: 5, unit: 'mg' });
+    expect(doseOf(mr('apixaban 5 MG Oral Tablet', 5, 'mg', 2), { doseAndRate: [{ doseQuantity: { value: 5, unit: 'mg', code: 'mg' } }] })).toEqual({ value: 5, unit: 'mg' });
+  });
+
+  it('leaves a count dose unknown when the product has no single mass strength', () => {
+    const mr = (display: string, n: number, unit: string) => medication('m', display, n, unit, 2) as MedicationRequest;
+    expect(dailyDose(mr('Amoxicillin 875 MG / Clavulanate potassium 125 MG Oral Tablet', 1, '{tablet}'))).toBeNull();
+    expect(dailyDose(mr('potassium chloride 20 MEQ Extended Release Oral Tablet', 1, '{tablet}'))).toBeNull();
+    expect(dailyDose(mr('apixaban Oral Tablet', 1, '{tablet}'))).toBeNull();
+    expect(dailyDose({ dosageInstruction: mr('apixaban 5 MG Oral Tablet', 1, '{tablet}').dosageInstruction! })).toBeNull();
   });
 
   it('totals explicit timing events per clinic day: three events = TID', () => {
