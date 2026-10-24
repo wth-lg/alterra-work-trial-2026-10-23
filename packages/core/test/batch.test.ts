@@ -79,8 +79,8 @@ const unsettled = (rows: readonly LedgerRow[]) => {
 };
 const keysOf = async (sink: ResultSink) => (await sink.settled()).map((r) => `${r.task_version}/${r.model_requested}/${r.effort}/${r.index}`);
 
-// Each mocked trial loads and hashes the world (about 0.5 s), so the 60-trial cases get 4 minutes.
-describe('runBatch', { timeout: 240_000 }, () => {
+// Each mocked trial loads and hashes the world (about 0.5 s), so the 60-trial cases get 8 minutes (125 s seen under a parallel run).
+describe('runBatch', { timeout: 480_000 }, () => {
   it('60 mocked trials complete, each key once, five calls each, and the batch closes', async () => {
     const store = new MemoryStore();
     const sink = memorySink();
@@ -158,7 +158,7 @@ describe('runBatch', { timeout: 240_000 }, () => {
       };
     };
     void runBatch(spec({ concurrency: 1 }), deps(store, sink, first, { pid: 101, transport: kill }));
-    await expect.poll(() => store.dead, { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => store.dead, { timeout: 150_000, interval: 50 }).toBe(true);
     expect((await sink.settled()).length).toBe(30);
     const partial = unsettled(store.rows);
     expect(partial).toHaveLength(1);

@@ -72,8 +72,8 @@ class MemoryStore implements LedgerStore {
   }
 }
 
-// Each mocked trial loads and hashes the world (about 0.5 s), so the 60-trial cases get 4 minutes.
-describe('cli run', { timeout: 240_000 }, () => {
+// Each mocked trial loads and hashes the world (about 0.5 s), so the 60-trial cases get 8 minutes (125 s seen under a parallel run).
+describe('cli run', { timeout: 480_000 }, () => {
   it('60 mocked trials: the same keys and call count as the batch driven through batch.ts with an in-memory sink', async () => {
     const dir = join(tempDir('run-60'), 'run-60');
     const h = harness();
@@ -127,7 +127,7 @@ describe('cli run', { timeout: 240_000 }, () => {
     delete env.ANTHROPIC_API_KEY;
     const child = spawn(process.execPath, [join(repoRoot, 'cli/test/kill-child.ts'), marker, '30', ...runArgs(dir, '--trials', '60', '--concurrency', '1', '--mock', 'toy')], { env, stdio: 'ignore' });
     const exited = new Promise<NodeJS.Signals | null>((resolve) => child.on('exit', (_code, signal) => resolve(signal)));
-    await expect.poll(() => existsSync(marker), { timeout: 50_000, interval: 50 }).toBe(true);
+    await expect.poll(() => existsSync(marker), { timeout: 150_000, interval: 50 }).toBe(true);
     child.kill('SIGKILL');
     expect(await exited).toBe('SIGKILL');
     expect(trialFiles(dir)).toHaveLength(30);
