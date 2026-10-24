@@ -1,7 +1,8 @@
 // `pnpm cli run-one` (plan phase P7) with the mocked API: its dry run prints the projection
 // batchStart is given and opens nothing; a ledger whose exposure plus that projection crosses
-// PROJECTED_CAP_USD refuses before any call; a mocked trial writes the record and the trajectory JSONL,
-// meters through the ledger and closes its batch; a rerun of a recorded trial key sends nothing.
+// PROJECTED_CAP_USD refuses before any call; a mocked trial writes the record and the trajectory
+// JSONL, meters through the ledger and closes its batch; a rerun of a recorded trial key sends
+// nothing.
 // The toy has a grader (tasks/_toy/tests/grader.ts), so the dry-run projection is the per-trial
 // cap plus its judge allowance (bounded by the judge's body cap), and the mocked trial makes three
 // model calls and two judge calls, each judge call on its own right-sized grant, and PASSes.

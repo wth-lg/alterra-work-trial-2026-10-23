@@ -1,6 +1,7 @@
 // `pnpm cli oracle --live-judge` (plan phase P9 gate): with the ledger one cent over
-// PROJECTED_CAP_USD minus the command's own dry-run projection, batchStart refuses before any judge call, writes no cache
-// and appends no ledger row. Graded on the toy's oracle and null agent only, so it stays fast.
+// PROJECTED_CAP_USD minus the command's own dry-run projection, batchStart refuses before any
+// judge call, writes no cache and appends no ledger row. Graded on the toy's oracle and null
+// agent only, so it stays fast.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';

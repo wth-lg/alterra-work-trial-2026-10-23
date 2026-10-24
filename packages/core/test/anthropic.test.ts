@@ -267,7 +267,8 @@ describe('spend caps', () => {
     const t = await client([ok()], { setupLedger: s });
     // Spend another process settled after this batch started.
     s.store.rows.push({ ts: 't', call_id: 'other', kind: 'settle', source: 'node', run_id: null, batch_id: null, trial: null, usage: null, cost_usd: ACTUAL_CAP_USD - 0.1 });
-    // max_tokens 8192 reserves about $0.20 (8192 x $20/MTok plus the input bound), which crosses ACTUAL_CAP_USD.
+    // max_tokens 8192 reserves about $0.20 (8192 x $20/MTok plus the input bound), which crosses
+    // ACTUAL_CAP_USD.
     await expect(t.c.send(user(), { ...PARAMS, max_tokens: 8192 })).rejects.toBeInstanceOf(SpendRefused);
     expect(t.calls).toHaveLength(0);
     expect(rows(t.store, 'reserve')).toHaveLength(0);

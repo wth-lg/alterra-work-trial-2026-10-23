@@ -16,28 +16,28 @@
 // The trial is graded with the task's checks, tasks/<id>/tests/grader.ts (none when the task
 // has no grader), and its judge items go through the trial's client and ledger.
 // The dry run's projection is the per-trial cap ($6) plus the judge allowance for the task's
-// judge and hybrid items: the loop stops a trial once its cost reaches the cap, one trial makes no
-// reruns, and each judge item makes at most two calls, each priced at the judge's body cap,
+// judge and hybrid items: the loop stops a trial once its cost reaches the cap, one trial makes
+// no reruns, and each judge item makes at most two calls, each priced at the judge's body cap,
 // because the text the judge grades does not exist yet. It is the upper bound `spend --check`
 // takes. A live run holds less: the loop's grant is the per-trial cap, which batchStart refuses,
-// before any call, when the ledger's exposure plus $6 would cross PROJECTED_CAP_USD; each judge call then
-// opens its own grant at that call's worst case from its real request (perCallGrantClient),
-// checked against PROJECTED_CAP_USD at that moment, under the same trial label. run-one prints both, and
-// exits 1 if the ledger's settled sum for the trial is not the record's cost_usd plus
-// judge_cost_usd. Each event is appended to the
-// trajectory as it arrives, so a crash leaves a valid prefix, and the last line is the graded
-// record; the record (outcome, gate checks, rubric scores included) is written at the end. A
-// check that throws or a judge call that fails does not make run() throw: the trial is graded
-// GRADER_ERROR, or as classifyFailure says for the judge (INFRA_API for a 401), with its real
-// cost and turns. A trajectory append that fails (a full disk) does not lose the record either:
-// run() stops writing the trajectory and returns the record with sink_error, run-one writes it,
-// says the trajectory is incomplete and exits 1. If run() throws (the task cannot be
-// resolved again, before any spend), the record says ENV_ERROR INTERNAL: never a valid trial,
-// never the model's failure. That record is written only while the ledger shows no call for the
-// trial: after a call, run-one writes no record and says so, so no record claims $0 for spend.
-// A trial key whose record exists is not run again (live mode checks for the key first). Exit 0
-// when the trial completed, was graded validly and replay_final equals final; 1 otherwise; 2 on
-// a usage error, an unknown task included.
+// before any call, when the ledger's exposure plus $6 would cross PROJECTED_CAP_USD; each judge
+// call then opens its own grant at that call's worst case from its real request
+// (perCallGrantClient), checked against PROJECTED_CAP_USD at that moment, under the same trial
+// label. run-one prints both, and exits 1 if the ledger's settled sum for the trial is not the
+// record's cost_usd plus judge_cost_usd. Each event is appended to the trajectory as it arrives,
+// so a crash leaves a valid prefix, and the last line is the graded record; the record (outcome,
+// gate checks, rubric scores included) is written at the end. A check that throws or a judge
+// call that fails does not make run() throw: the trial is graded GRADER_ERROR, or as
+// classifyFailure says for the judge (INFRA_API for a 401), with its real cost and turns. A
+// trajectory append that fails (a full disk) does not lose the record either: run() stops
+// writing the trajectory and returns the record with sink_error, run-one writes it, says the
+// trajectory is incomplete and exits 1. If run() throws (the task cannot be resolved again,
+// before any spend), the record says ENV_ERROR INTERNAL: never a valid trial, never the model's
+// failure. That record is written only while the ledger shows no call for the trial: after a
+// call, run-one writes no record and says so, so no record claims $0 for spend. A trial key
+// whose record exists is not run again (live mode checks for the key first). Exit 0 when the
+// trial completed, was graded validly and replay_final equals final; 1 otherwise; 2 on a usage
+// error, an unknown task included.
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
