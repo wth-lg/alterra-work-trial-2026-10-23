@@ -6,7 +6,7 @@ import { useSyncExternalStore } from 'react';
 
 export type KeyStatus = { kind: 'none' } | { kind: 'tab'; masked: string } | { kind: 'runner' };
 
-const REMEMBER = 'chartr.key';
+const REMEMBER = 'clinenv.key';
 
 let key: string | null = null;
 let status: KeyStatus = { kind: 'none' };

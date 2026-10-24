@@ -22,7 +22,7 @@ import { join } from 'node:path';
 
 const FINAL_RUN = 'results/runs/final-1';
 const MODEL = 'claude-opus-5-5';
-const HOSTED_URL = 'https://wth-lg.github.io/alterra-work-trial-2026-10-23/';
+const HOSTED_URL = 'https://wth-lg.github.io/clinical-agent-env/';
 const MIN_TASKS = 5;
 const TASK_FILES = ['instruction.md', 'task.toml', 'tests/grader.ts', 'solution/solve.ts'];
 const README_SECTIONS = ['findings', 'surprises', 'changes', 'next steps'];

@@ -314,7 +314,7 @@ describe('pnpm live:node refuses before any call', () => {
   it('own-run mode with SPEND_LEDGER=/tmp/x makes 0 calls and errors', async () => {
     const dir = tempDir('p2-own-run');
     write(dir, 'spend.jsonl', '');
-    const r = await run({ CHARTR_CANONICAL_LEDGER: `${dir}/spend.jsonl`, SPEND_LEDGER: '/tmp/x' });
+    const r = await run({ CLINENV_CANONICAL_LEDGER: `${dir}/spend.jsonl`, SPEND_LEDGER: '/tmp/x' });
     expect(r.code).not.toBe(0);
     expect(r.out).toMatch(/SPEND_LEDGER/);
     expect(r.calls).toHaveLength(0);

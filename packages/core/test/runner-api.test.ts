@@ -21,10 +21,10 @@ describe('runner-api samples', () => {
 
   it('names the runner app, the same-origin paths, the token header and the token meta', () => {
     expect(SAMPLES.health.app).toBe(RUNNER_APP);
-    expect(RUNNER_APP).toBe('chartr-runner');
+    expect(RUNNER_APP).toBe('clinenv-runner');
     expect([HEALTH_PATH, KEY_PATH]).toEqual(['api/health', 'api/key']);
-    expect(TOKEN_HEADER).toBe('X-Chartr-Token');
-    expect(TOKEN_META).toBe('chartr-runner-token');
+    expect(TOKEN_HEADER).toBe('X-Clinenv-Token');
+    expect(TOKEN_META).toBe('clinenv-runner-token');
   });
 });
 
@@ -53,7 +53,7 @@ describe('runner-api validators', () => {
     expect(() => parseHealth({ ...SAMPLES.health, ledger: null })).toThrow(ContractError);
     expect(() => parseHealth({ ...SAMPLES.health, ledger: { ...SAMPLES.health.ledger, mode: 'other' } })).toThrow(ContractError);
     expect(() => parseHealth({ ...SAMPLES.health, ledger: { ...SAMPLES.health.ledger, path: 7 } })).toThrow(ContractError);
-    for (const x of [null, [], 'chartr-runner', 200, '<!doctype html>']) expect(() => parseHealth(x)).toThrow(ContractError);
+    for (const x of [null, [], 'clinenv-runner', 200, '<!doctype html>']) expect(() => parseHealth(x)).toThrow(ContractError);
   });
 
   it('rejects a key request missing its key, with an empty or padded key, or with any other field', () => {

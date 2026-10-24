@@ -7,7 +7,7 @@
 //   --index     the trial's index in its key (task, model, effort, mode, index); default 0
 //   --out       the run directory: trials/<key>.json and trajectories/<key>.jsonl, where <key> is
 //               <task>/<model>/<effort>/<mode>/<index> and mode is live or mock-<scenario>
-//               (default $CHARTR_RUNS_DIR, else ~/.chartr/runs/run-one)
+//               (default $CLINENV_RUNS_DIR, else ~/.clinenv/runs/run-one)
 //   --mock      answers from a scripted scenario (apps/web/src/harness/scenarios.ts) instead of
 //               the API. It needs no key and still meters through the ledger, at the mocked usage,
 //               with trial labels starting mock:, so the cap checks run as they do live. Its
@@ -119,7 +119,7 @@ export async function main(args: string[], deps: Deps = defaults): Promise<numbe
   if (!Number.isSafeInteger(index) || index < 0) return usage(deps, '--index must be a whole number >= 0');
   const mock = opts.get('--mock');
   if (mock !== undefined && !isScenario(mock)) return usage(deps, `--mock: unknown scenario ${mock}`);
-  const outDir = resolve(opts.get('--out') ?? deps.env.CHARTR_RUNS_DIR ?? join(deps.env.HOME || homedir(), '.chartr', 'runs', 'run-one'));
+  const outDir = resolve(opts.get('--out') ?? deps.env.CLINENV_RUNS_DIR ?? join(deps.env.HOME || homedir(), '.clinenv', 'runs', 'run-one'));
 
   let checks: readonly Check[];
   try {

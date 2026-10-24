@@ -29,12 +29,12 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
-    baseURL: `http://localhost:${PORT}/alterra-work-trial-2026-10-23/`,
+    baseURL: `http://localhost:${PORT}/clinical-agent-env/`,
     trace: 'retain-on-failure',
   },
   webServer: {
     command: `pnpm exec vite preview --port ${PORT} --strictPort`,
-    url: `http://localhost:${PORT}/alterra-work-trial-2026-10-23/`,
+    url: `http://localhost:${PORT}/clinical-agent-env/`,
     reuseExistingServer: false,
   },
   projects: [

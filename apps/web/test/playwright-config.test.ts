@@ -22,7 +22,7 @@ describe('playwright.config.ts', () => {
   it('serves on PW_PORT when it is set', () => {
     const c = load({ PW_PORT: '5999' });
     expect(c.command).toContain('--port 5999 --strictPort');
-    expect(c.url).toBe('http://localhost:5999/alterra-work-trial-2026-10-23/');
+    expect(c.url).toBe('http://localhost:5999/clinical-agent-env/');
     expect(c.base).toBe(c.url);
   });
 
@@ -30,6 +30,6 @@ describe('playwright.config.ts', () => {
     const c = load({});
     expect(Number(c.port)).toBeGreaterThan(0);
     expect(c.command).toContain(`--port ${c.port} --strictPort`);
-    expect(c.url).toBe(`http://localhost:${c.port}/alterra-work-trial-2026-10-23/`);
+    expect(c.url).toBe(`http://localhost:${c.port}/clinical-agent-env/`);
   });
 });

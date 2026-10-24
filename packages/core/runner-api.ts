@@ -8,9 +8,9 @@
 //                       the runner's token meta anything else means browser-direct, and on the
 //                       runner's own page it means the runner is not responding (never
 //                       browser-direct). The static build ships its own api/health
-//                       (STATIC_HEALTH), so the hosted page gets a 200 that is not chartr-runner
+//                       (STATIC_HEALTH), so the hosted page gets a 200 that is not clinenv-runner
 //                       instead of a 404.
-//   POST   api/key      KeyRequest in the body, the X-Chartr-Token header from the token meta
+//   POST   api/key      KeyRequest in the body, the X-Clinenv-Token header from the token meta
 //                       the runner injects into index.html. 200 KeyState { key_set: true } once
 //                       the runner's one validation call succeeded; else RunnerError with the
 //                       API's status and message.
@@ -18,12 +18,12 @@
 // The key travels only in the POST body. No response, error or validator message carries it.
 // No Node or DOM imports: this file is checked by the isomorphism lint.
 
-export const RUNNER_APP = 'chartr-runner';
+export const RUNNER_APP = 'clinenv-runner';
 // Relative to the UI's base: resolve them against document.baseURI.
 export const HEALTH_PATH = 'api/health';
 export const KEY_PATH = 'api/key';
-export const TOKEN_HEADER = 'X-Chartr-Token';
-export const TOKEN_META = 'chartr-runner-token';
+export const TOKEN_HEADER = 'X-Clinenv-Token';
+export const TOKEN_META = 'clinenv-runner-token';
 // A key longer than this is not an API key; the runner refuses it before any call.
 export const MAX_KEY_LENGTH = 512;
 
@@ -119,9 +119,9 @@ export const STATIC_HEALTH = { app: 'static', surface: 'browser-direct' } as con
 
 export const SAMPLES = {
   staticHealth: STATIC_HEALTH,
-  health: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'default', path: '/home/user/.chartr/spend.jsonl' }, key_loaded: false, mock: false },
-  healthWithKey: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'default', path: '/home/user/.chartr/spend.jsonl' }, key_loaded: true, mock: false },
-  healthOwnRun: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'own-run', path: '/tmp/chartr/spend.jsonl' }, key_loaded: false, mock: true },
+  health: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'default', path: '/home/user/.clinenv/spend.jsonl' }, key_loaded: false, mock: false },
+  healthWithKey: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'default', path: '/home/user/.clinenv/spend.jsonl' }, key_loaded: true, mock: false },
+  healthOwnRun: { app: RUNNER_APP, version: '0.1.0', ledger: { mode: 'own-run', path: '/tmp/clinenv/spend.jsonl' }, key_loaded: false, mock: true },
   keyRequest: { key: 'sample-not-a-key' },
   keyAccepted: { key_set: true },
   keyCleared: { key_set: false },

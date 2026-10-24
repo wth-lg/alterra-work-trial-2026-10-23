@@ -8,7 +8,7 @@
 // in a Worker.
 import { admitStore, createLedger, parseRow, type Ledger, type LedgerRow, type LedgerStore } from '../../../../packages/core/ledger.ts';
 
-export const LEDGER_KEY = 'chartr.ledger';
+export const LEDGER_KEY = 'clinenv.ledger';
 
 const session = (): Storage | null => {
   try {
