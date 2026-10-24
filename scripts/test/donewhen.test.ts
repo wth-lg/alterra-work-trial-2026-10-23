@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { repoRoot, runScript, tempDir, write } from './helpers.ts';
 
 const FIXTURES = join(repoRoot, 'scripts/fixtures/donewhen');
-const ALL_STUBS = { oracle: 'oracle-pass', summary: 'summary-pass', 'audit-check': 'audit-pass', spend: 'spend' };
+const ALL_STUBS = { oracle: 'oracle-pass', summary: 'summary-pass', 'audit-check': 'audit-pass', spend: 'spend', 'runner-check': 'runner-check-pass' };
 
 function makeTask(root: string, id: string, omit: string[] = []) {
   const files: Record<string, string> = {
@@ -21,7 +21,11 @@ function completeRepo(): string {
   copyFileSync(join(FIXTURES, 'README-pass.md'), join(root, 'README.md'));
   write(root, 'apps/web/index.html', '<!doctype html>\n');
   write(root, 'packages/core/run.ts', 'export function run() {}\n');
-  write(root, 'cli/run.ts', "import { run } from '../packages/core/run.ts';\n");
+  write(root, 'cli/run.ts', "import { runBatch } from '../packages/core/batch.ts';\n");
+  write(root, 'packages/core/batch.ts', "import { run } from './run.ts';\nexport const runBatch = run;\n");
+  write(root, 'cli/run-one.ts', "import { run } from '../packages/core/run.ts';\n");
+  write(root, 'apps/runner/main.ts', "import { startRunner } from './server.ts';\n");
+  write(root, 'apps/runner/server.ts', "import {\n  runBatch,\n} from '../../packages/core/batch.ts';\nexport const startRunner = runBatch;\n");
   write(root, 'apps/web/src/worker.ts', "import { run } from '../../../packages/core/run.ts';\n");
   for (const id of ['t1', 't2', 't3', 't4', 't5']) makeTask(root, id);
   makeTask(root, '_template');
@@ -73,12 +77,79 @@ describe('donewhen', () => {
     expect(r.calls).toContain('summary results/runs/final-1 --require trials=10,pass-min=2,pass-max=7,model=claude-opus-5-5 --json');
     expect(r.calls).toContain('audit-check results/runs/final-1 --json');
     expect(r.calls).toContain('spend --json');
+    expect(r.calls).toContain('runner-check --mock --json');
   });
 
   it('clause 1 fails when README documents no start command or URL', () => {
     const root = completeRepo();
     write(root, 'README.md', '# Riverbend\n');
     expect(donewhen(root, ALL_STUBS).clause(1)).toMatch(/^FAIL/);
+  });
+
+  it('clause 1 fails when runner-check --mock exits 1, passes with it and the README, and fails without LOCAL_START_COMMAND', () => {
+    expect(donewhen(completeRepo(), ALL_STUBS).clause(1)).toMatch(/^PASS/);
+    const failed = donewhen(completeRepo(), { ...ALL_STUBS, 'runner-check': 'runner-check-fail' }).clause(1);
+    expect(failed).toMatch(/^FAIL/);
+    expect(failed).toContain('runner-check --mock: exit 1');
+    const root = completeRepo();
+    write(root, 'README.md', readFileSync(join(FIXTURES, 'README-pass.md'), 'utf8').replace(/`git clone[^`]*pnpm start`/, '`pnpm start`'));
+    const line = donewhen(root, ALL_STUBS).clause(1);
+    expect(line).toMatch(/^FAIL/);
+    expect(line).toContain('LOCAL_START_COMMAND: no');
+  });
+
+  it('clause 1 fails with command not built when runner-check is missing', () => {
+    const { 'runner-check': _r, ...rest } = ALL_STUBS;
+    const line = donewhen(completeRepo(), rest).clause(1);
+    expect(line).toMatch(/^FAIL/);
+    expect(line).toContain('command not built');
+  });
+
+  it('clause 2 fails when the runner\'s events differ from run-one\'s', () => {
+    const line = donewhen(completeRepo(), { ...ALL_STUBS, 'runner-check': 'runner-check-differ' }).clause(2);
+    expect(line).toMatch(/^FAIL/);
+    expect(line).toContain('events equal run-one: no');
+  });
+
+  it.each(['cli/run-one.ts', 'apps/runner/main.ts', 'apps/runner/server.ts', 'packages/core/batch.ts'])('clause 2 fails when %s is missing from the import path', (rel) => {
+    const root = completeRepo();
+    rmSync(join(root, rel));
+    expect(donewhen(root, ALL_STUBS).clause(2)).toMatch(/^FAIL/);
+  });
+
+  it('clause 2 follows imports only: a comment naming packages/core/run.ts does not count', () => {
+    const root = completeRepo();
+    write(root, 'apps/runner/main.ts', '// see packages/core/run.ts\nexport {};\n');
+    expect(donewhen(root, ALL_STUBS).clause(2)).toMatch(/^FAIL/);
+  });
+
+  it.each([
+    ['a type-only import', "import type { Run } from '../../packages/core/run.ts';\nexport {};\n"],
+    ['an export type', "export type { Run } from '../../packages/core/run.ts';\n"],
+    ['a line comment', "// import { run } from '../../packages/core/run.ts';\nexport {};\n"],
+    ['a block comment', "/* import { run } from '../../packages/core/run.ts'; */\nexport {};\n"],
+  ])('clause 2 counts value imports only: %s of packages/core/run.ts does not count', (_what, text) => {
+    const root = completeRepo();
+    write(root, 'apps/runner/main.ts', text);
+    expect(donewhen(root, ALL_STUBS).clause(2)).toMatch(/^FAIL/);
+  });
+
+  it('clause 2 counts a value import, a re-export and a dynamic import', () => {
+    for (const text of [
+      "import { type Run, run } from '../../packages/core/run.ts';\n",
+      "export { run } from '../../packages/core/run.ts';\n",
+      "const m = await import('../../packages/core/run.ts');\n",
+      "import {\n  run, // the loop\n} from '../../packages/core/run.ts';\n",
+    ]) {
+      const root = completeRepo();
+      write(root, 'apps/runner/main.ts', text);
+      expect(donewhen(root, ALL_STUBS).clause(2), text).toMatch(/^PASS/);
+    }
+  });
+
+  it('runs runner-check --mock once for clauses 1 and 2', () => {
+    const r = donewhen(completeRepo(), ALL_STUBS);
+    expect(r.calls.split('\n').filter((l) => l === 'runner-check --mock --json')).toHaveLength(1);
   });
 
   it('clause 2 fails without a CLI run entry point', () => {

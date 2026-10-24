@@ -17,7 +17,10 @@
 //      open row); the ledger refuses a batch whose process is alive, and so does runBatch. The
 //      dead batch's unsettled reservations keep counting, each once, at its worst case;
 //   2. gets the grant from ledger.batchStart(projection), which refuses, before any call, when
-//      the projection would cross PROJECTED_CAP_USD; every trial's client is built from that grant;
+//      the projection would cross PROJECTED_CAP_USD, or spec.ceiling (the local runner's session
+//      cap; ledger.ts); every trial's client is built from that grant, so a re-queued attempt
+//      reserves against the same ceiling, and a reserve that would cross it stops the batch
+//      (spend_refused_ceiling) like any spend refusal;
 //   3. runs the remaining keys `concurrency` at a time. A trial ending INFRA_API, INFRA_HARNESS or
 //      ENV_ERROR is re-queued at the end of the batch, up to MAX_RERUNS times, and its record kept
 //      as a re-queued attempt (summary counts ENV_ERROR raw over them). A failure classifyFailure
@@ -35,7 +38,7 @@
 import { ANTHROPIC_VERSION, classifyFailure } from './anthropic.ts';
 import { projectBatch, type Projection, type TrialObservation } from './cost.ts';
 import type { TrialEvent } from './events.ts';
-import type { BatchGrant, Ledger, LedgerRow } from './ledger.ts';
+import type { BatchGrant, Ledger, LedgerRow, SpendCeiling } from './ledger.ts';
 import { errorText, type TrialClient } from './loop.ts';
 import { isValid } from './outcomes.ts';
 import { run, type Effort, type TrialRecord } from './run.ts';
@@ -130,6 +133,8 @@ export interface BatchSpec {
   // Trial costs from the --cost-from runs.
   observations?: readonly TrialObservation[];
   maxReruns?: number;
+  // The caller's cap on what this batch may take, reruns included; none for the CLI.
+  ceiling?: SpendCeiling;
   // Extra manifest fields.
   manifest?: Record<string, unknown>;
   signal?: AbortSignal;
@@ -241,7 +246,7 @@ async function lockedBatch(spec: BatchSpec, deps: BatchDeps, log: (line: string)
   const result: BatchResult = { batch_id: null, plan, settled: 0, requeued: 0, stopped: null, cancelled: false };
   if (plan.remaining.length === 0 || spec.signal?.aborted) return { ...result, cancelled: plan.remaining.length > 0 };
   await closeStale(spec.runId, deps, log);
-  const grant = await deps.ledger.batchStart(plan.projection.total);
+  const grant = await deps.ledger.batchStart(plan.projection.total, spec.ceiling);
   result.batch_id = grant.batch_id;
   const entry: BatchEntry = {
     batch_id: grant.batch_id, started: iso(deps.now()), ended: null, projection: plan.projection.total, remaining: plan.remaining.length,

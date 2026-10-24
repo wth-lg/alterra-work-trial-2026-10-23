@@ -11,6 +11,16 @@
 //   cli audit-check <run> --json        exit 0 when every failure is labelled and none is
 //                                       environment or grader; {failures, labelled, environment, grader}
 //   cli spend --json                    {total_usd}, printed as an INFO line
+//   cli runner-check --mock --json      exit 0 when the local runner passes every check;
+//                                       {events_equal}: its streamed events equal run-one's
+//
+// Clause (1) passes when `runner-check --mock` exits 0 and README.md names LOCAL_START_COMMAND
+// (apps/web/src/surface/command.ts) and the hosted URL. Clause (2) passes when cli/run-one.ts,
+// cli/run.ts, apps/runner/main.ts and a Worker module under apps/web/src (a file named *worker*)
+// each reach packages/core/run.ts through their relative value imports (`import type`, `export
+// type` and imports inside comments do not count: none loads the module), and runner-check
+// reports events_equal: the runner streams the trajectory run-one writes. runner-check --mock
+// runs once; both clauses read its result.
 //
 // Test hooks, honored only when NODE_ENV=test: DONEWHEN_CLI replaces `node cli/index.ts`
 // (space-separated command prefix); DONEWHEN_MIN_TASKS replaces the minimum of 5 tasks;
@@ -18,7 +28,8 @@
 // so the real oracle can be checked before any real task exists.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { LOCAL_START_COMMAND } from '../apps/web/src/surface/command.ts';
 
 const FINAL_RUN = 'results/runs/final-1';
 const MODEL = 'claude-opus-5-5';
@@ -26,7 +37,15 @@ const HOSTED_URL = 'https://wth-lg.github.io/clinical-agent-env/';
 const MIN_TASKS = 5;
 const TASK_FILES = ['instruction.md', 'task.toml', 'tests/grader.ts', 'solution/solve.ts'];
 const README_SECTIONS = ['findings', 'surprises', 'changes', 'next steps'];
-const CORE_RUN_IMPORT = /packages\/core\/run|@riverbend\/core(\/run)?['"]/;
+const CORE_RUN = 'packages/core/run.ts';
+// The entry points clause (2) follows to packages/core/run.ts.
+const RUN_ENTRIES = ['cli/run-one.ts', 'cli/run.ts', 'apps/runner/main.ts'];
+// A relative module specifier in a static import or re-export that is not `type`-only, a
+// dynamic import() or a side-effect import.
+const RELATIVE_IMPORT = /\b(?:import|export)\s+(?!type\b)[^;'"]*?\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\s*\(?\s*['"](\.{1,2}\/[^'"]+)['"]/g;
+// Block comments, and line comments that start a line or follow whitespace (not the // of a URL).
+const COMMENTS = /\/\*[\s\S]*?\*\/|(^|\s)\/\/.*$/gm;
+const RUNNER_CHECK = ['runner-check', '--mock', '--json'];
 const NOT_BUILT = 127;
 
 const root = process.cwd();
@@ -78,22 +97,41 @@ const yesNo = (b: boolean) => (b ? 'yes' : 'no');
 function clause1(): Verdict {
   const readme = read('README.md');
   const url = readme.includes(HOSTED_URL);
-  const dev = /\bpnpm dev\b/.test(readme);
-  const shell = existsSync(join(root, 'apps/web/index.html'));
+  const command = readme.includes(LOCAL_START_COMMAND);
+  const r = cli(RUNNER_CHECK);
   return {
-    pass: (url || dev) && shell,
-    evidence: `README names hosted URL: ${yesNo(url)}, pnpm dev: ${yesNo(dev)}; apps/web/index.html: ${yesNo(shell)}`,
+    pass: url && command && r.exit === 0,
+    evidence: `README names LOCAL_START_COMMAND: ${yesNo(command)}, hosted URL: ${yesNo(url)}; ${describeExit('runner-check --mock', r)}`,
   };
 }
 
+// Whether `rel` reaches packages/core/run.ts through relative imports (itself included).
+function reachesCoreRun(rel: string): boolean {
+  const target = join(root, CORE_RUN);
+  const seen = new Set<string>();
+  const todo = [join(root, rel)];
+  while (todo.length > 0) {
+    const file = todo.pop() as string;
+    if (file === target) return existsSync(file);
+    if (seen.has(file) || !existsSync(file)) continue;
+    seen.add(file);
+    for (const m of readFileSync(file, 'utf8').replace(COMMENTS, '$1').matchAll(RELATIVE_IMPORT)) {
+      const next = resolve(dirname(file), (m[1] ?? m[2]) as string);
+      if (/\.tsx?$/.test(next)) todo.push(next);
+    }
+  }
+  return false;
+}
+
 function clause2(): Verdict {
-  const cliRun = read('cli/run.ts');
-  const coreRun = existsSync(join(root, 'packages/core/run.ts'));
-  const cliUses = CORE_RUN_IMPORT.test(cliRun);
-  const uiUses = walk('apps/web/src').some((f) => /\.tsx?$/.test(f) && CORE_RUN_IMPORT.test(readFileSync(f, 'utf8')));
+  const entries = RUN_ENTRIES.map((rel) => [rel, reachesCoreRun(rel)] as const);
+  const workers = walk('apps/web/src').filter((f) => /worker[^/]*\.tsx?$/i.test(f)).map((f) => f.slice(root.length + 1));
+  const worker = workers.some(reachesCoreRun);
+  const r = cli(RUNNER_CHECK);
+  const equal = (r.json as { events_equal?: unknown } | undefined)?.events_equal === true;
   return {
-    pass: coreRun && cliUses && uiUses,
-    evidence: `packages/core/run.ts: ${yesNo(coreRun)}; cli/run.ts imports it: ${yesNo(cliUses)}; apps/web/src imports it: ${yesNo(uiUses)}`,
+    pass: existsSync(join(root, CORE_RUN)) && entries.every(([, ok]) => ok) && worker && equal,
+    evidence: `${[...entries.map(([rel, ok]) => `${rel}: ${yesNo(ok)}`), `apps/web/src worker: ${yesNo(worker)}`].join(', ')} reach ${CORE_RUN}; runner-check events equal run-one: ${r.exit === NOT_BUILT ? 'command not built' : yesNo(equal)}`,
   };
 }
 
@@ -187,8 +225,8 @@ function clause7(): Verdict {
 }
 
 const CLAUSES: Array<[string, () => Verdict]> = [
-  ['UI starts from one command or URL', clause1],
-  ['CLI run() shares the UI code path', clause2],
+  ['UI starts from one command (local runner) and the hosted URL', clause1],
+  ['CLI, local runner and Worker share run()', clause2],
   ['>= 5 complete tasks, oracle scores 1.0', clause3],
   ['every trial starts from the same state hash', clause4],
   ['10 trials per task, pass rate 2/10 to 7/10', clause5],

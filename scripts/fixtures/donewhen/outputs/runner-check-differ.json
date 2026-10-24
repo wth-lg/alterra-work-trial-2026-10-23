@@ -1,0 +1,1 @@
+{"exit":1,"stdout":{"ok":false,"mode":"mock","events_equal":false,"checks":[{"name":"events equal run-one","ok":false,"detail":"line 3 differs"}]}}

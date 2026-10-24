@@ -504,3 +504,75 @@ describe('closing a batch', () => {
     expect(await ledgerOn(store, 2).close(grant.batch_id, { force: 'other host rebooted' })).toBe(true);
   });
 });
+
+// Security review P12b-3 F2: a caller's spend ceiling (the local runner's session cap) holds at
+// reserve time, so a batch's reruns cannot settle past it.
+describe('spend ceiling', () => {
+  const inRun = (runId: string | null) => runId === 'run-test';
+  const ceiling = (usd: number) => ({ usd, scope: inRun, what: 'session cap' });
+  // A reservation whose worst case is `usd`: the input overhead plus output tokens.
+  const worth = (usd: number) => ({ bodyBytes: 0, maxTokens: Math.round(((usd - worstCaseUsd({ bodyBytes: 0, maxTokens: 0 })) / 20) * 1e6) });
+  const seedRun = (store: MemoryStore, run_id: string, usd: number) =>
+    store.rows.push({ ts: 't', call_id: `seed-${run_id}-${store.rows.length}`, kind: 'settle', source: 'node', run_id, batch_id: null, trial: null, usage: null, cost_usd: usd });
+
+  it('refuses a batch whose projection with the in-scope exposure would cross the ceiling; rows out of scope do not count', async () => {
+    const store = new MemoryStore();
+    seedRun(store, 'run-test', 3);
+    seedRun(store, 'elsewhere', 500);
+    const err = await ledgerOn(store).batchStart(7.01, ceiling(10)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SpendRefused);
+    expect((err as SpendRefused).cap).toBe('ceiling');
+    expect((err as Error).message).toMatch(/session cap/);
+    expect(store.rows.some((r) => r.kind === 'open')).toBe(false);
+    assertGrant(await ledgerOn(store).batchStart(7, ceiling(10)));
+  });
+
+  it('admits reserves within the projection, refuses the one that would cross the ceiling, and settles what was reserved', async () => {
+    const store = new MemoryStore();
+    const grant = await ledgerOn(store).batchStart(6, ceiling(8));
+    await grant.settle(await grant.reserve(worth(5)), null);
+    // 5 + 2.5 = 7.5 is past the projection but within the ceiling.
+    const b = await grant.reserve(worth(2.5));
+    const before = store.rows.length;
+    const err = await grant.reserve(worth(0.6)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SpendRefused);
+    expect((err as SpendRefused).cap).toBe('ceiling');
+    expect(store.rows.length).toBe(before);
+    await grant.settle(b, null);
+    const t = totals(store.rows);
+    expect(t.reserved).toBe(0);
+    expect(t.settled).toBeLessThanOrEqual(8);
+    // A cheaper call still fits: 7.5 + 0.4 <= 8.
+    await grant.settle(await grant.reserve(worth(0.4)), null);
+    expect(totals(store.rows).settled).toBeCloseTo(7.9, 3);
+  });
+
+  it('counts other in-scope open batches, so a batch admitted first cannot outgrow one admitted after it', async () => {
+    const store = new MemoryStore();
+    const a = await ledgerOn(store, 1).batchStart(4, ceiling(10));
+    const b = await ledgerOn(store, 2).batchStart(4, ceiling(10));
+    // a may grow by the 2 left over, not into b's 4.
+    await a.settle(await a.reserve(worth(5.99)), null);
+    await expect(a.reserve(worth(0.05))).rejects.toThrow(/session cap/);
+    // b still has its whole projection.
+    await b.settle(await b.reserve(worth(3.99)), null);
+    expect(totals(store.rows).settled).toBeLessThanOrEqual(10);
+  });
+
+  it('never refuses a reserve within its batch’s projection, even with the session over that batch’s lower ceiling', async () => {
+    const store = new MemoryStore();
+    const wide = await ledgerOn(store, 1).batchStart(9, ceiling(20));
+    const tight = await ledgerOn(store, 2).batchStart(5, ceiling(15));
+    // wide overruns its projection within its own ceiling: the session is now at 15.5 > 15.
+    await wide.settle(await wide.reserve(worth(10.5)), null);
+    // tight's reserve adds nothing to the exposure: its projection was admitted.
+    await tight.settle(await tight.reserve(worth(4.99)), null);
+    // One past its projection raises the exposure over tight's ceiling.
+    await expect(tight.reserve(worth(0.05))).rejects.toThrow(SpendRefused);
+  });
+
+  it('refuses a ceiling whose scope leaves out the ledger’s own run', async () => {
+    const store = new MemoryStore();
+    await expect(ledgerOn(store).batchStart(1, { usd: 10, scope: (r) => r === 'other', what: 'session cap' })).rejects.toThrow(TypeError);
+  });
+});

@@ -1,0 +1,1 @@
+{"exit":1,"stdout":{"ok":false,"mode":"mock","events_equal":true,"checks":[{"name":"foreign host refused","ok":false,"detail":"200"}]}}

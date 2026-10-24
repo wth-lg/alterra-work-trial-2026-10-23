@@ -9,6 +9,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath scripts/hooks",
     "dev": "pnpm --filter web dev",
+    "start": "node scripts/check-node.mjs && pnpm install --frozen-lockfile && pnpm build && node apps/runner/main.ts",
     "build": "pnpm --filter web build",
     "lint": "eslint -c eslint.config.js .",
     "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
