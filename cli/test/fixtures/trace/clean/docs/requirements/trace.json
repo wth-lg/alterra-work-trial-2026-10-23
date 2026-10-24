@@ -74,14 +74,23 @@
       },
       "evidence": [
         "verifier-phase-P25c-1/N2-environment-catalogue.png",
+        "verifier-phase-P25c-1/N2-environment-catalogue.ax.txt",
         "verifier-phase-P25c-1/N2-write-check.txt"
       ],
-      "expect": {
-        "command": {
-          "cmd": "node -e \"process.exit(3)\"",
-          "exit": 3
+      "expect": [
+        {
+          "command": {
+            "cmd": "node -e \"process.exit(3)\"",
+            "exit": 3
+          }
+        },
+        {
+          "ax_text": {
+            "file": "verifier-phase-P25c-1/N2-environment-catalogue.ax.txt",
+            "text": "fhir_search"
+          }
         }
-      },
+      ],
       "phase": "P1"
     },
     {

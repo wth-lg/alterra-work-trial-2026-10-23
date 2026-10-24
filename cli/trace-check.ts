@@ -16,7 +16,7 @@
 //     lacks a surface (local, hosted or any), or a row with a UI snapshot (.ax.txt) has no ui
 //   - an expect element is not one of ax_text, ax_match or command, an ax_* file is not in the
 //     row's evidence list, or an ax_match pattern does not compile; expect may be a list, and
-//     every element must hold
+//     every element must hold; a ui_required row needs at least one ax_text or ax_match element
 //   - a ui.route, an ax_text text or an ax_match pattern is not listed in ui-contract.md as a
 //     backticked string
 //   - done_when names a clause outside 1..done_when_clauses, or a clause has no row
@@ -185,7 +185,12 @@ function checkRow(r: TraceRow, src: SourceLine, failures: Failure[]): void {
   }
   if (r.expect === undefined) fail('expect is missing', 'add {ax_text: {file, text}}, {ax_match: {file, pattern}} or {command: {cmd, exit}} that shows the outcome');
   else if (Array.isArray(r.expect) && r.expect.length === 0) fail('expect is an empty list', 'add at least one element that shows the outcome');
-  else for (const [label, e] of expectElements(r.expect)) checkExpect(r, label, e, fail);
+  else {
+    const elements = expectElements(r.expect);
+    for (const [label, e] of elements) checkExpect(r, label, e, fail);
+    // A command can pass while the screen is wrong; a UI row checks what the screen shows.
+    if (r.ui_required === true && !elements.some(([, e]) => e.ax_text !== undefined || e.ax_match !== undefined)) fail('expect has no ax_text or ax_match element, but the row is ui_required', 'add an element that checks the row\'s snapshot (or a P25c result line), so the expect fails when the screen is wrong');
+  }
 }
 
 type LooseExpect = Partial<{ ax_text: { file?: unknown; text?: unknown }; ax_match: { file?: unknown; pattern?: unknown; min_matches?: unknown }; command: { cmd?: unknown; exit?: unknown } }>;

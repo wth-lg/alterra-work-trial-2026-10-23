@@ -148,11 +148,11 @@ describe('trace-check: the 13 gate cases', () => {
   it('--final exits 1 on a command expect whose exit code differs', async () => {
     const dir = copy();
     editRows(dir, (rows) => {
-      row(rows, 'N2').expect = { command: { cmd: 'node -e "process.exit(4)"', exit: 3 } };
+      (row(rows, 'N2').expect as unknown as object[])[0] = { command: { cmd: 'node -e "process.exit(4)"', exit: 3 } };
     });
     const { code, text } = await check(dir, ...final(dir));
     expect(code).toBe(1);
-    expect(text).toMatch(/^N2: expect command not met: `node -e "process\.exit\(4\)"` expected exit 3, observed exit 4; fix: /m);
+    expect(text).toMatch(/^N2: expect\[0\] command not met: `node -e "process\.exit\(4\)"` expected exit 3, observed exit 4; fix: /m);
   });
 
   it('the clean fixture exits 0 in the default mode and under --final; a missing path of a phase not in --done passes', async () => {
@@ -334,5 +334,18 @@ describe('trace-check: expects that test outcomes (builder-43)', () => {
     expect(code).toBe(1);
     expect(text).toMatch(/^W1: done_when names 3, but done-when has clauses 1\.\.2; fix: /m);
     expect(text).toMatch(/^done-when \(2\): no row names it in done_when; fix: /m);
+  });
+});
+
+describe('trace-check: every UI row checks its screen (builder-45)', () => {
+  it('exits 1 on a ui_required row whose expect holds only commands; a row without UI may', async () => {
+    const dir = copy();
+    editRows(dir, (rows) => {
+      row(rows, 'N2').expect = { command: { cmd: 'node -e "process.exit(3)"', exit: 3 } };
+    });
+    const { code, text } = await check(dir);
+    expect(code).toBe(1);
+    expect(text).toMatch(/^N2: expect has no ax_text or ax_match element, but the row is ui_required; fix: /m);
+    expect(text).not.toMatch(/^A1: /m);
   });
 });

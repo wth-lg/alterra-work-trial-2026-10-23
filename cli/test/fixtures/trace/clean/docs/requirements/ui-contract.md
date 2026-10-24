@@ -11,6 +11,7 @@
 - `hash unchanged` (P2)
 - `local runner` (P2)
 - `1 of 1 tasks in band` (P2)
+- `fhir_search` (P2)
 
 ## Patterns
 
